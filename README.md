@@ -1,6 +1,6 @@
 # ShadowBridge
 
-Secure bridge between your Android device and PC for ShadowAI - enables clipboard sync, SSH key exchange, and Claude Code companion relay.
+Secure bridge between your Android device and PC for ShadowAI Android app - enables clipboard sync, SSH key exchange, and Claude Code companion relay.
 
 ## Features
 
