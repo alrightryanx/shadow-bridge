@@ -58,5 +58,5 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ## Links
 
-- [ShadowAI Website](https://RyanCartwright.com/ShadowAI)
+- [ShadowAI Website](https://ryancartwright.com/shadowai)
 - [Claude Shadow Plugin](https://github.com/alrightryanx/claude-shadow)
