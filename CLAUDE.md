@@ -22,7 +22,8 @@ C:\shadow\
 │   └── wear/                # Wear OS app
 │
 ├── shadow-bridge/           # PC companion app (Python)
-│   └── shadow_bridge_gui.py # Main entry point
+│   ├── shadow_bridge_gui.py # Main entry point (ShadowBridge GUI)
+│   └── web/                 # Shadow Web dashboard
 │
 └── claude-shadow/           # Claude Code plugin
     ├── .claude-plugin/
@@ -46,6 +47,13 @@ Windows PC companion that runs in system tray:
 - **Port 19284**: Data receiver (clipboard, SSH keys)
 - **Port 19285**: Network discovery broadcast
 - **Port 19286**: Claude Code Companion relay
+
+### Shadow Web
+Web dashboard for ShadowBridge (located in `shadow-bridge/web/`):
+- Browser-based interface at http://localhost:6767
+- View and manage projects, notes, automations
+- Team collaboration features
+- Uses Flask with Jinja2 templates
 
 ### claude-shadow (Claude Code Plugin)
 Plugin that sends notifications to ShadowAI when Claude Code needs input:
