@@ -241,7 +241,7 @@ function renderProjects(projects) {
                     <span>${p.device_name}</span>
                     <span>${p.time_ago}</span>
                 </div>
-                <button class="btn btn-small btn-primary" onclick="openProject('${p.id}')">Open</button>
+                <a href="/projects/${p.id}" class="btn btn-small btn-primary">Open</a>
             </div>
         `).join('');
     } else {
@@ -268,7 +268,7 @@ function renderProjects(projects) {
                             <td>
                                 <div class="action-buttons">
                                     <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
-                                    <button class="btn btn-small btn-primary" onclick="openProject('${p.id}')">Open</button>
+                                    <a href="/projects/${p.id}" class="btn btn-small btn-primary">Open</a>
                                 </div>
                             </td>
                         </tr>

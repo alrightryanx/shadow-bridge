@@ -107,6 +107,10 @@ def create_app():
     def projects():
         return render_template('projects.html')
 
+    @app.route('/projects/<project_id>')
+    def project_detail(project_id):
+        return render_template('project_detail.html', project_id=project_id)
+
     @app.route('/notes')
     def notes():
         return render_template('notes.html')

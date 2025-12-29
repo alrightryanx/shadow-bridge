@@ -729,6 +729,7 @@ def get_status() -> Dict:
 
 TEAMS_FILE = SHADOWAI_DIR / "teams.json"
 TASKS_FILE = SHADOWAI_DIR / "tasks.json"
+TODOS_FILE = SHADOWAI_DIR / "todos.json"
 WORKFLOWS_FILE = SHADOWAI_DIR / "workflows.json"
 AUDITS_FILE = SHADOWAI_DIR / "audits.json"
 FAVORITES_FILE = SHADOWAI_DIR / "web_favorites.json"
@@ -1450,3 +1451,154 @@ def mark_items_synced(device_id: str, item_type: str, item_ids: List[str]) -> bo
         _write_json_file(AUTOMATIONS_FILE, file_data)
 
     return True
+
+
+# ============ Project Todos ============
+
+def get_project_todos(project_id: str) -> List[Dict]:
+    """Get all todos for a specific project."""
+    file_data = _read_json_file(TODOS_FILE)
+    if not file_data:
+        return []
+
+    project_todos = file_data.get("projects", {}).get(project_id, {}).get("todos", [])
+
+    # Add formatted timestamps
+    for todo in project_todos:
+        todo["time_ago"] = _time_ago(todo.get("createdAt", 0))
+        todo["updated_ago"] = _time_ago(todo.get("updatedAt", 0))
+
+    # Sort by sortOrder (maintains user's order), then by createdAt
+    project_todos.sort(key=lambda x: (x.get("sortOrder", 0), x.get("createdAt", 0)))
+    return project_todos
+
+
+def create_project_todo(project_id: str, data: Dict) -> Dict:
+    """Create a new todo for a project.
+
+    Todo schema aligned with Android TodoItem:
+    - id, projectId, content, priority
+    - userVerificationStatus, aiExecutionStatus
+    - createdAt, updatedAt, completedAt, sortOrder
+    """
+    file_data = _read_json_file(TODOS_FILE) or {"version": 1, "projects": {}}
+
+    timestamp = int(datetime.now().timestamp() * 1000)
+    todo = {
+        "id": _generate_id(),
+        "projectId": project_id,
+        "content": data.get("content", ""),
+        "enhancedContent": data.get("enhancedContent"),
+        "priority": data.get("priority", "MEDIUM"),
+        "userVerificationStatus": "PENDING_VERIFICATION",
+        "aiExecutionStatus": "NOT_STARTED",
+        "linkedSessionId": None,
+        "linkedMessageId": None,
+        "createdAt": timestamp,
+        "updatedAt": timestamp,
+        "completedAt": None,
+        "sentToChatAt": None,
+        "sortOrder": timestamp,
+        "source": "web",
+        "pending_sync": True
+    }
+
+    # Ensure project entry exists
+    if "projects" not in file_data:
+        file_data["projects"] = {}
+    if project_id not in file_data["projects"]:
+        file_data["projects"][project_id] = {"todos": []}
+    if "todos" not in file_data["projects"][project_id]:
+        file_data["projects"][project_id]["todos"] = []
+
+    file_data["projects"][project_id]["todos"].append(todo)
+    file_data["updated"] = datetime.now().timestamp()
+    _write_json_file(TODOS_FILE, file_data)
+
+    return {"success": True, "todo": todo}
+
+
+def update_project_todo(project_id: str, todo_id: str, data: Dict) -> Dict:
+    """Update a todo's content, priority, or status."""
+    file_data = _read_json_file(TODOS_FILE)
+    if not file_data:
+        return {"error": "Todos file not found"}
+
+    todos = file_data.get("projects", {}).get(project_id, {}).get("todos", [])
+
+    for i, todo in enumerate(todos):
+        if todo.get("id") == todo_id:
+            timestamp = int(datetime.now().timestamp() * 1000)
+
+            # Update allowed fields
+            if "content" in data:
+                todo["content"] = data["content"]
+            if "priority" in data:
+                todo["priority"] = data["priority"]
+            if "userVerificationStatus" in data:
+                todo["userVerificationStatus"] = data["userVerificationStatus"]
+                # Set completedAt if marking as complete
+                if data["userVerificationStatus"] == "VERIFIED_COMPLETE":
+                    todo["completedAt"] = timestamp
+                elif data["userVerificationStatus"] == "PENDING_VERIFICATION":
+                    todo["completedAt"] = None
+            if "aiExecutionStatus" in data:
+                todo["aiExecutionStatus"] = data["aiExecutionStatus"]
+            if "sortOrder" in data:
+                todo["sortOrder"] = data["sortOrder"]
+
+            todo["updatedAt"] = timestamp
+            todo["pending_sync"] = True
+
+            file_data["projects"][project_id]["todos"][i] = todo
+            file_data["updated"] = datetime.now().timestamp()
+            _write_json_file(TODOS_FILE, file_data)
+
+            return {"success": True, "todo": todo}
+
+    return {"error": "Todo not found"}
+
+
+def delete_project_todo(project_id: str, todo_id: str) -> Dict:
+    """Delete a todo from a project."""
+    file_data = _read_json_file(TODOS_FILE)
+    if not file_data:
+        return {"error": "Todos file not found"}
+
+    todos = file_data.get("projects", {}).get(project_id, {}).get("todos", [])
+    original_len = len(todos)
+
+    file_data["projects"][project_id]["todos"] = [
+        t for t in todos if t.get("id") != todo_id
+    ]
+
+    if len(file_data["projects"][project_id]["todos"]) < original_len:
+        file_data["updated"] = datetime.now().timestamp()
+        _write_json_file(TODOS_FILE, file_data)
+        return {"success": True}
+
+    return {"error": "Todo not found"}
+
+
+def reorder_project_todos(project_id: str, todo_ids: List[str]) -> Dict:
+    """Reorder todos by updating their sortOrder based on position in list."""
+    file_data = _read_json_file(TODOS_FILE)
+    if not file_data:
+        return {"error": "Todos file not found"}
+
+    todos = file_data.get("projects", {}).get(project_id, {}).get("todos", [])
+    timestamp = int(datetime.now().timestamp() * 1000)
+
+    # Create a map of todo_id to new sortOrder
+    order_map = {tid: idx for idx, tid in enumerate(todo_ids)}
+
+    for todo in todos:
+        if todo.get("id") in order_map:
+            todo["sortOrder"] = order_map[todo["id"]]
+            todo["updatedAt"] = timestamp
+            todo["pending_sync"] = True
+
+    file_data["updated"] = datetime.now().timestamp()
+    _write_json_file(TODOS_FILE, file_data)
+
+    return {"success": True}

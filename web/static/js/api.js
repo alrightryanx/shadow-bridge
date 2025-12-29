@@ -384,5 +384,44 @@ const api = {
             method: 'PUT',
             body: JSON.stringify(data)
         });
+    },
+
+    // ============ Project Todos ============
+    async getProjectTodos(projectId) {
+        return this.fetch(`/projects/${projectId}/todos`);
+    },
+
+    async createProjectTodo(projectId, data) {
+        return this.fetch(`/projects/${projectId}/todos`, {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    async updateProjectTodo(projectId, todoId, data) {
+        return this.fetch(`/projects/${projectId}/todos/${todoId}`, {
+            method: 'PUT',
+            body: JSON.stringify(data)
+        });
+    },
+
+    async deleteProjectTodo(projectId, todoId) {
+        return this.fetch(`/projects/${projectId}/todos/${todoId}`, {
+            method: 'DELETE'
+        });
+    },
+
+    async reorderProjectTodos(projectId, todoIds) {
+        return this.fetch(`/projects/${projectId}/todos/reorder`, {
+            method: 'POST',
+            body: JSON.stringify({ todo_ids: todoIds })
+        });
+    },
+
+    // ============ CLI Launch ============
+    async launchCLI(projectId) {
+        return this.fetch(`/projects/${projectId}/launch-cli`, {
+            method: 'POST'
+        });
     }
 };

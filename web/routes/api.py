@@ -854,6 +854,108 @@ def api_delete_task(task_id):
     return jsonify(result)
 
 
+# ============ Project Todos ============
+
+@api_bp.route('/projects/<project_id>/todos')
+def api_project_todos(project_id):
+    """List all todos for a project."""
+    from ..services.data_service import get_project_todos
+    return jsonify(get_project_todos(project_id))
+
+
+@api_bp.route('/projects/<project_id>/todos', methods=['POST'])
+def api_create_project_todo(project_id):
+    """Create a new todo for a project."""
+    from ..services.data_service import create_project_todo
+    data = request.get_json()
+    if not data or not data.get("content"):
+        return jsonify({"error": "Content is required"}), 400
+    result = create_project_todo(project_id, data)
+    return jsonify(result)
+
+
+@api_bp.route('/projects/<project_id>/todos/<todo_id>', methods=['PUT'])
+def api_update_project_todo(project_id, todo_id):
+    """Update a todo."""
+    from ..services.data_service import update_project_todo
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    result = update_project_todo(project_id, todo_id, data)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@api_bp.route('/projects/<project_id>/todos/<todo_id>', methods=['DELETE'])
+def api_delete_project_todo(project_id, todo_id):
+    """Delete a todo."""
+    from ..services.data_service import delete_project_todo
+    result = delete_project_todo(project_id, todo_id)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@api_bp.route('/projects/<project_id>/todos/reorder', methods=['POST'])
+def api_reorder_project_todos(project_id):
+    """Reorder todos by providing list of todo IDs in desired order."""
+    from ..services.data_service import reorder_project_todos
+    data = request.get_json()
+    if not data or not data.get("todo_ids"):
+        return jsonify({"error": "todo_ids list is required"}), 400
+    result = reorder_project_todos(project_id, data["todo_ids"])
+    return jsonify(result)
+
+
+# ============ CLI Launch ============
+
+@api_bp.route('/projects/<project_id>/launch-cli', methods=['POST'])
+def api_launch_cli(project_id):
+    """Launch Claude Code CLI in project directory."""
+    project = get_project(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+
+    path = project.get("path", "")
+    if not path:
+        return jsonify({"error": "No path for project"}), 400
+
+    # Validate path exists
+    import os
+    if not os.path.exists(path):
+        return jsonify({"error": f"Path does not exist: {path}"}), 400
+
+    try:
+        # Launch Windows Terminal with Claude Code in project directory
+        subprocess.Popen(
+            ['wt', '-d', path, 'claude'],
+            shell=True,
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+        )
+        return jsonify({
+            "success": True,
+            "path": path,
+            "command": "claude"
+        })
+    except FileNotFoundError:
+        # Fallback: try cmd with claude
+        try:
+            subprocess.Popen(
+                f'start cmd /k "cd /d {path} && claude"',
+                shell=True
+            )
+            return jsonify({
+                "success": True,
+                "path": path,
+                "command": "claude (via cmd)"
+            })
+        except Exception as e:
+            return jsonify({"error": f"Failed to launch CLI: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Failed to launch CLI: {str(e)}"}), 500
+
+
 # ============ Agent Management ============
 
 @api_bp.route('/agents', methods=['POST'])
