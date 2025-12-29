@@ -9,9 +9,9 @@
         <span class="material-symbols-outlined">add</span> Create New
     </button>
     <input type="text" id="search-input" class="search-input" placeholder="Search notes..." oninput="filterNotes()">
-    <label class="filter-checkbox">
-        <input type="checkbox" id="show-pinned" onchange="filterNotes()"> <span class="material-symbols-outlined" style="font-size: 16px;">push_pin</span> Pinned only
-    </label>
+    <button class="btn btn-small filter-btn" id="show-pinned-btn" onclick="togglePinnedFilter()">
+        <span class="material-symbols-outlined">push_pin</span> Pinned
+    </button>
 </div>
 
 <div class="notes-list" id="notes-container">
@@ -65,17 +65,11 @@
 <script>
 let allNotes = [];
 let loadedNoteContents = {};  // Cache for loaded note contents
-let pinnedNotes = [];  // Track pinned note IDs
+let showPinnedOnly = false;
 
 document.addEventListener('DOMContentLoaded', function() {
-    loadPinnedNotes();
     loadNotes();
 });
-
-async function loadPinnedNotes() {
-    // Pinned status comes from the notes themselves
-    // This will be populated when notes are loaded
-}
 
 async function loadNotes() {
     const deviceId = getDeviceIdParam();
@@ -83,15 +77,20 @@ async function loadNotes() {
     filterNotes();  // Re-apply search filter
 }
 
+function togglePinnedFilter() {
+    showPinnedOnly = !showPinnedOnly;
+    document.getElementById('show-pinned-btn').classList.toggle('active', showPinnedOnly);
+    filterNotes();
+}
+
 function filterNotes() {
     const search = document.getElementById('search-input').value.toLowerCase();
-    const showPinnedOnly = document.getElementById('show-pinned').checked;
 
     let filtered = allNotes.filter(n =>
         n.title.toLowerCase().includes(search)
     );
 
-    // Filter to pinned only if checked
+    // Filter to pinned only if enabled
     if (showPinnedOnly) {
         filtered = filtered.filter(n => n.is_pinned);
     }
@@ -501,6 +500,17 @@ async function createNote() {
 
 .form-checkbox input {
     cursor: pointer;
+}
+
+.filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.filter-btn.active {
+    background: var(--accent);
+    color: white;
 }
 
 .note-textarea {

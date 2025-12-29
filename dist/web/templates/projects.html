@@ -9,9 +9,9 @@
         <span class="material-symbols-outlined">add</span> Create New
     </button>
     <input type="text" id="search-input" class="search-input" placeholder="Search projects..." oninput="filterProjects()">
-    <label class="filter-checkbox">
-        <input type="checkbox" id="show-favorites" onchange="filterProjects()"> Favorites only
-    </label>
+    <button class="btn btn-small filter-btn" id="show-pinned-btn" onclick="togglePinnedFilter()">
+        <span class="material-symbols-outlined">push_pin</span> Pinned
+    </button>
     <div class="view-toggle">
         <button class="btn btn-small" id="grid-view-btn" onclick="setView('grid')">Grid</button>
         <button class="btn btn-small active" id="list-view-btn" onclick="setView('list')">List</button>
@@ -89,20 +89,12 @@
 <script>
 let allProjects = [];
 let currentView = 'list';
-let favorites = { projects: [] };
+let showPinnedOnly = false;
 let editingProjectId = null;
 
 document.addEventListener('DOMContentLoaded', function() {
-    loadFavorites();
     loadProjects();
 });
-
-async function loadFavorites() {
-    const result = await api.getFavorites();
-    if (result && !result.error) {
-        favorites = result;
-    }
-}
 
 async function loadProjects() {
     const deviceId = getDeviceIdParam();
@@ -110,30 +102,29 @@ async function loadProjects() {
     filterProjects();
 }
 
+function togglePinnedFilter() {
+    showPinnedOnly = !showPinnedOnly;
+    document.getElementById('show-pinned-btn').classList.toggle('active', showPinnedOnly);
+    filterProjects();
+}
+
 function filterProjects() {
     const search = document.getElementById('search-input').value.toLowerCase();
-    const showFavoritesOnly = document.getElementById('show-favorites').checked;
 
     let filtered = allProjects.filter(p =>
         p.name.toLowerCase().includes(search) ||
         p.path.toLowerCase().includes(search)
     );
 
-    // Add favorite status
-    filtered = filtered.map(p => ({
-        ...p,
-        is_favorite: favorites.projects?.includes(p.id)
-    }));
-
-    // Filter to favorites only if checked
-    if (showFavoritesOnly) {
-        filtered = filtered.filter(p => p.is_favorite);
+    // Filter to pinned only if enabled
+    if (showPinnedOnly) {
+        filtered = filtered.filter(p => p.is_pinned);
     }
 
-    // Sort favorites to top
+    // Sort pinned to top
     filtered.sort((a, b) => {
-        if (a.is_favorite && !b.is_favorite) return -1;
-        if (!a.is_favorite && b.is_favorite) return 1;
+        if (a.is_pinned && !b.is_pinned) return -1;
+        if (!a.is_pinned && b.is_pinned) return 1;
         return (b.updated_at || 0) - (a.updated_at || 0);
     });
 
@@ -147,18 +138,13 @@ function setView(view) {
     filterProjects();
 }
 
-async function toggleFavorite(projectId, event) {
+async function togglePin(projectId, event) {
     if (event) event.stopPropagation();
-    const result = await api.toggleProjectFavorite(projectId);
-    if (result.success) {
-        if (result.is_favorite) {
-            if (!favorites.projects) favorites.projects = [];
-            favorites.projects.push(projectId);
-        } else {
-            favorites.projects = favorites.projects.filter(id => id !== projectId);
-        }
+    const project = allProjects.find(p => p.id === projectId);
+    if (project) {
+        project.is_pinned = !project.is_pinned;
         filterProjects();
-        showToast(result.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+        showToast(project.is_pinned ? 'Project pinned' : 'Project unpinned', 'success');
     }
 }
 
@@ -246,7 +232,7 @@ function renderProjects(projects) {
         container.innerHTML = projects.map(p => `
             <div class="project-card">
                 <div class="project-card-header">
-                    <button class="star-btn ${p.is_favorite ? 'starred' : ''}" onclick="toggleFavorite('${p.id}', event)"></button>
+                    <button class="pin-btn ${p.is_pinned ? 'pinned' : ''}" onclick="togglePin('${p.id}', event)" title="Pin project"><span class="material-symbols-outlined">push_pin</span></button>
                     <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
                 </div>
                 <div class="project-name">${escapeHtml(p.name)}</div>
@@ -274,7 +260,7 @@ function renderProjects(projects) {
                 <tbody>
                     ${projects.map(p => `
                         <tr>
-                            <td><button class="star-btn ${p.is_favorite ? 'starred' : ''}" onclick="toggleFavorite('${p.id}', event)"></button></td>
+                            <td><button class="pin-btn ${p.is_pinned ? 'pinned' : ''}" onclick="togglePin('${p.id}', event)" title="Pin project"><span class="material-symbols-outlined">push_pin</span></button></td>
                             <td>${escapeHtml(p.name)}</td>
                             <td class="path-cell">${escapeHtml(p.path)}</td>
                             <td>${escapeHtml(p.device_name)}</td>
@@ -295,17 +281,38 @@ function renderProjects(projects) {
 </script>
 
 <style>
-.filter-checkbox {
+.filter-btn {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
-    font-size: 14px;
-    color: var(--md-sys-color-on-surface-variant);
-    cursor: pointer;
+    gap: 4px;
 }
 
-.filter-checkbox input {
+.filter-btn.active {
+    background: var(--accent);
+    color: white;
+}
+
+.pin-btn {
+    background: none;
+    border: none;
     cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-dim);
+    transition: all 0.15s;
+}
+
+.pin-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.pin-btn.pinned {
+    color: var(--accent);
+}
+
+.pin-btn .material-symbols-outlined {
+    font-size: 18px;
 }
 
 .project-card-header {
