@@ -5,8 +5,8 @@ a = Analysis(
     ['shadow_bridge_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],  # Web folder loaded externally from dist/web
-    hiddenimports=['flask', 'flask_socketio', 'engineio.async_drivers.threading', 'cryptography'],
+    datas=[],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['icon.ico'],
 )

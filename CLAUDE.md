@@ -160,8 +160,10 @@ When committing changes to a component, increment its version using `X.YYY` form
 - `versionCode`: increment by 1
 - `versionName`: increment by 0.001 (e.g., "3.620" → "3.621")
 
-**shadow-bridge** (`shadow_bridge_gui.py` or `version.py`):
-- Update `VERSION` string (e.g., "1.000" → "1.001")
+**shadow-bridge** (ShadowBridge + Shadow Web):
+- Update `APP_VERSION` in `shadow_bridge_gui.py` (e.g., "1.000" → "1.001")
+- Update `version` in `web/services/data_service.py` get_status() function (must match APP_VERSION)
+- IMPORTANT: After version update, rebuild EXE with `pyinstaller ShadowBridge.spec`
 
 **claude-shadow** (`.claude-plugin/plugin.json`):
 - Update `version` field (e.g., "1.000" → "1.001")
