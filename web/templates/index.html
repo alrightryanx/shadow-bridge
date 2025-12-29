@@ -256,8 +256,8 @@ function getTimeAgo(date) {
 
 <style>
 .dashboard-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
+    background: var(--md-sys-color-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: 12px;
     padding: 20px;
 }
@@ -358,22 +358,24 @@ function getTimeAgo(date) {
     align-items: center;
     gap: 12px;
     padding: 12px;
-    background: var(--bg-elevated);
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: 8px;
     margin-bottom: 8px;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: all 0.15s;
 }
 
 .project-item:hover, .note-item:hover {
-    background: var(--bg-hover);
+    background: var(--md-sys-color-surface-variant);
+    border-color: var(--md-sys-color-outline);
 }
 
 .project-icon, .note-icon {
     width: 40px;
     height: 40px;
     border-radius: 8px;
-    background: var(--bg-input);
+    background: var(--md-sys-color-surface-variant);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -394,7 +396,7 @@ function getTimeAgo(date) {
 
 .project-name, .note-title {
     font-weight: 600;
-    color: var(--text);
+    color: var(--md-sys-color-on-surface);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -402,7 +404,7 @@ function getTimeAgo(date) {
 
 .project-meta, .note-meta {
     font-size: 12px;
-    color: var(--text-dim);
+    color: var(--md-sys-color-on-surface-variant);
     display: flex;
     align-items: center;
     gap: 4px;
@@ -420,27 +422,31 @@ function getTimeAgo(date) {
 }
 
 .project-arrow, .note-arrow {
-    color: var(--text-dim);
+    color: var(--md-sys-color-on-surface-variant);
     font-size: 20px;
 }
 
 .activity-feed {
-    background: transparent;
-    border-radius: 0;
-    overflow: hidden;
-    margin: 0 -20px -20px -20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .activity-item {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
+    padding: 12px;
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
 }
 
-.activity-item:last-child {
-    border-bottom: none;
+.activity-item:hover {
+    background: var(--md-sys-color-surface-variant);
+    border-color: var(--md-sys-color-outline);
 }
 
 .activity-icon {
@@ -472,13 +478,13 @@ function getTimeAgo(date) {
 
 .activity-action {
     font-size: 12px;
-    color: var(--text-dim);
+    color: var(--md-sys-color-on-surface-variant);
 }
 
 .activity-title {
     display: block;
     font-weight: 500;
-    color: var(--text);
+    color: var(--md-sys-color-on-surface);
     margin-top: 2px;
 }
 
@@ -489,20 +495,20 @@ function getTimeAgo(date) {
 .activity-device {
     display: block;
     font-size: 12px;
-    color: var(--text-dim);
+    color: var(--md-sys-color-on-surface-variant);
 }
 
 .activity-time {
     display: block;
     font-size: 11px;
-    color: var(--text-dim);
+    color: var(--md-sys-color-on-surface-variant);
     opacity: 0.7;
 }
 
 .empty-state {
     text-align: center;
     padding: 32px;
-    color: var(--text-dim);
+    color: var(--md-sys-color-on-surface-variant);
 }
 
 .empty-state .material-symbols-outlined {
