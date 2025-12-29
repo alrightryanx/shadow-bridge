@@ -1,0 +1,4 @@
+# ShadowAI Web Dashboard Dependencies
+flask>=3.0
+flask-socketio>=5.3
+python-socketio>=5.0

@@ -1,0 +1,494 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Analytics{% endblock %}
+{% block page_title %}Analytics{% endblock %}
+
+{% block content %}
+<!-- Privacy & Compliance Section -->
+<section class="section">
+    <h2>Privacy & Compliance</h2>
+    <div class="privacy-grid">
+        <!-- Privacy Score -->
+        <div class="privacy-card">
+            <div class="privacy-score-container">
+                <div class="privacy-score-ring" id="privacy-ring">
+                    <svg viewBox="0 0 120 120">
+                        <circle class="ring-bg" cx="60" cy="60" r="50"/>
+                        <circle class="ring-fill" cx="60" cy="60" r="50" id="privacy-ring-fill"/>
+                    </svg>
+                    <div class="privacy-score-value" id="privacy-score">--</div>
+                </div>
+                <div class="privacy-score-label">Privacy Score</div>
+                <div class="privacy-status" id="privacy-status">Calculating...</div>
+            </div>
+        </div>
+
+        <!-- Risk Level -->
+        <div class="privacy-card">
+            <div class="risk-indicator">
+                <div class="risk-badge" id="risk-badge">
+                    <span class="risk-level" id="risk-level">--</span>
+                </div>
+                <div class="risk-label">Risk Level</div>
+                <div class="risk-details" id="risk-details">
+                    <span class="risk-stat"><span id="risk-violations">0</span> violations</span>
+                    <span class="risk-stat"><span id="risk-warnings">0</span> warnings</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Token Usage -->
+        <div class="privacy-card">
+            <div class="token-stats">
+                <div class="token-total">
+                    <span class="token-value" id="total-tokens">0</span>
+                    <span class="token-label">Total Tokens</span>
+                </div>
+                <div class="token-breakdown">
+                    <div class="token-item">
+                        <span class="token-type">Input</span>
+                        <span class="token-count" id="input-tokens">0</span>
+                    </div>
+                    <div class="token-item">
+                        <span class="token-type">Output</span>
+                        <span class="token-count" id="output-tokens">0</span>
+                    </div>
+                    <div class="token-item">
+                        <span class="token-type">Avg/Query</span>
+                        <span class="token-count" id="avg-tokens">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Audit Categories -->
+<section class="section">
+    <h2>Audit Categories</h2>
+    <div class="category-breakdown" id="categories-container">
+        <div class="loading">Loading...</div>
+    </div>
+</section>
+
+<!-- Usage Stats -->
+<section class="section">
+    <h2>Message Usage</h2>
+    <div class="usage-card">
+        <div class="usage-header">
+            <span class="usage-tier" id="usage-tier">Free</span>
+            <span class="usage-count"><span id="messages-used">0</span> / <span id="messages-limit">100</span></span>
+        </div>
+        <div class="progress-bar">
+            <div class="progress-fill" id="usage-progress" style="width: 0%"></div>
+        </div>
+        <div class="usage-footer">
+            <span id="reset-date"></span>
+        </div>
+    </div>
+</section>
+
+<!-- Backend Usage -->
+<section class="section">
+    <h2>Backend Usage</h2>
+    <div class="backends-chart" id="backends-container">
+        <div class="loading">Loading...</div>
+    </div>
+</section>
+
+<!-- Activity Timeline -->
+<section class="section">
+    <h2>Recent Activity</h2>
+    <div class="activity-timeline" id="activity-container">
+        <div class="empty-state">No recent activity</div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadPrivacyScore();
+    loadTokenUsage();
+    loadCategories();
+    loadUsage();
+    loadBackends();
+    loadActivity();
+});
+
+async function loadPrivacyScore() {
+    const data = await api.getPrivacyScore();
+
+    // Update score
+    const score = data.score || 0;
+    document.getElementById('privacy-score').textContent = score + '%';
+
+    // Update ring animation
+    const ringFill = document.getElementById('privacy-ring-fill');
+    const circumference = 2 * Math.PI * 50;
+    ringFill.style.strokeDasharray = circumference;
+    ringFill.style.strokeDashoffset = circumference * (1 - score / 100);
+
+    // Update status
+    let status = 'Excellent';
+    let statusClass = 'status-excellent';
+    if (score < 50) { status = 'Poor'; statusClass = 'status-poor'; }
+    else if (score < 70) { status = 'Fair'; statusClass = 'status-fair'; }
+    else if (score < 90) { status = 'Good'; statusClass = 'status-good'; }
+
+    const statusEl = document.getElementById('privacy-status');
+    statusEl.textContent = status;
+    statusEl.className = 'privacy-status ' + statusClass;
+
+    // Update risk level
+    const riskLevel = data.risk_level || 'MINIMAL';
+    const riskBadge = document.getElementById('risk-badge');
+    document.getElementById('risk-level').textContent = riskLevel;
+    riskBadge.className = 'risk-badge risk-' + riskLevel.toLowerCase();
+
+    document.getElementById('risk-violations').textContent = data.violations || 0;
+    document.getElementById('risk-warnings').textContent = data.warnings || 0;
+}
+
+async function loadTokenUsage() {
+    const data = await api.getTokenUsage();
+
+    document.getElementById('total-tokens').textContent = formatNumber(data.total || 0);
+    document.getElementById('input-tokens').textContent = formatNumber(data.input || 0);
+    document.getElementById('output-tokens').textContent = formatNumber(data.output || 0);
+    document.getElementById('avg-tokens').textContent = formatNumber(data.average || 0);
+}
+
+async function loadCategories() {
+    const categories = await api.getCategoryBreakdown();
+    const container = document.getElementById('categories-container');
+
+    if (!categories || categories.length === 0) {
+        container.innerHTML = '<div class="empty-state">No category data</div>';
+        return;
+    }
+
+    const categoryIcons = {
+        'AI_DECISION': '&#129302;',
+        'DATA_ACCESS': '&#128451;',
+        'SECURITY': '&#128274;',
+        'PRIVACY': '&#128065;',
+        'SYNC': '&#128260;',
+        'AUTOMATION': '&#9881;',
+        'USER_ACTION': '&#128100;'
+    };
+
+    const categoryColors = {
+        'AI_DECISION': 'var(--md-sys-color-primary)',
+        'DATA_ACCESS': 'var(--md-sys-color-tertiary)',
+        'SECURITY': 'var(--md-sys-color-error)',
+        'PRIVACY': 'var(--accent)',
+        'SYNC': 'var(--success)',
+        'AUTOMATION': 'var(--warning)',
+        'USER_ACTION': 'var(--md-sys-color-secondary)'
+    };
+
+    container.innerHTML = categories.map(c => `
+        <div class="category-item">
+            <div class="category-icon" style="background: ${categoryColors[c.category] || 'var(--md-sys-color-primary)'}">${categoryIcons[c.category] || '&#128203;'}</div>
+            <div class="category-info">
+                <span class="category-name">${escapeHtml(c.category.replace(/_/g, ' '))}</span>
+                <div class="category-bar">
+                    <div class="category-fill" style="width: ${c.percent}%; background: ${categoryColors[c.category] || 'var(--md-sys-color-primary)'}"></div>
+                </div>
+            </div>
+            <span class="category-count">${c.count}</span>
+        </div>
+    `).join('');
+}
+
+function formatNumber(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+}
+
+async function loadUsage() {
+    const usage = await api.getUsageStats();
+    document.getElementById('usage-tier').textContent = usage.tier || 'Free';
+    document.getElementById('messages-used').textContent = usage.messages_used || 0;
+    document.getElementById('messages-limit').textContent = usage.messages_limit || 100;
+    document.getElementById('usage-progress').style.width = (usage.usage_percent || 0) + '%';
+
+    if (usage.reset_date) {
+        document.getElementById('reset-date').textContent = 'Resets: ' + usage.reset_date;
+    }
+}
+
+async function loadBackends() {
+    const backends = await api.getBackendUsage();
+    const container = document.getElementById('backends-container');
+
+    if (backends.length === 0) {
+        container.innerHTML = '<div class="empty-state">No backend usage data</div>';
+        return;
+    }
+
+    container.innerHTML = backends.map(b => `
+        <div class="backend-row">
+            <span class="backend-name">${escapeHtml(b.name)}</span>
+            <div class="backend-bar">
+                <div class="backend-fill" style="width: ${b.percent}%"></div>
+            </div>
+            <span class="backend-count">${b.count}</span>
+        </div>
+    `).join('');
+}
+
+async function loadActivity() {
+    const activity = await api.getActivityTimeline();
+    const container = document.getElementById('activity-container');
+
+    if (activity.length === 0) {
+        container.innerHTML = '<div class="empty-state">No recent activity</div>';
+        return;
+    }
+
+    container.innerHTML = activity.map(a => `
+        <div class="activity-item">
+            <div class="activity-dot"></div>
+            <div class="activity-content">
+                <span class="activity-text">${escapeHtml(a.description)}</span>
+                <span class="activity-time">${a.time_ago}</span>
+            </div>
+        </div>
+    `).join('');
+}
+</script>
+
+<style>
+/* Privacy Grid */
+.privacy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+.privacy-card {
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Privacy Score Ring */
+.privacy-score-container {
+    text-align: center;
+}
+
+.privacy-score-ring {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto var(--spacing-md);
+}
+
+.privacy-score-ring svg {
+    transform: rotate(-90deg);
+}
+
+.privacy-score-ring .ring-bg {
+    fill: none;
+    stroke: var(--bg-elevated);
+    stroke-width: 10;
+}
+
+.privacy-score-ring .ring-fill {
+    fill: none;
+    stroke: var(--success);
+    stroke-width: 10;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.8s ease-out;
+}
+
+.privacy-score-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.privacy-score-label {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: var(--spacing-xs);
+}
+
+.privacy-status {
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.privacy-status.status-excellent { color: var(--success); }
+.privacy-status.status-good { color: #4CAF50; }
+.privacy-status.status-fair { color: var(--warning); }
+.privacy-status.status-poor { color: var(--error); }
+
+/* Risk Indicator */
+.risk-indicator {
+    text-align: center;
+}
+
+.risk-badge {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto var(--spacing-md);
+    background: var(--bg-elevated);
+}
+
+.risk-badge.risk-minimal { background: rgba(76, 175, 80, 0.2); }
+.risk-badge.risk-low { background: rgba(139, 195, 74, 0.2); }
+.risk-badge.risk-medium { background: rgba(255, 193, 7, 0.2); }
+.risk-badge.risk-high { background: rgba(244, 67, 54, 0.2); }
+
+.risk-level {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.risk-minimal .risk-level { color: var(--success); }
+.risk-low .risk-level { color: #8BC34A; }
+.risk-medium .risk-level { color: var(--warning); }
+.risk-high .risk-level { color: var(--error); }
+
+.risk-label {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: var(--spacing-sm);
+}
+
+.risk-details {
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: center;
+}
+
+.risk-stat {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+/* Token Stats */
+.token-stats {
+    text-align: center;
+    width: 100%;
+}
+
+.token-total {
+    margin-bottom: var(--spacing-lg);
+}
+
+.token-value {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--md-sys-color-primary);
+    display: block;
+}
+
+.token-label {
+    font-size: 14px;
+    color: var(--text-dim);
+}
+
+.token-breakdown {
+    display: flex;
+    justify-content: space-around;
+    gap: var(--spacing-md);
+}
+
+.token-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.token-type {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: var(--spacing-xs);
+}
+
+.token-count {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+/* Category Breakdown */
+.category-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.category-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm);
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+}
+
+.category-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: white;
+    flex-shrink: 0;
+}
+
+.category-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.category-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    display: block;
+    margin-bottom: var(--spacing-xs);
+    text-transform: capitalize;
+}
+
+.category-bar {
+    height: 6px;
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.category-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease-out;
+}
+
+.category-count {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-dim);
+    min-width: 50px;
+    text-align: right;
+}
+</style>
+{% endblock %}

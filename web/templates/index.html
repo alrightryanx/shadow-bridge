@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<!-- Recent Projects -->
+<section class="section">
+    <div class="section-header">
+        <h2>Recent Projects</h2>
+        <a href="/projects" class="view-all">View All &rarr;</a>
+    </div>
+    <div class="projects-grid" id="recent-projects">
+        <div class="loading">Loading projects...</div>
+    </div>
+</section>
+
+<!-- Recent Notes -->
+<section class="section">
+    <div class="section-header">
+        <h2>Recent Notes</h2>
+        <a href="/notes" class="view-all">View All &rarr;</a>
+    </div>
+    <div class="notes-list" id="recent-notes">
+        <div class="loading">Loading notes...</div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadDashboard();
+});
+
+async function loadDashboard() {
+    const deviceId = getDeviceIdParam();
+
+    // Load recent projects (filtered by device if selected)
+    const projects = await api.getProjects(deviceId);
+    const projectsGrid = document.getElementById('recent-projects');
+    if (projects.length === 0) {
+        projectsGrid.innerHTML = '<div class="empty-state">No projects found</div>';
+    } else {
+        projectsGrid.innerHTML = projects.slice(0, 6).map(p => `
+            <div class="project-card">
+                <div class="project-name">${escapeHtml(p.name)}</div>
+                <div class="project-path">${escapeHtml(p.path)}</div>
+                <div class="project-meta">${escapeHtml(p.device_name)} · ${p.time_ago}</div>
+                <button class="btn btn-small btn-primary" onclick="openProject('${p.id}')">Open</button>
+            </div>
+        `).join('');
+    }
+
+    // Load recent notes (filtered by device if selected)
+    const notes = await api.getNotes(deviceId);
+    const notesList = document.getElementById('recent-notes');
+    if (notes.length === 0) {
+        notesList.innerHTML = '<div class="empty-state">No notes found</div>';
+    } else {
+        notesList.innerHTML = notes.slice(0, 5).map(n => `
+            <div class="note-card" id="note-card-${n.id}">
+                <div class="note-header" onclick="toggleNote('${n.id}')">
+                    <span class="expand-icon" id="expand-${n.id}">▶</span>
+                    <div class="note-info">
+                        <div class="note-title">${escapeHtml(n.title)}</div>
+                        <div class="note-meta">${escapeHtml(n.device_name)} · ${n.time_ago}</div>
+                    </div>
+                </div>
+                <div class="note-content-wrapper" id="content-${n.id}" style="display: none;">
+                    <div class="note-content-inner" id="content-inner-${n.id}">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+}
+
+let loadedNoteContents = {};
+
+async function toggleNote(noteId) {
+    const contentWrapper = document.getElementById('content-' + noteId);
+    const expandIcon = document.getElementById('expand-' + noteId);
+    const contentInner = document.getElementById('content-inner-' + noteId);
+
+    if (contentWrapper.style.display === 'none') {
+        contentWrapper.style.display = 'block';
+        expandIcon.textContent = '▼';
+
+        if (!loadedNoteContents[noteId]) {
+            contentInner.innerHTML = '<div class="loading">Loading note content...</div>';
+            const result = await api.getNoteContent(noteId);
+
+            if (result.error) {
+                contentInner.innerHTML = '<div class="error-message">' + escapeHtml(result.error) + '</div>';
+            } else {
+                loadedNoteContents[noteId] = result.content || '(Empty note)';
+                renderNoteContentInline(noteId, loadedNoteContents[noteId]);
+            }
+        }
+    } else {
+        contentWrapper.style.display = 'none';
+        expandIcon.textContent = '▶';
+    }
+}
+
+function renderNoteContentInline(noteId, content) {
+    const contentInner = document.getElementById('content-inner-' + noteId);
+    if (!contentInner) return;
+
+    if (typeof marked !== 'undefined') {
+        contentInner.innerHTML = '<div class="markdown-body">' + marked.parse(content) + '</div>';
+    } else {
+        contentInner.innerHTML = '<pre class="note-text">' + escapeHtml(content) + '</pre>';
+    }
+}
+</script>
+{% endblock %}
