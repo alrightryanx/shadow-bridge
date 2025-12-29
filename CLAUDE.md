@@ -111,10 +111,9 @@ C:\android\platform-tools\adb.exe install shadow-android/app/build/outputs/apk/r
 **Commit frequently to maintain backups and track changes.**
 
 ### Timing Rules
+- **Immediately after changes (MANDATORY)**: Commit as soon as a change is complete - do NOT wait for user prompts or batch commits
 - **Session Start**: Check for uncommitted changes and commit if valid
-- **Every ~15 minutes**: Commit working changes during active development
 - **Session End**: Always commit before ending a session
-- **After major milestones**: Commit after completing features, fixes, or refactors
 
 ### Commit Quality Gates
 Before committing, verify:
