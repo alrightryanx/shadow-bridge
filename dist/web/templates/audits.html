@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Audits{% endblock %}
+{% block page_title %}Audit Dashboard{% endblock %}
+
+{% block content %}
+<!-- Period Selector -->
+<div class="page-actions">
+    <div class="period-tabs">
+        <button class="btn btn-small active" onclick="setPeriod('1D')">1D</button>
+        <button class="btn btn-small" onclick="setPeriod('7D')">7D</button>
+        <button class="btn btn-small" onclick="setPeriod('30D')">30D</button>
+        <button class="btn btn-small" onclick="setPeriod('90D')">90D</button>
+        <button class="btn btn-small" onclick="setPeriod('ANNUAL')">Year</button>
+    </div>
+    <div class="export-actions">
+        <button class="btn btn-secondary btn-small" onclick="exportAudit('json')">Export JSON</button>
+        <button class="btn btn-secondary btn-small" onclick="exportAudit('csv')">Export CSV</button>
+        <button class="btn btn-primary btn-small" onclick="exportAudit('pdf')">Export PDF</button>
+    </div>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">bar_chart</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="total-events">-</span>
+            <span class="stat-label">Total Events</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">shield</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="privacy-score">-</span>
+            <span class="stat-label">Privacy Score</span>
+        </div>
+    </div>
+    <div class="stat-card risk-card" id="risk-card">
+        <div class="stat-icon" id="risk-icon"><span class="material-symbols-outlined">warning</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="risk-level">-</span>
+            <span class="stat-label">Risk Level</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">smart_toy</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="ai-decisions">-</span>
+            <span class="stat-label">AI Decisions</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">database</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="data-accesses">-</span>
+            <span class="stat-label">Data Accesses</span>
+        </div>
+    </div>
+</div>
+
+<!-- Category Breakdown -->
+<section class="section">
+    <h2>Category Breakdown</h2>
+    <div class="category-grid" id="category-breakdown">
+        <div class="loading">Loading categories...</div>
+    </div>
+</section>
+
+<!-- Audit Log -->
+<section class="section">
+    <div class="section-header">
+        <h2>Audit Log</h2>
+        <div class="log-filters">
+            <select id="category-filter" class="filter-select" onchange="filterLogs()">
+                <option value="">All Categories</option>
+                <option value="AI_DECISION">AI Decisions</option>
+                <option value="DATA_ACCESS">Data Access</option>
+                <option value="BACKEND_QUERY">Backend Queries</option>
+                <option value="SECURITY">Security</option>
+                <option value="USER_ACTION">User Actions</option>
+                <option value="SYSTEM">System</option>
+                <option value="COMPLIANCE">Compliance</option>
+                <option value="AUTOMATION">Automation</option>
+            </select>
+            <select id="severity-filter" class="filter-select" onchange="filterLogs()">
+                <option value="">All Severities</option>
+                <option value="INFO">Info</option>
+                <option value="WARNING">Warning</option>
+                <option value="ERROR">Error</option>
+                <option value="SECURITY">Security</option>
+                <option value="CRITICAL">Critical</option>
+            </select>
+        </div>
+    </div>
+    <div class="audit-log-list" id="audit-log">
+        <div class="loading">Loading audit log...</div>
+    </div>
+</section>
+
+<!-- Audit Detail Modal -->
+<div id="audit-detail-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="audit-modal-title">Audit Entry Details</h2>
+            <button class="modal-close" onclick="closeAuditModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="audit-modal-body">
+            <div class="loading">Loading details...</div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeAuditModal()">Close</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentPeriod = '7D';
+let allAudits = [];
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadAuditStats();
+    loadAuditLog();
+    loadCategoryBreakdown();
+});
+
+// ============ Period Selection ============
+
+function setPeriod(period) {
+    currentPeriod = period;
+
+    // Update active button
+    document.querySelectorAll('.period-tabs .btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent === period ||
+            (btn.textContent === 'Year' && period === 'ANNUAL'));
+    });
+
+    // Reload data
+    loadAuditStats();
+    loadAuditLog();
+    loadCategoryBreakdown();
+}
+
+// ============ Data Loading ============
+
+async function loadAuditStats() {
+    const stats = await api.getAuditStats(currentPeriod);
+
+    document.getElementById('total-events').textContent = stats.total_events || 0;
+    document.getElementById('privacy-score').textContent = (stats.privacy_score || 0) + '%';
+    document.getElementById('ai-decisions').textContent = stats.ai_decisions || 0;
+    document.getElementById('data-accesses').textContent = stats.data_accesses || 0;
+
+    // Risk level with color
+    const riskLevel = stats.risk_level || 'MINIMAL';
+    document.getElementById('risk-level').textContent = riskLevel;
+    const riskCard = document.getElementById('risk-card');
+    riskCard.className = 'stat-card risk-card risk-' + riskLevel.toLowerCase();
+
+    const riskIcons = {
+        'MINIMAL': '<span class="material-symbols-outlined" style="color: var(--success)">check_circle</span>',
+        'LOW': '<span class="material-symbols-outlined" style="color: var(--success)">verified</span>',
+        'MEDIUM': '<span class="material-symbols-outlined" style="color: var(--warning)">error</span>',
+        'HIGH': '<span class="material-symbols-outlined" style="color: var(--error)">dangerous</span>'
+    };
+    document.getElementById('risk-icon').innerHTML = riskIcons[riskLevel] || '<span class="material-symbols-outlined">warning</span>';
+}
+
+async function loadCategoryBreakdown() {
+    const data = await api.getCategoryBreakdown(currentPeriod);
+    const container = document.getElementById('category-breakdown');
+
+    if (!data.categories || data.categories.length === 0) {
+        container.innerHTML = '<div class="empty-state">No category data available</div>';
+        return;
+    }
+
+    const maxCount = Math.max(...data.categories.map(c => c.count));
+
+    container.innerHTML = data.categories.map(cat => `
+        <div class="category-card">
+            <div class="category-header">
+                <span class="category-icon">${getCategoryIcon(cat.category)}</span>
+                <span class="category-name">${formatCategoryName(cat.category)}</span>
+            </div>
+            <div class="category-bar">
+                <div class="category-fill" style="width: ${(cat.count / maxCount) * 100}%"></div>
+            </div>
+            <div class="category-count">${cat.count} events</div>
+        </div>
+    `).join('');
+}
+
+async function loadAuditLog() {
+    const deviceId = getDeviceIdParam();
+    allAudits = await api.getAudits(currentPeriod, deviceId);
+    renderAuditLog(allAudits);
+}
+
+function renderAuditLog(audits) {
+    const container = document.getElementById('audit-log');
+
+    if (!audits || audits.length === 0) {
+        container.innerHTML = '<div class="empty-state">No audit entries for this period</div>';
+        return;
+    }
+
+    container.innerHTML = audits.slice(0, 50).map(entry => `
+        <div class="audit-entry severity-${entry.severity.toLowerCase()}" onclick="showAuditDetail('${entry.id}')">
+            <div class="audit-icon">${getCategoryIcon(entry.category)}</div>
+            <div class="audit-content">
+                <div class="audit-summary">${escapeHtml(entry.summary)}</div>
+                <div class="audit-meta">
+                    <span class="audit-category">${formatCategoryName(entry.category)}</span>
+                    <span class="separator">&#8226;</span>
+                    <span class="audit-time">${entry.relative_time || formatTime(entry.timestamp)}</span>
+                    ${entry.related_entity ? `<span class="separator">&#8226;</span><span class="audit-entity">${escapeHtml(entry.related_entity)}</span>` : ''}
+                </div>
+            </div>
+            <div class="audit-severity">
+                <span class="severity-badge ${entry.severity.toLowerCase()}">${entry.severity}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function filterLogs() {
+    const category = document.getElementById('category-filter').value;
+    const severity = document.getElementById('severity-filter').value;
+
+    let filtered = allAudits;
+    if (category) filtered = filtered.filter(a => a.category === category);
+    if (severity) filtered = filtered.filter(a => a.severity === severity);
+
+    renderAuditLog(filtered);
+}
+
+// ============ Audit Detail Modal ============
+
+async function showAuditDetail(id) {
+    const modal = document.getElementById('audit-detail-modal');
+    const body = document.getElementById('audit-modal-body');
+
+    modal.classList.remove('hidden');
+    body.innerHTML = '<div class="loading">Loading audit details...</div>';
+
+    const entry = await api.getAuditEntry(id);
+    const traces = await api.getAuditTraces(id);
+
+    if (entry.error) {
+        body.innerHTML = `<div class="error-message">${escapeHtml(entry.error)}</div>`;
+        return;
+    }
+
+    body.innerHTML = `
+        <div class="audit-detail">
+            <div class="detail-section">
+                <h3>Event Information</h3>
+                <div class="detail-grid">
+                    <div class="detail-row">
+                        <span class="detail-label">Category</span>
+                        <span class="detail-value">${getCategoryIcon(entry.category)} ${formatCategoryName(entry.category)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Severity</span>
+                        <span class="detail-value"><span class="severity-badge ${entry.severity.toLowerCase()}">${entry.severity}</span></span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Timestamp</span>
+                        <span class="detail-value">${formatTime(entry.timestamp)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Action</span>
+                        <span class="detail-value">${escapeHtml(entry.action || 'N/A')}</span>
+                    </div>
+                    ${entry.backend_type ? `
+                    <div class="detail-row">
+                        <span class="detail-label">Backend</span>
+                        <span class="detail-value">${escapeHtml(entry.backend_type)}</span>
+                    </div>` : ''}
+                </div>
+            </div>
+
+            <div class="detail-section">
+                <h3>Summary</h3>
+                <p class="detail-summary">${escapeHtml(entry.summary)}</p>
+                ${entry.details ? `<pre class="detail-json">${escapeHtml(JSON.stringify(JSON.parse(entry.details), null, 2))}</pre>` : ''}
+            </div>
+
+            ${traces && traces.length > 0 ? `
+            <div class="detail-section">
+                <h3>AI Decision Trace</h3>
+                ${traces.map(trace => `
+                    <div class="trace-card">
+                        <div class="trace-row">
+                            <span class="trace-label">User Input</span>
+                            <div class="trace-value">${escapeHtml(trace.user_input || 'N/A')}</div>
+                        </div>
+                        <div class="trace-row">
+                            <span class="trace-label">Context Used</span>
+                            <div class="trace-value">${escapeHtml(trace.context_used || 'None')}</div>
+                        </div>
+                        <div class="trace-row">
+                            <span class="trace-label">Reasoning</span>
+                            <div class="trace-value">${escapeHtml(trace.reasoning || 'N/A')}</div>
+                        </div>
+                        <div class="trace-row">
+                            <span class="trace-label">Output</span>
+                            <div class="trace-value">${escapeHtml(trace.output || 'N/A')}</div>
+                        </div>
+                        <div class="trace-stats">
+                            <span class="trace-stat"><span class="material-symbols-outlined">schedule</span> ${trace.response_time_ms || 0}ms</span>
+                            <span class="trace-stat"><span class="material-symbols-outlined">target</span> ${trace.confidence_score ? (trace.confidence_score * 100).toFixed(0) + '%' : 'N/A'}</span>
+                            <span class="trace-stat"><span class="material-symbols-outlined">token</span> ${trace.tokens_used || 0} tokens</span>
+                            ${trace.contains_pii ? '<span class="trace-stat warning"><span class="material-symbols-outlined">warning</span> PII Detected</span>' : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>` : ''}
+        </div>
+    `;
+}
+
+function closeAuditModal() {
+    document.getElementById('audit-detail-modal').classList.add('hidden');
+}
+
+// ============ Export ============
+
+async function exportAudit(format) {
+    showToast(`Exporting audit report as ${format.toUpperCase()}...`, 'info');
+    const result = await api.exportAuditReport(format, currentPeriod);
+
+    if (result.error) {
+        showToast('Export failed: ' + result.error, 'error');
+    } else if (result.path) {
+        showToast(`Report saved to: ${result.path}`, 'success');
+    } else if (result.download_url) {
+        window.location.href = result.download_url;
+    }
+}
+
+// ============ Helpers ============
+
+function getCategoryIcon(category) {
+    const icons = {
+        'AI_DECISION': '<span class="material-symbols-outlined">smart_toy</span>',
+        'DATA_ACCESS': '<span class="material-symbols-outlined">database</span>',
+        'BACKEND_QUERY': '<span class="material-symbols-outlined">dns</span>',
+        'SECURITY': '<span class="material-symbols-outlined">security</span>',
+        'USER_ACTION': '<span class="material-symbols-outlined">person</span>',
+        'SYSTEM': '<span class="material-symbols-outlined">settings</span>',
+        'COMPLIANCE': '<span class="material-symbols-outlined">verified</span>',
+        'AUTOMATION': '<span class="material-symbols-outlined">auto_awesome</span>'
+    };
+    return icons[category] || '<span class="material-symbols-outlined">article</span>';
+}
+
+function formatCategoryName(category) {
+    return category.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function formatTime(timestamp) {
+    if (!timestamp) return 'Unknown';
+    const date = new Date(timestamp);
+    return date.toLocaleString();
+}
+</script>
+{% endblock %}

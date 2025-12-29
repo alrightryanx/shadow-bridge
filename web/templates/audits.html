@@ -23,35 +23,35 @@
 <!-- Stats Grid -->
 <div class="stats-grid">
     <div class="stat-card">
-        <div class="stat-icon">&#128202;</div>
+        <div class="stat-icon"><span class="material-symbols-outlined">bar_chart</span></div>
         <div class="stat-info">
             <span class="stat-value" id="total-events">-</span>
             <span class="stat-label">Total Events</span>
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon">&#128274;</div>
+        <div class="stat-icon"><span class="material-symbols-outlined">shield</span></div>
         <div class="stat-info">
             <span class="stat-value" id="privacy-score">-</span>
             <span class="stat-label">Privacy Score</span>
         </div>
     </div>
     <div class="stat-card risk-card" id="risk-card">
-        <div class="stat-icon" id="risk-icon">&#9888;</div>
+        <div class="stat-icon" id="risk-icon"><span class="material-symbols-outlined">warning</span></div>
         <div class="stat-info">
             <span class="stat-value" id="risk-level">-</span>
             <span class="stat-label">Risk Level</span>
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon">&#129302;</div>
+        <div class="stat-icon"><span class="material-symbols-outlined">smart_toy</span></div>
         <div class="stat-info">
             <span class="stat-value" id="ai-decisions">-</span>
             <span class="stat-label">AI Decisions</span>
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon">&#128451;</div>
+        <div class="stat-icon"><span class="material-symbols-outlined">database</span></div>
         <div class="stat-info">
             <span class="stat-value" id="data-accesses">-</span>
             <span class="stat-label">Data Accesses</span>
@@ -159,8 +159,13 @@ async function loadAuditStats() {
     const riskCard = document.getElementById('risk-card');
     riskCard.className = 'stat-card risk-card risk-' + riskLevel.toLowerCase();
 
-    const riskIcons = { 'MINIMAL': '&#128994;', 'LOW': '&#128993;', 'MEDIUM': '&#128992;', 'HIGH': '&#128308;' };
-    document.getElementById('risk-icon').innerHTML = riskIcons[riskLevel] || '&#9888;';
+    const riskIcons = {
+        'MINIMAL': '<span class="material-symbols-outlined" style="color: var(--success)">check_circle</span>',
+        'LOW': '<span class="material-symbols-outlined" style="color: var(--success)">verified</span>',
+        'MEDIUM': '<span class="material-symbols-outlined" style="color: var(--warning)">error</span>',
+        'HIGH': '<span class="material-symbols-outlined" style="color: var(--error)">dangerous</span>'
+    };
+    document.getElementById('risk-icon').innerHTML = riskIcons[riskLevel] || '<span class="material-symbols-outlined">warning</span>';
 }
 
 async function loadCategoryBreakdown() {
@@ -306,10 +311,10 @@ async function showAuditDetail(id) {
                             <div class="trace-value">${escapeHtml(trace.output || 'N/A')}</div>
                         </div>
                         <div class="trace-stats">
-                            <span class="trace-stat">&#128336; ${trace.response_time_ms || 0}ms</span>
-                            <span class="trace-stat">&#127919; ${trace.confidence_score ? (trace.confidence_score * 100).toFixed(0) + '%' : 'N/A'}</span>
-                            <span class="trace-stat">&#128290; ${trace.tokens_used || 0} tokens</span>
-                            ${trace.contains_pii ? '<span class="trace-stat warning">&#9888; PII Detected</span>' : ''}
+                            <span class="trace-stat"><span class="material-symbols-outlined">schedule</span> ${trace.response_time_ms || 0}ms</span>
+                            <span class="trace-stat"><span class="material-symbols-outlined">target</span> ${trace.confidence_score ? (trace.confidence_score * 100).toFixed(0) + '%' : 'N/A'}</span>
+                            <span class="trace-stat"><span class="material-symbols-outlined">token</span> ${trace.tokens_used || 0} tokens</span>
+                            ${trace.contains_pii ? '<span class="trace-stat warning"><span class="material-symbols-outlined">warning</span> PII Detected</span>' : ''}
                         </div>
                     </div>
                 `).join('')}
@@ -341,16 +346,16 @@ async function exportAudit(format) {
 
 function getCategoryIcon(category) {
     const icons = {
-        'AI_DECISION': '&#129302;',
-        'DATA_ACCESS': '&#128451;',
-        'BACKEND_QUERY': '&#128268;',
-        'SECURITY': '&#128274;',
-        'USER_ACTION': '&#128100;',
-        'SYSTEM': '&#9881;',
-        'COMPLIANCE': '&#9989;',
-        'AUTOMATION': '&#9889;'
+        'AI_DECISION': '<span class="material-symbols-outlined">smart_toy</span>',
+        'DATA_ACCESS': '<span class="material-symbols-outlined">database</span>',
+        'BACKEND_QUERY': '<span class="material-symbols-outlined">dns</span>',
+        'SECURITY': '<span class="material-symbols-outlined">security</span>',
+        'USER_ACTION': '<span class="material-symbols-outlined">person</span>',
+        'SYSTEM': '<span class="material-symbols-outlined">settings</span>',
+        'COMPLIANCE': '<span class="material-symbols-outlined">verified</span>',
+        'AUTOMATION': '<span class="material-symbols-outlined">auto_awesome</span>'
     };
-    return icons[category] || '&#128196;';
+    return icons[category] || '<span class="material-symbols-outlined">article</span>';
 }
 
 function formatCategoryName(category) {

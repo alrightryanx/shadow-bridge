@@ -1,0 +1,388 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Notes{% endblock %}
+{% block page_title %}Notes{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+    <input type="text" id="search-input" class="search-input" placeholder="Search notes..." oninput="filterNotes()">
+    <label class="filter-checkbox">
+        <input type="checkbox" id="show-favorites" onchange="filterNotes()"> Favorites only
+    </label>
+</div>
+
+<div class="notes-list" id="notes-container">
+    <div class="loading">Loading notes...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allNotes = [];
+let loadedNoteContents = {};  // Cache for loaded note contents
+let favorites = { notes: [] };
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadFavorites();
+    loadNotes();
+});
+
+async function loadFavorites() {
+    const result = await api.getFavorites();
+    if (result && !result.error) {
+        favorites = result;
+    }
+}
+
+async function loadNotes() {
+    const deviceId = getDeviceIdParam();
+    allNotes = await api.getNotes(deviceId);
+    filterNotes();  // Re-apply search filter
+}
+
+function filterNotes() {
+    const search = document.getElementById('search-input').value.toLowerCase();
+    const showFavoritesOnly = document.getElementById('show-favorites').checked;
+
+    let filtered = allNotes.filter(n =>
+        n.title.toLowerCase().includes(search)
+    );
+
+    // Add favorite status
+    filtered = filtered.map(n => ({
+        ...n,
+        is_favorite: favorites.notes?.includes(n.id)
+    }));
+
+    // Filter to favorites only if checked
+    if (showFavoritesOnly) {
+        filtered = filtered.filter(n => n.is_favorite);
+    }
+
+    // Sort favorites to top
+    filtered.sort((a, b) => {
+        if (a.is_favorite && !b.is_favorite) return -1;
+        if (!a.is_favorite && b.is_favorite) return 1;
+        return (b.updated_at || 0) - (a.updated_at || 0);
+    });
+
+    renderNotes(filtered);
+}
+
+async function toggleFavorite(noteId, event) {
+    if (event) event.stopPropagation();
+    const result = await api.toggleNoteFavorite(noteId);
+    if (result.success) {
+        if (result.is_favorite) {
+            if (!favorites.notes) favorites.notes = [];
+            favorites.notes.push(noteId);
+        } else {
+            favorites.notes = favorites.notes.filter(id => id !== noteId);
+        }
+        filterNotes();
+        showToast(result.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+    }
+}
+
+async function copyNoteContent(noteId, event) {
+    if (event) event.stopPropagation();
+
+    // Load content if not cached
+    if (!loadedNoteContents[noteId]) {
+        const result = await api.getNoteContent(noteId);
+        if (result.error) {
+            showToast('Failed to load note content', 'error');
+            return;
+        }
+        loadedNoteContents[noteId] = result.content || '';
+    }
+
+    const content = loadedNoteContents[noteId];
+    try {
+        await navigator.clipboard.writeText(content);
+        showToast('Note content copied to clipboard', 'success');
+    } catch (err) {
+        showToast('Failed to copy: ' + err.message, 'error');
+    }
+}
+
+function openNoteInModal(noteId, title, event) {
+    if (event) event.stopPropagation();
+
+    // Use the base.html modal with the cached content
+    const content = loadedNoteContents[noteId] || '';
+    currentNoteId = noteId;
+    currentNoteContent = content;
+
+    document.getElementById('modal-title').textContent = title;
+
+    if (typeof marked !== 'undefined') {
+        document.getElementById('modal-content').innerHTML = marked.parse(content);
+    } else {
+        document.getElementById('modal-content').innerHTML = '<pre>' + escapeHtml(content) + '</pre>';
+    }
+
+    document.getElementById('note-modal').classList.remove('hidden');
+}
+
+function renderNotes(notes) {
+    const container = document.getElementById('notes-container');
+
+    if (notes.length === 0) {
+        container.innerHTML = '<div class="empty-state">No notes found</div>';
+        return;
+    }
+
+    container.innerHTML = notes.map(n => `
+        <div class="note-card" id="note-card-${n.id}">
+            <div class="note-header" onclick="toggleNote('${n.id}')">
+                <button class="star-btn ${n.is_favorite ? 'starred' : ''}" onclick="toggleFavorite('${n.id}', event)" title="Toggle favorite"></button>
+                <div class="note-info">
+                    <div class="note-title">${escapeHtml(n.title)}</div>
+                    <div class="note-meta">
+                        <span>${n.device_name || ''}</span>
+                        ${n.device_name ? '<span class="separator">|</span>' : ''}
+                        <span>${n.time_ago || ''}</span>
+                    </div>
+                </div>
+                <div class="note-actions">
+                    <button class="btn-icon-small" onclick="editNoteInModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}', event)" title="Edit note"><span class="material-symbols-outlined">edit</span></button>
+                    <button class="btn-icon-small" onclick="copyNoteContent('${n.id}', event)" title="Copy content"><span class="material-symbols-outlined">content_copy</span></button>
+                    <button class="btn-icon-small" onclick="openNoteInModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}', event)" title="Open in modal"><span class="material-symbols-outlined">open_in_new</span></button>
+                </div>
+                <span class="material-symbols-outlined expand-icon" id="expand-${n.id}">chevron_right</span>
+            </div>
+            <div class="note-content-wrapper" id="content-${n.id}" style="display: none;">
+                <div class="note-content-inner" id="content-inner-${n.id}">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function toggleNote(noteId) {
+    const contentWrapper = document.getElementById('content-' + noteId);
+    const expandIcon = document.getElementById('expand-' + noteId);
+    const contentInner = document.getElementById('content-inner-' + noteId);
+
+    if (contentWrapper.style.display === 'none') {
+        // Expand
+        contentWrapper.style.display = 'block';
+        expandIcon.textContent = 'expand_more';
+
+        // Load content if not already loaded
+        if (!loadedNoteContents[noteId]) {
+            contentInner.innerHTML = '<div class="loading">Loading note content...</div>';
+            const result = await api.getNoteContent(noteId);
+
+            if (result.error) {
+                contentInner.innerHTML = '<div class="error-message">' + escapeHtml(result.error) + '</div>';
+            } else {
+                loadedNoteContents[noteId] = result.content || '(Empty note)';
+                renderNoteContentInline(noteId, loadedNoteContents[noteId]);
+            }
+        }
+    } else {
+        // Collapse
+        contentWrapper.style.display = 'none';
+        expandIcon.textContent = 'chevron_right';
+    }
+}
+
+async function editNoteInModal(noteId, title, event) {
+    if (event) event.stopPropagation();
+
+    // Load content if not cached
+    if (!loadedNoteContents[noteId]) {
+        const result = await api.getNoteContent(noteId);
+        if (result.error) {
+            showToast('Failed to load note content', 'error');
+            return;
+        }
+        loadedNoteContents[noteId] = result.content || '';
+    }
+
+    currentNoteId = noteId;
+    currentNoteContent = loadedNoteContents[noteId];
+
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-content').innerHTML = '<textarea id="note-edit-area" class="note-edit-area">' + escapeHtml(currentNoteContent) + '</textarea>';
+    document.getElementById('markdown-toolbar').classList.remove('hidden');
+    document.getElementById('edit-note-btn').classList.add('hidden');
+    document.getElementById('cancel-edit-btn').classList.remove('hidden');
+    document.getElementById('save-note-btn').classList.remove('hidden');
+    document.getElementById('note-modal').classList.remove('hidden');
+}
+
+function renderNoteContentInline(noteId, content) {
+    const contentInner = document.getElementById('content-inner-' + noteId);
+    if (!contentInner) return;
+
+    // Render as markdown if marked library is available
+    if (typeof marked !== 'undefined') {
+        contentInner.innerHTML = '<div class="markdown-body">' + marked.parse(content) + '</div>';
+    } else {
+        // Fallback: render as preformatted text
+        contentInner.innerHTML = '<pre class="note-text">' + escapeHtml(content) + '</pre>';
+    }
+}
+</script>
+
+<style>
+.note-card {
+    background: var(--bg-card);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+
+.note-header {
+    display: flex;
+    align-items: flex-start;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+    gap: 8px;
+}
+
+.note-header:hover {
+    background: var(--bg-hover);
+}
+
+.note-header .star-btn {
+    margin-top: 2px;
+}
+
+.expand-icon {
+    color: var(--text-dim);
+    font-size: 20px;
+    margin-left: 8px;
+    transition: transform 0.2s;
+}
+
+.note-edit-area {
+    width: 100%;
+    min-height: 300px;
+    padding: 12px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    background: var(--bg-input);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    resize: vertical;
+}
+
+.note-info {
+    flex: 1;
+}
+
+.note-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+
+.note-header:hover .note-actions {
+    opacity: 1;
+}
+
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 14px;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+}
+
+.filter-checkbox input {
+    cursor: pointer;
+}
+
+.note-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+
+.note-meta {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.note-meta .separator {
+    margin: 0 6px;
+}
+
+.note-content-wrapper {
+    border-top: 1px solid var(--border);
+    background: var(--bg-elevated);
+}
+
+.note-content-inner {
+    padding: 16px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.note-content-inner .loading {
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+.note-content-inner .error-message {
+    color: var(--error);
+}
+
+.note-content-inner pre.note-text {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+    color: var(--text);
+}
+
+.note-content-inner .markdown-body {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+}
+
+.note-content-inner .markdown-body h1,
+.note-content-inner .markdown-body h2,
+.note-content-inner .markdown-body h3 {
+    margin-top: 16px;
+    margin-bottom: 8px;
+}
+
+.note-content-inner .markdown-body p {
+    margin-bottom: 12px;
+}
+
+.note-content-inner .markdown-body code {
+    background: var(--bg-input);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.note-content-inner .markdown-body pre {
+    background: var(--bg-input);
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+}
+
+.note-content-inner .markdown-body pre code {
+    background: none;
+    padding: 0;
+}
+</style>
+{% endblock %}

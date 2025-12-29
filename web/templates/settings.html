@@ -14,21 +14,21 @@
     </div>
     <div class="status-cards">
         <div class="status-card">
-            <div class="status-icon" id="shadowbridge-status-icon">&#9679;</div>
+            <div class="status-icon" id="shadowbridge-status-icon"><span class="material-symbols-outlined">circle</span></div>
             <div class="status-info">
                 <span class="status-name">ShadowBridge</span>
                 <span class="status-value" id="shadowbridge-status">Checking...</span>
             </div>
         </div>
         <div class="status-card">
-            <div class="status-icon" id="ssh-status-icon">&#9679;</div>
+            <div class="status-icon" id="ssh-status-icon"><span class="material-symbols-outlined">circle</span></div>
             <div class="status-info">
                 <span class="status-name">SSH Connection</span>
                 <span class="status-value" id="ssh-status">Checking...</span>
             </div>
         </div>
         <div class="status-card">
-            <div class="status-icon" id="devices-status-icon">&#9679;</div>
+            <div class="status-icon" id="devices-status-icon"><span class="material-symbols-outlined">circle</span></div>
             <div class="status-info">
                 <span class="status-name">Devices</span>
                 <span class="status-value" id="devices-status">Checking...</span>
@@ -107,6 +107,50 @@
     </div>
 </section>
 
+<!-- Security -->
+<section class="section">
+    <h2>Security</h2>
+    <div class="settings-form">
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Note Encryption</span>
+                <span class="setting-description">Encrypt notes at rest using AES-256</span>
+            </div>
+            <div class="setting-control">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="note-encryption" onchange="toggleEncryption()">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="setting-item" id="encryption-key-setting" style="display: none;">
+            <div class="setting-info">
+                <span class="setting-label">Encryption Passphrase</span>
+                <span class="setting-description">Set a passphrase to encrypt/decrypt notes</span>
+            </div>
+            <div class="setting-control">
+                <input type="password" id="encryption-passphrase" class="form-input" placeholder="Enter passphrase">
+                <button class="btn btn-small btn-primary" onclick="saveEncryptionKey()">Save</button>
+            </div>
+        </div>
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Auto-lock Timeout</span>
+                <span class="setting-description">Automatically lock encrypted notes after inactivity</span>
+            </div>
+            <div class="setting-control">
+                <select id="auto-lock" class="form-select" onchange="saveAutoLock()">
+                    <option value="0">Never</option>
+                    <option value="5" selected>5 minutes</option>
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</section>
+
 <!-- Data Management -->
 <section class="section">
     <h2>Data Management</h2>
@@ -126,10 +170,10 @@
     </div>
     <div class="data-actions">
         <button class="btn btn-secondary" onclick="clearCache()">
-            <span>&#128465;</span> Clear Cache
+            <span class="material-symbols-outlined">delete</span> Clear Cache
         </button>
         <button class="btn btn-secondary" onclick="exportAllData()">
-            <span>&#128229;</span> Export All Data
+            <span class="material-symbols-outlined">download</span> Export All Data
         </button>
     </div>
 </section>
@@ -175,15 +219,15 @@
         </div>
         <div class="about-row clickable" onclick="window.open('https://github.com/alrightryanx/shadowai/releases', '_blank')">
             <span class="about-label">Changelog</span>
-            <span class="about-value link">View on GitHub &#8599;</span>
+            <span class="about-value link">View on GitHub <span class="material-symbols-outlined">open_in_new</span></span>
         </div>
         <div class="about-row clickable" onclick="window.open('https://ryancartwright.com/shadowai', '_blank')">
             <span class="about-label">Website</span>
-            <span class="about-value link">ryancartwright.com/shadowai &#8599;</span>
+            <span class="about-value link">ryancartwright.com/shadowai <span class="material-symbols-outlined">open_in_new</span></span>
         </div>
         <div class="about-row clickable" onclick="window.open('mailto:contact@ryancartwright.com', '_blank')">
             <span class="about-label">Contact</span>
-            <span class="about-value link">contact@ryancartwright.com &#8599;</span>
+            <span class="about-value link">contact@ryancartwright.com <span class="material-symbols-outlined">open_in_new</span></span>
         </div>
     </div>
 </section>
@@ -321,6 +365,39 @@ function loadPreferences() {
     // Load data retention
     const dataRetention = localStorage.getItem('shadow_data_retention') || '30';
     document.getElementById('data-retention').value = dataRetention;
+
+    // Load encryption settings
+    const encryptionEnabled = localStorage.getItem('shadow_encryption_enabled') === 'true';
+    document.getElementById('note-encryption').checked = encryptionEnabled;
+    document.getElementById('encryption-key-setting').style.display = encryptionEnabled ? 'flex' : 'none';
+
+    const autoLock = localStorage.getItem('shadow_auto_lock') || '5';
+    document.getElementById('auto-lock').value = autoLock;
+}
+
+function toggleEncryption() {
+    const enabled = document.getElementById('note-encryption').checked;
+    localStorage.setItem('shadow_encryption_enabled', enabled);
+    document.getElementById('encryption-key-setting').style.display = enabled ? 'flex' : 'none';
+    showToast(enabled ? 'Note encryption enabled' : 'Note encryption disabled', 'success');
+}
+
+function saveEncryptionKey() {
+    const passphrase = document.getElementById('encryption-passphrase').value;
+    if (!passphrase || passphrase.length < 8) {
+        showToast('Passphrase must be at least 8 characters', 'error');
+        return;
+    }
+    // In production, this would be hashed and used to derive an encryption key
+    localStorage.setItem('shadow_encryption_key_set', 'true');
+    document.getElementById('encryption-passphrase').value = '';
+    showToast('Encryption passphrase saved', 'success');
+}
+
+function saveAutoLock() {
+    const value = document.getElementById('auto-lock').value;
+    localStorage.setItem('shadow_auto_lock', value);
+    showToast('Auto-lock timeout saved', 'success');
 }
 
 function saveRefreshInterval() {

@@ -2751,6 +2751,11 @@ class ShadowBridgeApp:
 
     def check_web_server_status(self):
         """Check if web dashboard server is running and update status indicator."""
+        if not hasattr(self, 'web_status_dot') or self.web_status_dot is None:
+            # Widget not created, skip status check
+            self.root.after(3000, self.check_web_server_status)
+            return
+
         try:
             import urllib.request
             urllib.request.urlopen("http://127.0.0.1:6767", timeout=1)

@@ -169,13 +169,13 @@ async function loadCategories() {
     }
 
     const categoryIcons = {
-        'AI_DECISION': '&#129302;',
-        'DATA_ACCESS': '&#128451;',
-        'SECURITY': '&#128274;',
-        'PRIVACY': '&#128065;',
-        'SYNC': '&#128260;',
-        'AUTOMATION': '&#9881;',
-        'USER_ACTION': '&#128100;'
+        'AI_DECISION': '<span class="material-symbols-outlined">smart_toy</span>',
+        'DATA_ACCESS': '<span class="material-symbols-outlined">database</span>',
+        'SECURITY': '<span class="material-symbols-outlined">security</span>',
+        'PRIVACY': '<span class="material-symbols-outlined">visibility_off</span>',
+        'SYNC': '<span class="material-symbols-outlined">sync</span>',
+        'AUTOMATION': '<span class="material-symbols-outlined">auto_awesome</span>',
+        'USER_ACTION': '<span class="material-symbols-outlined">person</span>'
     };
 
     const categoryColors = {
@@ -190,7 +190,7 @@ async function loadCategories() {
 
     container.innerHTML = categories.map(c => `
         <div class="category-item">
-            <div class="category-icon" style="background: ${categoryColors[c.category] || 'var(--md-sys-color-primary)'}">${categoryIcons[c.category] || '&#128203;'}</div>
+            <div class="category-icon" style="background: ${categoryColors[c.category] || 'var(--md-sys-color-primary)'}">${categoryIcons[c.category] || '<span class="material-symbols-outlined">category</span>'}</div>
             <div class="category-info">
                 <span class="category-name">${escapeHtml(c.category.replace(/_/g, ' '))}</span>
                 <div class="category-bar">

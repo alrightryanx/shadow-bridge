@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Automations{% endblock %}
+{% block page_title %}Automations{% endblock %}
+
+{% block content %}
+<div class="automations-grid" id="automations-container">
+    <div class="loading">Loading automations...</div>
+</div>
+
+<section class="section">
+    <h2>Execution History</h2>
+    <div class="logs-list" id="execution-logs">
+        <div class="empty-state">No recent executions</div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadAutomations();
+});
+
+async function loadAutomations() {
+    const automations = await api.getAutomations();
+    const container = document.getElementById('automations-container');
+
+    if (automations.length === 0) {
+        container.innerHTML = '<div class="empty-state">No automations configured</div>';
+        return;
+    }
+
+    container.innerHTML = automations.map(a => `
+        <div class="automation-card ${a.enabled ? '' : 'disabled'}">
+            <div class="automation-header">
+                <div class="automation-name">${escapeHtml(a.name)}</div>
+                <span class="status-badge ${a.enabled ? 'enabled' : 'disabled'}">
+                    ${a.enabled ? 'Enabled' : 'Disabled'}
+                </span>
+            </div>
+            <div class="automation-description">${escapeHtml(a.description || 'No description')}</div>
+            <div class="automation-meta">
+                <span class="schedule">${escapeHtml(a.schedule || a.trigger)}</span>
+                <span class="last-run">Last: ${a.last_run_formatted}</span>
+            </div>
+            <div class="automation-actions">
+                <button class="btn btn-small btn-primary" onclick="runAutomation('${a.id}')" ${a.enabled ? '' : 'disabled'}>
+                    Run Now
+                </button>
+                <button class="btn btn-small btn-secondary" onclick="viewLogs('${a.id}')">
+                    View Logs
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function runAutomation(id) {
+    try {
+        const result = await api.runAutomation(id);
+        if (result.error) {
+            alert('Error: ' + result.error);
+        } else {
+            alert('Automation triggered');
+            loadAutomations();
+        }
+    } catch (e) {
+        alert('Failed to trigger automation');
+    }
+}
+
+async function viewLogs(id) {
+    const logs = await api.getAutomationLogs(id);
+    const logsContainer = document.getElementById('execution-logs');
+
+    if (logs.length === 0) {
+        logsContainer.innerHTML = '<div class="empty-state">No execution logs</div>';
+        return;
+    }
+
+    logsContainer.innerHTML = logs.map(l => `
+        <div class="log-item ${l.success ? 'success' : 'error'}">
+            <span class="log-time">${l.timestamp}</span>
+            <span class="log-status">${l.success ? 'Success' : 'Failed'}</span>
+            <span class="log-message">${escapeHtml(l.message || '')}</span>
+        </div>
+    `).join('');
+}
+</script>
+{% endblock %}

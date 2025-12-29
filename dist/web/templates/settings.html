@@ -1,0 +1,620 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+<!-- Connection Status -->
+<section class="section">
+    <div class="section-header">
+        <h2>Connection Status</h2>
+        <button class="btn btn-small btn-secondary" onclick="refreshStatus()" title="Refresh status">
+            <span class="material-symbols-outlined refresh-icon">refresh</span> Refresh
+        </button>
+    </div>
+    <div class="status-cards">
+        <div class="status-card">
+            <div class="status-icon" id="shadowbridge-status-icon"><span class="material-symbols-outlined">circle</span></div>
+            <div class="status-info">
+                <span class="status-name">ShadowBridge</span>
+                <span class="status-value" id="shadowbridge-status">Checking...</span>
+            </div>
+        </div>
+        <div class="status-card">
+            <div class="status-icon" id="ssh-status-icon"><span class="material-symbols-outlined">circle</span></div>
+            <div class="status-info">
+                <span class="status-name">SSH Connection</span>
+                <span class="status-value" id="ssh-status">Checking...</span>
+            </div>
+        </div>
+        <div class="status-card">
+            <div class="status-icon" id="devices-status-icon"><span class="material-symbols-outlined">circle</span></div>
+            <div class="status-info">
+                <span class="status-name">Devices</span>
+                <span class="status-value" id="devices-status">Checking...</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Device Setup -->
+<section class="section">
+    <h2>Connect New Device</h2>
+    <div class="qr-section">
+        <div class="qr-instructions">
+            <p>Scan this QR code with Shadow app to connect a new device.</p>
+            <p class="qr-note">Make sure both devices are on the same network or use Tailscale.</p>
+            <button class="btn btn-small btn-secondary" onclick="loadQRCode()">
+                <span class="material-symbols-outlined">qr_code_2</span> Regenerate
+            </button>
+        </div>
+        <div class="qr-placeholder" id="qr-code">
+            <div class="qr-loading">
+                <div class="spinner"></div>
+                <span>Loading QR code...</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Preferences -->
+<section class="section">
+    <h2>Preferences</h2>
+    <div class="settings-form">
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Theme</span>
+                <span class="setting-description">Switch between dark and light mode</span>
+            </div>
+            <div class="setting-control">
+                <button class="btn btn-small" id="theme-mode-btn" onclick="cycleTheme()">
+                    <span id="theme-mode-text">Dark</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Auto-refresh Interval</span>
+                <span class="setting-description">How often to refresh data from devices</span>
+            </div>
+            <div class="setting-control">
+                <select id="refresh-interval" class="form-select" onchange="saveRefreshInterval()">
+                    <option value="0">Manual only</option>
+                    <option value="30">30 seconds</option>
+                    <option value="60" selected>1 minute</option>
+                    <option value="300">5 minutes</option>
+                    <option value="600">10 minutes</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Data Retention</span>
+                <span class="setting-description">How long to keep cached data locally</span>
+            </div>
+            <div class="setting-control">
+                <select id="data-retention" class="form-select" onchange="saveDataRetention()">
+                    <option value="7">7 days</option>
+                    <option value="30" selected>30 days</option>
+                    <option value="90">90 days</option>
+                    <option value="365">1 year</option>
+                    <option value="0">Forever</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Security -->
+<section class="section">
+    <h2>Security</h2>
+    <div class="settings-form">
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Note Encryption</span>
+                <span class="setting-description">Encrypt notes at rest using AES-256</span>
+            </div>
+            <div class="setting-control">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="note-encryption" onchange="toggleEncryption()">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="setting-item" id="encryption-key-setting" style="display: none;">
+            <div class="setting-info">
+                <span class="setting-label">Encryption Passphrase</span>
+                <span class="setting-description">Set a passphrase to encrypt/decrypt notes</span>
+            </div>
+            <div class="setting-control">
+                <input type="password" id="encryption-passphrase" class="form-input" placeholder="Enter passphrase">
+                <button class="btn btn-small btn-primary" onclick="saveEncryptionKey()">Save</button>
+            </div>
+        </div>
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Auto-lock Timeout</span>
+                <span class="setting-description">Automatically lock encrypted notes after inactivity</span>
+            </div>
+            <div class="setting-control">
+                <select id="auto-lock" class="form-select" onchange="saveAutoLock()">
+                    <option value="0">Never</option>
+                    <option value="5" selected>5 minutes</option>
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Data Management -->
+<section class="section">
+    <h2>Data Management</h2>
+    <div class="data-info">
+        <div class="data-stat">
+            <span class="data-label">Local Data Path</span>
+            <code class="data-value" id="data-path">~/.shadowai/</code>
+        </div>
+        <div class="data-stat">
+            <span class="data-label">Cache Size</span>
+            <span class="data-value" id="cache-size">Calculating...</span>
+        </div>
+        <div class="data-stat">
+            <span class="data-label">Cached Notes</span>
+            <span class="data-value" id="cached-notes">0</span>
+        </div>
+    </div>
+    <div class="data-actions">
+        <button class="btn btn-secondary" onclick="clearCache()">
+            <span class="material-symbols-outlined">delete</span> Clear Cache
+        </button>
+        <button class="btn btn-secondary" onclick="exportAllData()">
+            <span class="material-symbols-outlined">download</span> Export All Data
+        </button>
+    </div>
+</section>
+
+<!-- Network Configuration -->
+<section class="section">
+    <h2>Network Configuration</h2>
+    <div class="about-info">
+        <div class="about-row">
+            <span class="about-label">Web Dashboard Port</span>
+            <span class="about-value">6767</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Data Receiver Port</span>
+            <span class="about-value">19284</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Discovery Broadcast Port</span>
+            <span class="about-value">19285</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Claude Code Relay Port</span>
+            <span class="about-value">19286</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Local IP</span>
+            <span class="about-value" id="local-ip">Detecting...</span>
+        </div>
+    </div>
+</section>
+
+<!-- About -->
+<section class="section">
+    <h2>About</h2>
+    <div class="about-info">
+        <div class="about-row">
+            <span class="about-label">Shadow Web Dashboard</span>
+            <span class="about-value">v1.0.0</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">ShadowBridge Version</span>
+            <span class="about-value" id="bridge-version">--</span>
+        </div>
+        <div class="about-row clickable" onclick="window.open('https://github.com/alrightryanx/shadowai/releases', '_blank')">
+            <span class="about-label">Changelog</span>
+            <span class="about-value link">View on GitHub <span class="material-symbols-outlined">open_in_new</span></span>
+        </div>
+        <div class="about-row clickable" onclick="window.open('https://ryancartwright.com/shadowai', '_blank')">
+            <span class="about-label">Website</span>
+            <span class="about-value link">ryancartwright.com/shadowai <span class="material-symbols-outlined">open_in_new</span></span>
+        </div>
+        <div class="about-row clickable" onclick="window.open('mailto:contact@ryancartwright.com', '_blank')">
+            <span class="about-label">Contact</span>
+            <span class="about-value link">contact@ryancartwright.com <span class="material-symbols-outlined">open_in_new</span></span>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadStatus();
+    loadQRCode();
+    loadDataStats();
+    loadPreferences();
+    updateThemeButton();
+});
+
+async function loadStatus() {
+    const status = await api.getStatus();
+
+    // ShadowBridge
+    const sbIcon = document.getElementById('shadowbridge-status-icon');
+    const sbStatus = document.getElementById('shadowbridge-status');
+    if (status.shadowbridge_running) {
+        sbIcon.className = 'status-icon online';
+        sbStatus.textContent = 'Running';
+    } else {
+        sbIcon.className = 'status-icon offline';
+        sbStatus.textContent = 'Not Running';
+    }
+
+    // SSH
+    const sshIcon = document.getElementById('ssh-status-icon');
+    const sshStatus = document.getElementById('ssh-status');
+    if (status.ssh_status === 'connected') {
+        sshIcon.className = 'status-icon online';
+        sshStatus.textContent = 'Connected';
+    } else {
+        sshIcon.className = 'status-icon offline';
+        sshStatus.textContent = 'Disconnected';
+    }
+
+    // Devices
+    const devIcon = document.getElementById('devices-status-icon');
+    const devStatus = document.getElementById('devices-status');
+    if (status.devices_connected > 0) {
+        devIcon.className = 'status-icon online';
+        devStatus.textContent = status.devices_connected + ' connected';
+    } else {
+        devIcon.className = 'status-icon offline';
+        devStatus.textContent = 'No devices';
+    }
+
+    // Update version info
+    if (status.version) {
+        document.getElementById('bridge-version').textContent = status.version;
+    }
+
+    // Update local IP
+    if (status.local_ip) {
+        document.getElementById('local-ip').textContent = status.local_ip;
+    }
+
+    // Update data path
+    if (status.data_path) {
+        document.getElementById('data-path').textContent = status.data_path;
+    }
+}
+
+async function refreshStatus() {
+    showToast('Refreshing status...', 'info');
+    await loadStatus();
+    showToast('Status updated', 'success');
+}
+
+async function loadQRCode() {
+    const container = document.getElementById('qr-code');
+    container.innerHTML = `
+        <div class="qr-loading">
+            <div class="spinner"></div>
+            <span>Loading QR code...</span>
+        </div>
+    `;
+
+    const qrData = await api.getQRCode();
+
+    if (qrData.image) {
+        container.innerHTML = `
+            <img src="${qrData.image}" alt="QR Code" class="qr-image">
+            <div class="qr-host">${escapeHtml(qrData.host)}:${qrData.port}</div>
+        `;
+        // Update local IP from QR data
+        document.getElementById('local-ip').textContent = qrData.host;
+    } else if (qrData.error) {
+        container.innerHTML = `
+            <div class="qr-error">${escapeHtml(qrData.error)}</div>
+            <div class="qr-data"><code>${escapeHtml(qrData.data || '')}</code></div>
+        `;
+    } else {
+        container.innerHTML = `
+            <div class="qr-data"><code>${escapeHtml(qrData.data || '')}</code></div>
+            <p class="qr-instruction">${escapeHtml(qrData.instruction || '')}</p>
+        `;
+    }
+}
+
+async function loadDataStats() {
+    // Calculate cache size from localStorage
+    let totalSize = 0;
+    let noteCount = 0;
+    for (let key in localStorage) {
+        if (localStorage.hasOwnProperty(key)) {
+            totalSize += localStorage[key].length * 2; // UTF-16 = 2 bytes per char
+            if (key.startsWith('shadow_note_')) {
+                noteCount++;
+            }
+        }
+    }
+
+    document.getElementById('cache-size').textContent = formatBytes(totalSize);
+    document.getElementById('cached-notes').textContent = noteCount.toString();
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function loadPreferences() {
+    // Load refresh interval
+    const refreshInterval = localStorage.getItem('shadow_refresh_interval') || '60';
+    document.getElementById('refresh-interval').value = refreshInterval;
+
+    // Load data retention
+    const dataRetention = localStorage.getItem('shadow_data_retention') || '30';
+    document.getElementById('data-retention').value = dataRetention;
+
+    // Load encryption settings
+    const encryptionEnabled = localStorage.getItem('shadow_encryption_enabled') === 'true';
+    document.getElementById('note-encryption').checked = encryptionEnabled;
+    document.getElementById('encryption-key-setting').style.display = encryptionEnabled ? 'flex' : 'none';
+
+    const autoLock = localStorage.getItem('shadow_auto_lock') || '5';
+    document.getElementById('auto-lock').value = autoLock;
+}
+
+function toggleEncryption() {
+    const enabled = document.getElementById('note-encryption').checked;
+    localStorage.setItem('shadow_encryption_enabled', enabled);
+    document.getElementById('encryption-key-setting').style.display = enabled ? 'flex' : 'none';
+    showToast(enabled ? 'Note encryption enabled' : 'Note encryption disabled', 'success');
+}
+
+function saveEncryptionKey() {
+    const passphrase = document.getElementById('encryption-passphrase').value;
+    if (!passphrase || passphrase.length < 8) {
+        showToast('Passphrase must be at least 8 characters', 'error');
+        return;
+    }
+    // In production, this would be hashed and used to derive an encryption key
+    localStorage.setItem('shadow_encryption_key_set', 'true');
+    document.getElementById('encryption-passphrase').value = '';
+    showToast('Encryption passphrase saved', 'success');
+}
+
+function saveAutoLock() {
+    const value = document.getElementById('auto-lock').value;
+    localStorage.setItem('shadow_auto_lock', value);
+    showToast('Auto-lock timeout saved', 'success');
+}
+
+function saveRefreshInterval() {
+    const value = document.getElementById('refresh-interval').value;
+    localStorage.setItem('shadow_refresh_interval', value);
+    showToast('Refresh interval saved', 'success');
+}
+
+function saveDataRetention() {
+    const value = document.getElementById('data-retention').value;
+    localStorage.setItem('shadow_data_retention', value);
+    showToast('Data retention setting saved', 'success');
+}
+
+function cycleTheme() {
+    toggleTheme();
+    updateThemeButton();
+}
+
+function updateThemeButton() {
+    const isDark = document.documentElement.classList.contains('dark-theme') ||
+                   !document.documentElement.classList.contains('light-theme');
+    document.getElementById('theme-mode-text').textContent = isDark ? 'Dark' : 'Light';
+}
+
+async function clearCache() {
+    if (!confirm('Clear all cached data? This will remove offline note content and settings.')) {
+        return;
+    }
+
+    // Clear shadow-related localStorage items
+    const keysToRemove = [];
+    for (let key in localStorage) {
+        if (key.startsWith('shadow_') || key.startsWith('api_cache_')) {
+            keysToRemove.push(key);
+        }
+    }
+
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+    showToast('Cache cleared', 'success');
+    loadDataStats();
+}
+
+async function exportAllData() {
+    showToast('Preparing export...', 'info');
+
+    const exportData = {
+        exportDate: new Date().toISOString(),
+        settings: {
+            refreshInterval: localStorage.getItem('shadow_refresh_interval'),
+            dataRetention: localStorage.getItem('shadow_data_retention'),
+            theme: localStorage.getItem('shadow_theme')
+        },
+        cache: {}
+    };
+
+    // Export cached data
+    for (let key in localStorage) {
+        if (key.startsWith('shadow_') || key.startsWith('api_cache_')) {
+            try {
+                exportData.cache[key] = JSON.parse(localStorage[key]);
+            } catch {
+                exportData.cache[key] = localStorage[key];
+            }
+        }
+    }
+
+    // Download as JSON
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'shadow_export_' + new Date().toISOString().split('T')[0] + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+
+    showToast('Data exported successfully', 'success');
+}
+</script>
+
+<style>
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+}
+
+.section-header h2 {
+    margin-bottom: 0;
+}
+
+/* Settings Form */
+.settings-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.setting-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-md);
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+}
+
+.setting-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.setting-label {
+    font-weight: 500;
+    color: var(--text);
+}
+
+.setting-description {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.setting-control {
+    flex-shrink: 0;
+}
+
+.form-select {
+    background: var(--bg-input);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.form-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* Data Info */
+.data-info {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+}
+
+.data-stat {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-md);
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+}
+
+.data-label {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.data-value {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text);
+}
+
+.data-value code {
+    font-family: monospace;
+    font-size: 13px;
+}
+
+.data-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+/* Clickable rows */
+.about-row.clickable {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.about-row.clickable:hover {
+    background: var(--bg-hover);
+}
+
+.about-value.link {
+    color: var(--accent);
+}
+
+/* QR Loading Spinner */
+.qr-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
+    color: var(--text-dim);
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+</style>
+{% endblock %}

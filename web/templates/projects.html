@@ -160,7 +160,7 @@ function renderProjects(projects) {
             <div class="project-card">
                 <div class="project-card-header">
                     <button class="star-btn ${p.is_favorite ? 'starred' : ''}" onclick="toggleFavorite('${p.id}', event)"></button>
-                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit">&#9998;</button>
+                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
                 </div>
                 <div class="project-name">${escapeHtml(p.name)}</div>
                 <div class="project-path">${escapeHtml(p.path)}</div>
@@ -194,7 +194,7 @@ function renderProjects(projects) {
                             <td>${p.time_ago}</td>
                             <td>
                                 <div class="action-buttons">
-                                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit">&#9998;</button>
+                                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
                                     <button class="btn btn-small btn-primary" onclick="openProject('${p.id}')">Open</button>
                                 </div>
                             </td>

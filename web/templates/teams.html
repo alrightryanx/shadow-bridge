@@ -293,7 +293,7 @@ function renderAgents(agents) {
                 </div>
                 <div class="agent-actions">
                     <button class="btn-icon-small" onclick="toggleAgentAvailability('${a.id}')" title="Toggle availability">
-                        ${a.is_available ? '&#128994;' : '&#128308;'}
+                        ${a.is_available ? '<span class="material-symbols-outlined" style="color: var(--success)">check_circle</span>' : '<span class="material-symbols-outlined" style="color: var(--error)">cancel</span>'}
                     </button>
                 </div>
             </div>
@@ -311,11 +311,11 @@ function renderAgents(agents) {
             ` : ''}
             <div class="agent-stats">
                 <span class="agent-stat">
-                    <span class="stat-icon">&#9989;</span>
+                    <span class="stat-icon"><span class="material-symbols-outlined">task_alt</span></span>
                     ${a.tasks_completed || 0} completed
                 </span>
                 <span class="agent-stat">
-                    <span class="stat-icon">&#128200;</span>
+                    <span class="stat-icon"><span class="material-symbols-outlined">speed</span></span>
                     ${a.workload || 0}% workload
                 </span>
             </div>
@@ -352,8 +352,8 @@ function renderTaskCard(task) {
             <div class="task-footer">
                 ${agent ? `<span class="task-assignee">${getAgentEmoji(agent.type)} ${escapeHtml(agent.name)}</span>` : '<span class="task-unassigned">Unassigned</span>'}
                 <div class="task-actions">
-                    ${task.status === 'PENDING' ? `<button class="btn-icon-small" onclick="updateTaskStatus('${task.id}', 'IN_PROGRESS')" title="Start">&#9658;</button>` : ''}
-                    ${task.status === 'IN_PROGRESS' ? `<button class="btn-icon-small" onclick="updateTaskStatus('${task.id}', 'COMPLETED')" title="Complete">&#10003;</button>` : ''}
+                    ${task.status === 'PENDING' ? `<button class="btn-icon-small" onclick="updateTaskStatus('${task.id}', 'IN_PROGRESS')" title="Start"><span class="material-symbols-outlined">play_arrow</span></button>` : ''}
+                    ${task.status === 'IN_PROGRESS' ? `<button class="btn-icon-small" onclick="updateTaskStatus('${task.id}', 'COMPLETED')" title="Complete"><span class="material-symbols-outlined">check</span></button>` : ''}
                 </div>
             </div>
         </div>
@@ -420,22 +420,22 @@ function populateAgentSelector() {
 // ============ Helpers ============
 
 function getAgentEmoji(type) {
-    const emojis = {
-        'SENIOR_DEVELOPER': '&#128187;',
-        'JUNIOR_DEVELOPER': '&#128187;',
-        'CODE_REVIEWER': '&#128269;',
-        'DEBUGGER': '&#128027;',
-        'TESTER': '&#9989;',
-        'DOCUMENTATION_WRITER': '&#128221;',
-        'PROJECT_MANAGER': '&#128188;',
-        'ARCHITECT': '&#127959;',
-        'SECURITY_ANALYST': '&#128274;',
-        'DEVOPS_ENGINEER': '&#9881;',
-        'UI_UX_DESIGNER': '&#127912;',
-        'DATA_ANALYST': '&#128200;',
-        'GENERAL_PURPOSE': '&#129302;'
+    const icons = {
+        'SENIOR_DEVELOPER': '<span class="material-symbols-outlined">code</span>',
+        'JUNIOR_DEVELOPER': '<span class="material-symbols-outlined">code</span>',
+        'CODE_REVIEWER': '<span class="material-symbols-outlined">rate_review</span>',
+        'DEBUGGER': '<span class="material-symbols-outlined">bug_report</span>',
+        'TESTER': '<span class="material-symbols-outlined">science</span>',
+        'DOCUMENTATION_WRITER': '<span class="material-symbols-outlined">edit_document</span>',
+        'PROJECT_MANAGER': '<span class="material-symbols-outlined">work</span>',
+        'ARCHITECT': '<span class="material-symbols-outlined">architecture</span>',
+        'SECURITY_ANALYST': '<span class="material-symbols-outlined">security</span>',
+        'DEVOPS_ENGINEER': '<span class="material-symbols-outlined">settings</span>',
+        'UI_UX_DESIGNER': '<span class="material-symbols-outlined">palette</span>',
+        'DATA_ANALYST': '<span class="material-symbols-outlined">analytics</span>',
+        'GENERAL_PURPOSE': '<span class="material-symbols-outlined">smart_toy</span>'
     };
-    return emojis[type] || '&#129302;';
+    return icons[type] || '<span class="material-symbols-outlined">smart_toy</span>';
 }
 
 function formatAgentType(type) {

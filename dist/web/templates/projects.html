@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Projects{% endblock %}
+{% block page_title %}Projects{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+    <input type="text" id="search-input" class="search-input" placeholder="Search projects..." oninput="filterProjects()">
+    <label class="filter-checkbox">
+        <input type="checkbox" id="show-favorites" onchange="filterProjects()"> Favorites only
+    </label>
+    <div class="view-toggle">
+        <button class="btn btn-small" id="grid-view-btn" onclick="setView('grid')">Grid</button>
+        <button class="btn btn-small active" id="list-view-btn" onclick="setView('list')">List</button>
+    </div>
+</div>
+
+<div class="projects-grid" id="projects-container">
+    <div class="loading">Loading projects...</div>
+</div>
+{% endblock %}
+
+<!-- Edit Project Modal -->
+<div id="edit-project-modal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2>Edit Project</h2>
+            <button class="modal-close" onclick="closeEditProjectModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="edit-project-name">Project Name</label>
+                <input type="text" id="edit-project-name" class="form-input">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeEditProjectModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveProject()">Save</button>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+let allProjects = [];
+let currentView = 'list';
+let favorites = { projects: [] };
+let editingProjectId = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadFavorites();
+    loadProjects();
+});
+
+async function loadFavorites() {
+    const result = await api.getFavorites();
+    if (result && !result.error) {
+        favorites = result;
+    }
+}
+
+async function loadProjects() {
+    const deviceId = getDeviceIdParam();
+    allProjects = await api.getProjects(deviceId);
+    filterProjects();
+}
+
+function filterProjects() {
+    const search = document.getElementById('search-input').value.toLowerCase();
+    const showFavoritesOnly = document.getElementById('show-favorites').checked;
+
+    let filtered = allProjects.filter(p =>
+        p.name.toLowerCase().includes(search) ||
+        p.path.toLowerCase().includes(search)
+    );
+
+    // Add favorite status
+    filtered = filtered.map(p => ({
+        ...p,
+        is_favorite: favorites.projects?.includes(p.id)
+    }));
+
+    // Filter to favorites only if checked
+    if (showFavoritesOnly) {
+        filtered = filtered.filter(p => p.is_favorite);
+    }
+
+    // Sort favorites to top
+    filtered.sort((a, b) => {
+        if (a.is_favorite && !b.is_favorite) return -1;
+        if (!a.is_favorite && b.is_favorite) return 1;
+        return (b.updated_at || 0) - (a.updated_at || 0);
+    });
+
+    renderProjects(filtered);
+}
+
+function setView(view) {
+    currentView = view;
+    document.getElementById('grid-view-btn').classList.toggle('active', view === 'grid');
+    document.getElementById('list-view-btn').classList.toggle('active', view === 'list');
+    filterProjects();
+}
+
+async function toggleFavorite(projectId, event) {
+    if (event) event.stopPropagation();
+    const result = await api.toggleProjectFavorite(projectId);
+    if (result.success) {
+        if (result.is_favorite) {
+            if (!favorites.projects) favorites.projects = [];
+            favorites.projects.push(projectId);
+        } else {
+            favorites.projects = favorites.projects.filter(id => id !== projectId);
+        }
+        filterProjects();
+        showToast(result.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+    }
+}
+
+function showEditProjectModal(projectId, currentName, event) {
+    if (event) event.stopPropagation();
+    editingProjectId = projectId;
+    document.getElementById('edit-project-name').value = currentName;
+    document.getElementById('edit-project-modal').classList.remove('hidden');
+}
+
+function closeEditProjectModal() {
+    document.getElementById('edit-project-modal').classList.add('hidden');
+    editingProjectId = null;
+}
+
+async function saveProject() {
+    if (!editingProjectId) return;
+    const newName = document.getElementById('edit-project-name').value.trim();
+    if (!newName) {
+        showToast('Please enter a project name', 'warning');
+        return;
+    }
+    const result = await api.updateProject(editingProjectId, { name: newName });
+    if (result.success) {
+        showToast('Project updated', 'success');
+        closeEditProjectModal();
+        loadProjects();
+    } else {
+        showToast('Failed to update: ' + (result.error || 'Unknown error'), 'error');
+    }
+}
+
+function renderProjects(projects) {
+    const container = document.getElementById('projects-container');
+    container.className = currentView === 'grid' ? 'projects-grid' : 'projects-list';
+
+    if (projects.length === 0) {
+        container.innerHTML = '<div class="empty-state">No projects found</div>';
+        return;
+    }
+
+    if (currentView === 'grid') {
+        container.innerHTML = projects.map(p => `
+            <div class="project-card">
+                <div class="project-card-header">
+                    <button class="star-btn ${p.is_favorite ? 'starred' : ''}" onclick="toggleFavorite('${p.id}', event)"></button>
+                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
+                </div>
+                <div class="project-name">${escapeHtml(p.name)}</div>
+                <div class="project-path">${escapeHtml(p.path)}</div>
+                <div class="project-meta">
+                    <span>${p.device_name}</span>
+                    <span>${p.time_ago}</span>
+                </div>
+                <button class="btn btn-small btn-primary" onclick="openProject('${p.id}')">Open</button>
+            </div>
+        `).join('');
+    } else {
+        container.innerHTML = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th width="40"></th>
+                        <th>Name</th>
+                        <th>Path</th>
+                        <th>Device</th>
+                        <th>Updated</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${projects.map(p => `
+                        <tr>
+                            <td><button class="star-btn ${p.is_favorite ? 'starred' : ''}" onclick="toggleFavorite('${p.id}', event)"></button></td>
+                            <td>${escapeHtml(p.name)}</td>
+                            <td class="path-cell">${escapeHtml(p.path)}</td>
+                            <td>${escapeHtml(p.device_name)}</td>
+                            <td>${p.time_ago}</td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
+                                    <button class="btn btn-small btn-primary" onclick="openProject('${p.id}')">Open</button>
+                                </div>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    }
+}
+</script>
+
+<style>
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 14px;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+}
+
+.filter-checkbox input {
+    cursor: pointer;
+}
+
+.project-card-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: var(--spacing-sm);
+}
+
+.action-buttons {
+    display: flex;
+    gap: var(--spacing-xs);
+    align-items: center;
+}
+
+.projects-list {
+    display: flex;
+    flex-direction: column;
+}
+</style>
+{% endblock %}
