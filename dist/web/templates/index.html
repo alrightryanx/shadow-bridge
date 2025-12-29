@@ -39,7 +39,7 @@
 <!-- Two Column Layout -->
 <div class="dashboard-columns">
     <!-- Recent Projects -->
-    <section class="section">
+    <section class="section dashboard-card">
         <div class="section-header">
             <h2><span class="material-symbols-outlined">folder</span> Recent Projects</h2>
             <a href="/projects" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
@@ -50,7 +50,7 @@
     </section>
 
     <!-- Recent Notes -->
-    <section class="section">
+    <section class="section dashboard-card">
         <div class="section-header">
             <h2><span class="material-symbols-outlined">description</span> Recent Notes</h2>
             <a href="/notes" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
@@ -62,7 +62,7 @@
 </div>
 
 <!-- Activity Feed -->
-<section class="section">
+<section class="section dashboard-card">
     <div class="section-header">
         <h2><span class="material-symbols-outlined">history</span> Recent Activity</h2>
     </div>
@@ -255,6 +255,28 @@ function getTimeAgo(date) {
 </script>
 
 <style>
+.dashboard-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.dashboard-card .section-header {
+    margin-bottom: 16px;
+}
+
+.dashboard-card .projects-list,
+.dashboard-card .notes-list {
+    margin: 0 -8px;
+}
+
+.dashboard-card .project-item,
+.dashboard-card .note-item {
+    margin-left: 0;
+    margin-right: 0;
+}
+
 .dashboard-stats {
     margin-bottom: var(--spacing-lg);
 }
@@ -403,9 +425,10 @@ function getTimeAgo(date) {
 }
 
 .activity-feed {
-    background: var(--bg-card);
-    border-radius: 12px;
+    background: transparent;
+    border-radius: 0;
     overflow: hidden;
+    margin: 0 -20px -20px -20px;
 }
 
 .activity-item {
