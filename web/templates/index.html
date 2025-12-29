@@ -4,25 +4,93 @@
 {% block page_title %}Dashboard{% endblock %}
 
 {% block content %}
-<!-- Recent Projects -->
-<section class="section">
-    <div class="section-header">
-        <h2>Recent Projects</h2>
-        <a href="/projects" class="view-all">View All &rarr;</a>
+<!-- Stats Overview -->
+<div class="stats-grid dashboard-stats">
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">smartphone</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="devices-count">-</span>
+            <span class="stat-label">Devices</span>
+        </div>
     </div>
-    <div class="projects-grid" id="recent-projects">
-        <div class="loading">Loading projects...</div>
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">folder</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="projects-count">-</span>
+            <span class="stat-label">Projects</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">description</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="notes-count">-</span>
+            <span class="stat-label">Notes</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon"><span class="material-symbols-outlined">sync</span></div>
+        <div class="stat-info">
+            <span class="stat-value" id="last-sync">-</span>
+            <span class="stat-label">Last Sync</span>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<section class="section quick-actions-section">
+    <h2>Quick Actions</h2>
+    <div class="quick-actions">
+        <button class="quick-action-btn" onclick="window.location.href='/settings'">
+            <span class="material-symbols-outlined">qr_code_2</span>
+            <span>Connect Device</span>
+        </button>
+        <button class="quick-action-btn" onclick="refreshData()">
+            <span class="material-symbols-outlined">sync</span>
+            <span>Sync Now</span>
+        </button>
+        <button class="quick-action-btn" onclick="window.location.href='/analytics'">
+            <span class="material-symbols-outlined">analytics</span>
+            <span>View Analytics</span>
+        </button>
+        <button class="quick-action-btn" onclick="window.location.href='/teams'">
+            <span class="material-symbols-outlined">group</span>
+            <span>Manage Teams</span>
+        </button>
     </div>
 </section>
 
-<!-- Recent Notes -->
+<!-- Two Column Layout -->
+<div class="dashboard-columns">
+    <!-- Recent Projects -->
+    <section class="section">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">folder</span> Recent Projects</h2>
+            <a href="/projects" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
+        </div>
+        <div class="projects-list" id="recent-projects">
+            <div class="loading">Loading projects...</div>
+        </div>
+    </section>
+
+    <!-- Recent Notes -->
+    <section class="section">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">description</span> Recent Notes</h2>
+            <a href="/notes" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
+        </div>
+        <div class="notes-list" id="recent-notes">
+            <div class="loading">Loading notes...</div>
+        </div>
+    </section>
+</div>
+
+<!-- Activity Feed -->
 <section class="section">
     <div class="section-header">
-        <h2>Recent Notes</h2>
-        <a href="/notes" class="view-all">View All &rarr;</a>
+        <h2><span class="material-symbols-outlined">history</span> Recent Activity</h2>
     </div>
-    <div class="notes-list" id="recent-notes">
-        <div class="loading">Loading notes...</div>
+    <div class="activity-feed" id="activity-feed">
+        <div class="loading">Loading activity...</div>
     </div>
 </section>
 {% endblock %}
@@ -36,84 +104,449 @@ document.addEventListener('DOMContentLoaded', function() {
 async function loadDashboard() {
     const deviceId = getDeviceIdParam();
 
-    // Load recent projects (filtered by device if selected)
+    // Load stats
+    loadStats(deviceId);
+
+    // Load recent projects
+    loadRecentProjects(deviceId);
+
+    // Load recent notes
+    loadRecentNotes(deviceId);
+
+    // Load activity feed
+    loadActivityFeed(deviceId);
+}
+
+async function loadStats(deviceId) {
+    const status = await api.getStatus();
     const projects = await api.getProjects(deviceId);
-    const projectsGrid = document.getElementById('recent-projects');
-    if (projects.length === 0) {
-        projectsGrid.innerHTML = '<div class="empty-state">No projects found</div>';
-    } else {
-        projectsGrid.innerHTML = projects.slice(0, 6).map(p => `
-            <div class="project-card">
-                <div class="project-name">${escapeHtml(p.name)}</div>
-                <div class="project-path">${escapeHtml(p.path)}</div>
-                <div class="project-meta">${escapeHtml(p.device_name)} · ${p.time_ago}</div>
-                <button class="btn btn-small btn-primary" onclick="openProject('${p.id}')">Open</button>
-            </div>
-        `).join('');
-    }
-
-    // Load recent notes (filtered by device if selected)
     const notes = await api.getNotes(deviceId);
-    const notesList = document.getElementById('recent-notes');
-    if (notes.length === 0) {
-        notesList.innerHTML = '<div class="empty-state">No notes found</div>';
+
+    document.getElementById('devices-count').textContent = status.devices_connected || 0;
+    document.getElementById('projects-count').textContent = projects.length || 0;
+    document.getElementById('notes-count').textContent = notes.length || 0;
+
+    // Last sync time
+    const lastSync = localStorage.getItem('shadow_last_sync');
+    if (lastSync) {
+        const ago = getTimeAgo(new Date(parseInt(lastSync)));
+        document.getElementById('last-sync').textContent = ago;
     } else {
-        notesList.innerHTML = notes.slice(0, 5).map(n => `
-            <div class="note-card" id="note-card-${n.id}">
-                <div class="note-header" onclick="toggleNote('${n.id}')">
-                    <span class="expand-icon" id="expand-${n.id}">▶</span>
-                    <div class="note-info">
-                        <div class="note-title">${escapeHtml(n.title)}</div>
-                        <div class="note-meta">${escapeHtml(n.device_name)} · ${n.time_ago}</div>
-                    </div>
-                </div>
-                <div class="note-content-wrapper" id="content-${n.id}" style="display: none;">
-                    <div class="note-content-inner" id="content-inner-${n.id}">
-                        <div class="loading">Loading...</div>
-                    </div>
+        document.getElementById('last-sync').textContent = 'Never';
+    }
+
+    // Update last sync
+    localStorage.setItem('shadow_last_sync', Date.now().toString());
+}
+
+async function loadRecentProjects(deviceId) {
+    const projects = await api.getProjects(deviceId);
+    const container = document.getElementById('recent-projects');
+
+    if (projects.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">folder_off</span>
+                <p>No projects found</p>
+                <a href="/settings" class="btn btn-small btn-primary">Connect a device</a>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = projects.slice(0, 5).map(p => `
+        <div class="project-item" onclick="openProject('${p.id}')">
+            <div class="project-icon"><span class="material-symbols-outlined">folder</span></div>
+            <div class="project-details">
+                <div class="project-name">${escapeHtml(p.name)}</div>
+                <div class="project-meta">
+                    <span class="material-symbols-outlined">smartphone</span> ${escapeHtml(p.device_name)}
+                    <span class="meta-separator">|</span>
+                    <span class="material-symbols-outlined">schedule</span> ${p.time_ago}
                 </div>
             </div>
-        `).join('');
-    }
+            <span class="material-symbols-outlined project-arrow">chevron_right</span>
+        </div>
+    `).join('');
 }
 
-let loadedNoteContents = {};
+async function loadRecentNotes(deviceId) {
+    const notes = await api.getNotes(deviceId);
+    const container = document.getElementById('recent-notes');
 
-async function toggleNote(noteId) {
-    const contentWrapper = document.getElementById('content-' + noteId);
-    const expandIcon = document.getElementById('expand-' + noteId);
-    const contentInner = document.getElementById('content-inner-' + noteId);
-
-    if (contentWrapper.style.display === 'none') {
-        contentWrapper.style.display = 'block';
-        expandIcon.textContent = '▼';
-
-        if (!loadedNoteContents[noteId]) {
-            contentInner.innerHTML = '<div class="loading">Loading note content...</div>';
-            const result = await api.getNoteContent(noteId);
-
-            if (result.error) {
-                contentInner.innerHTML = '<div class="error-message">' + escapeHtml(result.error) + '</div>';
-            } else {
-                loadedNoteContents[noteId] = result.content || '(Empty note)';
-                renderNoteContentInline(noteId, loadedNoteContents[noteId]);
-            }
-        }
-    } else {
-        contentWrapper.style.display = 'none';
-        expandIcon.textContent = '▶';
+    if (notes.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">note_stack</span>
+                <p>No notes found</p>
+            </div>
+        `;
+        return;
     }
+
+    container.innerHTML = notes.slice(0, 5).map(n => `
+        <div class="note-item" onclick="openNoteModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}')">
+            <div class="note-icon"><span class="material-symbols-outlined">description</span></div>
+            <div class="note-details">
+                <div class="note-title">${escapeHtml(n.title)}</div>
+                <div class="note-meta">
+                    <span class="material-symbols-outlined">smartphone</span> ${escapeHtml(n.device_name)}
+                    <span class="meta-separator">|</span>
+                    <span class="material-symbols-outlined">schedule</span> ${n.time_ago}
+                </div>
+            </div>
+            <span class="material-symbols-outlined note-arrow">chevron_right</span>
+        </div>
+    `).join('');
 }
 
-function renderNoteContentInline(noteId, content) {
-    const contentInner = document.getElementById('content-inner-' + noteId);
-    if (!contentInner) return;
+async function loadActivityFeed(deviceId) {
+    const container = document.getElementById('activity-feed');
+
+    // Combine projects and notes for activity
+    const projects = await api.getProjects(deviceId);
+    const notes = await api.getNotes(deviceId);
+
+    const activities = [
+        ...projects.slice(0, 3).map(p => ({
+            type: 'project',
+            title: p.name,
+            device: p.device_name,
+            time: p.time_ago,
+            timestamp: p.updated_at || 0
+        })),
+        ...notes.slice(0, 3).map(n => ({
+            type: 'note',
+            title: n.title,
+            device: n.device_name,
+            time: n.time_ago,
+            timestamp: n.updated_at || 0
+        }))
+    ].sort((a, b) => b.timestamp - a.timestamp).slice(0, 6);
+
+    if (activities.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No recent activity</p></div>';
+        return;
+    }
+
+    container.innerHTML = activities.map(a => `
+        <div class="activity-item">
+            <div class="activity-icon ${a.type}">
+                <span class="material-symbols-outlined">${a.type === 'project' ? 'folder' : 'description'}</span>
+            </div>
+            <div class="activity-content">
+                <span class="activity-action">${a.type === 'project' ? 'Project updated' : 'Note modified'}</span>
+                <span class="activity-title">${escapeHtml(a.title)}</span>
+            </div>
+            <div class="activity-meta">
+                <span class="activity-device">${escapeHtml(a.device)}</span>
+                <span class="activity-time">${a.time}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function openNoteModal(noteId, title) {
+    const result = await api.getNoteContent(noteId);
+
+    if (result.error) {
+        showToast('Failed to load note: ' + result.error, 'error');
+        return;
+    }
+
+    currentNoteId = noteId;
+    currentNoteContent = result.content || '';
+
+    document.getElementById('modal-title').textContent = title;
 
     if (typeof marked !== 'undefined') {
-        contentInner.innerHTML = '<div class="markdown-body">' + marked.parse(content) + '</div>';
+        document.getElementById('modal-content').innerHTML = marked.parse(currentNoteContent);
     } else {
-        contentInner.innerHTML = '<pre class="note-text">' + escapeHtml(content) + '</pre>';
+        document.getElementById('modal-content').innerHTML = '<pre>' + escapeHtml(currentNoteContent) + '</pre>';
     }
+
+    document.getElementById('note-modal').classList.remove('hidden');
+}
+
+function getTimeAgo(date) {
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    return Math.floor(seconds / 86400) + 'd ago';
 }
 </script>
+
+<style>
+.dashboard-stats {
+    margin-bottom: var(--spacing-lg);
+}
+
+.dashboard-stats .stat-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.dashboard-stats .stat-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dashboard-stats .stat-icon .material-symbols-outlined {
+    font-size: 24px;
+    color: white;
+}
+
+.dashboard-stats .stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.dashboard-stats .stat-label {
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.quick-actions-section {
+    margin-bottom: var(--spacing-lg);
+}
+
+.quick-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.quick-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.quick-action-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+}
+
+.quick-action-btn .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--accent);
+}
+
+.dashboard-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+    margin-bottom: var(--spacing-lg);
+}
+
+@media (max-width: 900px) {
+    .dashboard-columns {
+        grid-template-columns: 1fr;
+    }
+}
+
+.section-header h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.section-header h2 .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--accent);
+}
+
+.view-all {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 13px;
+}
+
+.view-all .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.project-item, .note-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.project-item:hover, .note-item:hover {
+    background: var(--bg-hover);
+}
+
+.project-icon, .note-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: var(--bg-input);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.project-icon .material-symbols-outlined {
+    color: var(--accent);
+}
+
+.note-icon .material-symbols-outlined {
+    color: var(--warning);
+}
+
+.project-details, .note-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.project-name, .note-title {
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.project-meta, .note-meta {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.project-meta .material-symbols-outlined,
+.note-meta .material-symbols-outlined {
+    font-size: 14px;
+}
+
+.meta-separator {
+    margin: 0 4px;
+    opacity: 0.5;
+}
+
+.project-arrow, .note-arrow {
+    color: var(--text-dim);
+    font-size: 20px;
+}
+
+.activity-feed {
+    background: var(--bg-card);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.activity-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.activity-item:last-child {
+    border-bottom: none;
+}
+
+.activity-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.activity-icon.project {
+    background: rgba(var(--accent-rgb), 0.15);
+    color: var(--accent);
+}
+
+.activity-icon.note {
+    background: rgba(var(--warning-rgb), 0.15);
+    color: var(--warning);
+}
+
+.activity-icon .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.activity-content {
+    flex: 1;
+}
+
+.activity-action {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.activity-title {
+    display: block;
+    font-weight: 500;
+    color: var(--text);
+    margin-top: 2px;
+}
+
+.activity-meta {
+    text-align: right;
+}
+
+.activity-device {
+    display: block;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.activity-time {
+    display: block;
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.7;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 32px;
+    color: var(--text-dim);
+}
+
+.empty-state .material-symbols-outlined {
+    font-size: 48px;
+    opacity: 0.5;
+    margin-bottom: 12px;
+}
+
+.empty-state p {
+    margin-bottom: 16px;
+}
+</style>
 {% endblock %}
