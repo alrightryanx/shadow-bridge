@@ -4144,7 +4144,7 @@ def check_single_instance():
     try:
         # Try to bind to a specific port - if it fails, another instance is running
         lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        lock_socket.bind(('127.0.0.1', 19286))  # Use a dedicated port for instance lock
+        lock_socket.bind(('127.0.0.1', 19287))  # Use a dedicated port for instance lock (not 19286 - companion uses that)
         lock_socket.listen(1)
         return lock_socket
     except socket.error:
