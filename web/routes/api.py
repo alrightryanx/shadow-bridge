@@ -241,18 +241,24 @@ def api_open_project(project_id):
     if not path:
         return jsonify({"error": "No path for project"}), 400
 
+    # Validate path - must be absolute and exist
+    import os
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return jsonify({"error": "Path does not exist"}), 400
+
     # Try to open in VS Code or Claude Code
     try:
-        # Try VS Code first
-        subprocess.Popen(["code", path], shell=True)
+        # Try VS Code first (no shell=True for security)
+        subprocess.Popen(["code", path])
         return jsonify({"success": True, "editor": "vscode", "path": path})
-    except:
+    except Exception:
         try:
-            # Fallback to explorer
-            subprocess.Popen(["explorer", path], shell=True)
+            # Fallback to explorer (no shell=True for security)
+            subprocess.Popen(["explorer", path])
             return jsonify({"success": True, "editor": "explorer", "path": path})
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": "Failed to open editor"}), 500
 
 
 @api_bp.route('/projects/sync', methods=['POST'])
@@ -676,7 +682,7 @@ def api_qr():
         hostname = socket.gethostname()
         try:
             local_ip = socket.gethostbyname(hostname)
-        except:
+        except socket.error:
             local_ip = "127.0.0.1"
 
         # Create QR code data
