@@ -182,7 +182,6 @@ function renderNotes(notes) {
                 <div class="note-actions">
                     <button class="btn-icon-small" onclick="editNoteInModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}', event)" title="Edit note"><span class="material-symbols-outlined">edit</span></button>
                     <button class="btn-icon-small" onclick="copyNoteContent('${n.id}', event)" title="Copy content"><span class="material-symbols-outlined">content_copy</span></button>
-                    <button class="btn-icon-small" onclick="openNoteInModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}', event)" title="Open in modal"><span class="material-symbols-outlined">open_in_new</span></button>
                 </div>
                 <span class="material-symbols-outlined expand-icon" id="expand-${n.id}">chevron_right</span>
             </div>
