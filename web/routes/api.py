@@ -221,6 +221,18 @@ def api_projects():
     return jsonify(get_projects(device_id))
 
 
+@api_bp.route('/projects', methods=['POST'])
+def api_create_project():
+    """Create a new project."""
+    from ..services.data_service import create_project
+    data = request.get_json()
+    if not data or not data.get("name"):
+        return jsonify({"error": "Name is required"}), 400
+    device_id = data.get("device_id", "web")
+    result = create_project(data, device_id)
+    return jsonify(result)
+
+
 @api_bp.route('/projects/<project_id>')
 def api_project(project_id):
     """Get project details."""
@@ -289,6 +301,18 @@ def api_notes():
     device_id = request.args.get('device_id')
     search = request.args.get('search')
     return jsonify(get_notes(device_id, search))
+
+
+@api_bp.route('/notes', methods=['POST'])
+def api_create_note():
+    """Create a new note."""
+    from ..services.data_service import create_note
+    data = request.get_json()
+    if not data or not data.get("title"):
+        return jsonify({"error": "Title is required"}), 400
+    device_id = data.get("device_id", "web")
+    result = create_note(data, device_id)
+    return jsonify(result)
 
 
 @api_bp.route('/notes/<note_id>')
@@ -579,6 +603,18 @@ def api_automations():
     """List all automations."""
     device_id = request.args.get('device_id')
     return jsonify(get_automations(device_id))
+
+
+@api_bp.route('/automations', methods=['POST'])
+def api_create_automation():
+    """Create a new automation."""
+    from ..services.data_service import create_automation
+    data = request.get_json()
+    if not data or not data.get("name"):
+        return jsonify({"error": "Name is required"}), 400
+    device_id = data.get("device_id", "web")
+    result = create_automation(data, device_id)
+    return jsonify(result)
 
 
 @api_bp.route('/automations/<automation_id>')

@@ -4,6 +4,12 @@
 {% block page_title %}Automations{% endblock %}
 
 {% block content %}
+<div class="page-actions">
+    <button class="btn btn-primary" onclick="showCreateAutomationModal()">
+        <span class="material-symbols-outlined">add</span> Create New
+    </button>
+</div>
+
 <div class="automations-grid" id="automations-container">
     <div class="loading">Loading automations...</div>
 </div>
@@ -14,6 +20,64 @@
         <div class="empty-state">No recent executions</div>
     </div>
 </section>
+
+<!-- Create Automation Modal -->
+<div id="create-automation-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2>Create Automation</h2>
+            <button class="modal-close" onclick="closeCreateAutomationModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="create-automation-name">Name *</label>
+                <input type="text" id="create-automation-name" class="form-input" placeholder="My Automation">
+            </div>
+            <div class="form-group">
+                <label for="create-automation-description">Description</label>
+                <textarea id="create-automation-description" class="form-input" rows="2" placeholder="What does this automation do?"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="create-automation-trigger">Trigger Type</label>
+                    <select id="create-automation-trigger" class="form-input" onchange="toggleScheduleInput()">
+                        <option value="MANUAL">Manual</option>
+                        <option value="SCHEDULED">Scheduled</option>
+                        <option value="ON_NOTE_UPDATE">On Note Update</option>
+                        <option value="VOICE_TRIGGERED">Voice Triggered</option>
+                    </select>
+                </div>
+                <div class="form-group" id="schedule-group" style="display: none;">
+                    <label for="create-automation-schedule">Schedule (Cron)</label>
+                    <input type="text" id="create-automation-schedule" class="form-input" placeholder="0 9 * * *">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="create-automation-command">AI Command *</label>
+                <textarea id="create-automation-command" class="form-input command-textarea" rows="4" placeholder="What should the AI do? e.g., 'Summarize my notes from today'"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="create-automation-output">Output Destination</label>
+                <select id="create-automation-output" class="form-input">
+                    <option value="SHOW_DIALOG">Show Dialog</option>
+                    <option value="APPEND_TO_NOTE">Append to Note</option>
+                    <option value="CREATE_NEW_NOTE">Create New Note</option>
+                    <option value="CLIPBOARD">Copy to Clipboard</option>
+                    <option value="SILENT">Silent (Log Only)</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label class="form-checkbox">
+                    <input type="checkbox" id="create-automation-enabled" checked> Enabled
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateAutomationModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createAutomation()">Create</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -87,5 +151,96 @@ async function viewLogs(id) {
         </div>
     `).join('');
 }
+
+function toggleScheduleInput() {
+    const triggerType = document.getElementById('create-automation-trigger').value;
+    const scheduleGroup = document.getElementById('schedule-group');
+    scheduleGroup.style.display = triggerType === 'SCHEDULED' ? 'block' : 'none';
+}
+
+function showCreateAutomationModal() {
+    // Clear form
+    document.getElementById('create-automation-name').value = '';
+    document.getElementById('create-automation-description').value = '';
+    document.getElementById('create-automation-trigger').value = 'MANUAL';
+    document.getElementById('create-automation-schedule').value = '';
+    document.getElementById('create-automation-command').value = '';
+    document.getElementById('create-automation-output').value = 'SHOW_DIALOG';
+    document.getElementById('create-automation-enabled').checked = true;
+    document.getElementById('schedule-group').style.display = 'none';
+    document.getElementById('create-automation-modal').classList.remove('hidden');
+}
+
+function closeCreateAutomationModal() {
+    document.getElementById('create-automation-modal').classList.add('hidden');
+}
+
+async function createAutomation() {
+    const name = document.getElementById('create-automation-name').value.trim();
+    if (!name) {
+        showToast('Please enter an automation name', 'warning');
+        return;
+    }
+
+    const command = document.getElementById('create-automation-command').value.trim();
+    if (!command) {
+        showToast('Please enter an AI command', 'warning');
+        return;
+    }
+
+    const triggerType = document.getElementById('create-automation-trigger').value;
+    const data = {
+        name: name,
+        description: document.getElementById('create-automation-description').value.trim(),
+        trigger_type: triggerType,
+        schedule_expression: triggerType === 'SCHEDULED' ? document.getElementById('create-automation-schedule').value.trim() : null,
+        ai_command: command,
+        output_destination: document.getElementById('create-automation-output').value,
+        enabled: document.getElementById('create-automation-enabled').checked,
+        device_id: getDeviceIdParam() || 'web'
+    };
+
+    const result = await api.createAutomation(data);
+    if (result.success) {
+        showToast('Automation created', 'success');
+        closeCreateAutomationModal();
+        loadAutomations();
+    } else {
+        showToast('Failed to create: ' + (result.error || 'Unknown error'), 'error');
+    }
+}
 </script>
+
+<style>
+.form-row {
+    display: flex;
+    gap: var(--spacing-md);
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.form-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.form-checkbox input {
+    cursor: pointer;
+}
+
+.command-textarea {
+    font-family: 'Consolas', 'Monaco', monospace;
+    resize: vertical;
+}
+
+.modal-medium {
+    max-width: 600px;
+}
+</style>
 {% endblock %}

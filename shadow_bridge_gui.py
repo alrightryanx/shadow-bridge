@@ -34,6 +34,13 @@ import ctypes
 from pathlib import Path
 from io import BytesIO
 
+# Import data service for bi-directional sync (web -> Android)
+try:
+    from web.services.data_service import get_pending_sync_items, mark_items_synced
+    SYNC_SERVICE_AVAILABLE = True
+except ImportError:
+    SYNC_SERVICE_AVAILABLE = False
+
 WEB_SERVER_MODE = "--web-server" in sys.argv
 
 
@@ -1008,7 +1015,15 @@ class DataReceiver(threading.Thread):
                         self._save_projects(device_id, device_name, ip, payload['projects'], ip_candidates, note_content_port)
                         if self.on_data_received:
                             self.on_data_received(device_id, payload['projects'])
-                        self._send_response(conn, {'success': True, 'message': 'Projects synced'})
+
+                        # Bi-directional sync: Include pending items from web
+                        response = {'success': True, 'message': 'Projects synced'}
+                        if SYNC_SERVICE_AVAILABLE:
+                            pending = get_pending_sync_items(device_id)
+                            if pending.get('projects'):
+                                response['sync_to_device'] = {'projects': pending['projects']}
+                                log.info(f"Including {len(pending['projects'])} pending projects for sync to device")
+                        self._send_response(conn, response)
                     elif 'notes' in payload:
                         # Handle notes data (titles only, content fetched on-demand)
                         ip_candidates = payload.get('ip_candidates')
@@ -1016,7 +1031,31 @@ class DataReceiver(threading.Thread):
                         self._save_notes(device_id, device_name, ip, payload['notes'], ip_candidates, note_content_port)
                         if self.on_notes_received:
                             self.on_notes_received(device_id, payload['notes'])
-                        self._send_response(conn, {'success': True, 'message': 'Notes synced'})
+
+                        # Bi-directional sync: Include pending items from web
+                        response = {'success': True, 'message': 'Notes synced'}
+                        if SYNC_SERVICE_AVAILABLE:
+                            pending = get_pending_sync_items(device_id)
+                            if pending.get('notes'):
+                                response['sync_to_device'] = {'notes': pending['notes']}
+                                log.info(f"Including {len(pending['notes'])} pending notes for sync to device")
+                        self._send_response(conn, response)
+                    elif action == 'sync_confirm':
+                        # Android confirming it received and saved web-created items
+                        if SYNC_SERVICE_AVAILABLE:
+                            synced_projects = payload.get('synced_projects', [])
+                            synced_notes = payload.get('synced_notes', [])
+                            synced_automations = payload.get('synced_automations', [])
+                            if synced_projects:
+                                mark_items_synced(device_id, 'projects', synced_projects)
+                                log.info(f"Marked {len(synced_projects)} projects as synced")
+                            if synced_notes:
+                                mark_items_synced(device_id, 'notes', synced_notes)
+                                log.info(f"Marked {len(synced_notes)} notes as synced")
+                            if synced_automations:
+                                mark_items_synced(device_id, 'automations', synced_automations)
+                                log.info(f"Marked {len(synced_automations)} automations as synced")
+                        self._send_response(conn, {'success': True, 'message': 'Sync confirmed'})
                     else:
                         self._send_response(conn, {'success': True, 'message': 'OK'})
 
