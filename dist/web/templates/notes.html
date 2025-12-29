@@ -10,7 +10,7 @@
     </button>
     <input type="text" id="search-input" class="search-input" placeholder="Search notes..." oninput="filterNotes()">
     <label class="filter-checkbox">
-        <input type="checkbox" id="show-favorites" onchange="filterNotes()"> Favorites only
+        <input type="checkbox" id="show-pinned" onchange="filterNotes()"> <span class="material-symbols-outlined" style="font-size: 16px;">push_pin</span> Pinned only
     </label>
 </div>
 
@@ -34,27 +34,14 @@
                 <label for="create-note-content">Content</label>
                 <textarea id="create-note-content" class="form-input note-textarea" rows="8" placeholder="Write your note here... (Markdown supported)"></textarea>
             </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="create-note-category">Category</label>
-                    <select id="create-note-category" class="form-input">
-                        <option value="General">General</option>
-                        <option value="Work">Work</option>
-                        <option value="Personal">Personal</option>
-                        <option value="Ideas">Ideas</option>
-                        <option value="Todo">Todo</option>
-                        <option value="Reference">Reference</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="create-note-priority">Priority</label>
-                    <select id="create-note-priority" class="form-input">
-                        <option value="LOW">Low</option>
-                        <option value="NORMAL" selected>Normal</option>
-                        <option value="HIGH">High</option>
-                        <option value="URGENT">Urgent</option>
-                    </select>
-                </div>
+            <div class="form-group">
+                <label for="create-note-priority">Priority</label>
+                <select id="create-note-priority" class="form-input">
+                    <option value="LOW">Low</option>
+                    <option value="NORMAL" selected>Normal</option>
+                    <option value="HIGH">High</option>
+                    <option value="URGENT">Urgent</option>
+                </select>
             </div>
             <div class="form-group">
                 <label for="create-note-tags">Tags</label>
@@ -62,10 +49,7 @@
             </div>
             <div class="form-row">
                 <label class="form-checkbox">
-                    <input type="checkbox" id="create-note-pinned"> Pin this note
-                </label>
-                <label class="form-checkbox">
-                    <input type="checkbox" id="create-note-favorite"> Mark as favorite
+                    <input type="checkbox" id="create-note-pinned"> <span class="material-symbols-outlined">push_pin</span> Pin this note
                 </label>
             </div>
         </div>
@@ -81,18 +65,16 @@
 <script>
 let allNotes = [];
 let loadedNoteContents = {};  // Cache for loaded note contents
-let favorites = { notes: [] };
+let pinnedNotes = [];  // Track pinned note IDs
 
 document.addEventListener('DOMContentLoaded', function() {
-    loadFavorites();
+    loadPinnedNotes();
     loadNotes();
 });
 
-async function loadFavorites() {
-    const result = await api.getFavorites();
-    if (result && !result.error) {
-        favorites = result;
-    }
+async function loadPinnedNotes() {
+    // Pinned status comes from the notes themselves
+    // This will be populated when notes are loaded
 }
 
 async function loadNotes() {
@@ -103,45 +85,36 @@ async function loadNotes() {
 
 function filterNotes() {
     const search = document.getElementById('search-input').value.toLowerCase();
-    const showFavoritesOnly = document.getElementById('show-favorites').checked;
+    const showPinnedOnly = document.getElementById('show-pinned').checked;
 
     let filtered = allNotes.filter(n =>
         n.title.toLowerCase().includes(search)
     );
 
-    // Add favorite status
-    filtered = filtered.map(n => ({
-        ...n,
-        is_favorite: favorites.notes?.includes(n.id)
-    }));
-
-    // Filter to favorites only if checked
-    if (showFavoritesOnly) {
-        filtered = filtered.filter(n => n.is_favorite);
+    // Filter to pinned only if checked
+    if (showPinnedOnly) {
+        filtered = filtered.filter(n => n.is_pinned);
     }
 
-    // Sort favorites to top
+    // Sort pinned to top
     filtered.sort((a, b) => {
-        if (a.is_favorite && !b.is_favorite) return -1;
-        if (!a.is_favorite && b.is_favorite) return 1;
+        if (a.is_pinned && !b.is_pinned) return -1;
+        if (!a.is_pinned && b.is_pinned) return 1;
         return (b.updated_at || 0) - (a.updated_at || 0);
     });
 
     renderNotes(filtered);
 }
 
-async function toggleFavorite(noteId, event) {
+async function togglePin(noteId, event) {
     if (event) event.stopPropagation();
-    const result = await api.toggleNoteFavorite(noteId);
-    if (result.success) {
-        if (result.is_favorite) {
-            if (!favorites.notes) favorites.notes = [];
-            favorites.notes.push(noteId);
-        } else {
-            favorites.notes = favorites.notes.filter(id => id !== noteId);
-        }
+    // Toggle pinned state locally and update UI
+    const note = allNotes.find(n => n.id === noteId);
+    if (note) {
+        note.is_pinned = !note.is_pinned;
         filterNotes();
-        showToast(result.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+        showToast(note.is_pinned ? 'Note pinned' : 'Note unpinned', 'success');
+        // TODO: Persist pin state via API
     }
 }
 
@@ -197,7 +170,7 @@ function renderNotes(notes) {
     container.innerHTML = notes.map(n => `
         <div class="note-card" id="note-card-${n.id}">
             <div class="note-header" onclick="toggleNote('${n.id}')">
-                <button class="star-btn ${n.is_favorite ? 'starred' : ''}" onclick="toggleFavorite('${n.id}', event)" title="Toggle favorite"></button>
+                <button class="pin-btn ${n.is_pinned ? 'pinned' : ''}" onclick="togglePin('${n.id}', event)" title="Pin note"><span class="material-symbols-outlined">push_pin</span></button>
                 <div class="note-info">
                     <div class="note-title">${escapeHtml(n.title)}</div>
                     <div class="note-meta">
@@ -293,11 +266,9 @@ function showCreateNoteModal() {
     // Clear form
     document.getElementById('create-note-title').value = '';
     document.getElementById('create-note-content').value = '';
-    document.getElementById('create-note-category').value = 'General';
     document.getElementById('create-note-priority').value = 'NORMAL';
     document.getElementById('create-note-tags').value = '';
     document.getElementById('create-note-pinned').checked = false;
-    document.getElementById('create-note-favorite').checked = false;
     document.getElementById('create-note-modal').classList.remove('hidden');
 }
 
@@ -319,11 +290,9 @@ async function createNote() {
     const data = {
         title: title,
         content: document.getElementById('create-note-content').value,
-        category: document.getElementById('create-note-category').value,
         priority: document.getElementById('create-note-priority').value,
         tags: tags,
         is_pinned: document.getElementById('create-note-pinned').checked,
-        is_favorite: document.getElementById('create-note-favorite').checked,
         device_id: getDeviceIdParam() || 'web'
     };
 
@@ -359,8 +328,27 @@ async function createNote() {
     background: var(--bg-hover);
 }
 
-.note-header .star-btn {
-    margin-top: 2px;
+.pin-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-dim);
+    transition: all 0.15s;
+}
+
+.pin-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.pin-btn.pinned {
+    color: var(--accent);
+}
+
+.pin-btn .material-symbols-outlined {
+    font-size: 18px;
 }
 
 .expand-icon {
