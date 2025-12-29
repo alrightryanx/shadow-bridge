@@ -1650,12 +1650,12 @@ class CompanionRelayServer(threading.Thread):
 
                     # Handle messages from plugin to device
                     elif msg_type in ['approval_request', 'session_start', 'session_complete',
-                                     'session_end', 'notification']:
+                                     'session_end', 'notification', 'approval_dismiss']:
                         target_device = message.get('deviceId')
                         relayed = self._relay_to_device(target_device, message)
 
                         # Send immediate ack for fire-and-forget messages
-                        if msg_type in ['session_start', 'session_end', 'session_complete', 'notification']:
+                        if msg_type in ['session_start', 'session_end', 'session_complete', 'notification', 'approval_dismiss']:
                             ack = {'type': 'ack', 'success': relayed, 'originalType': msg_type}
                             self._send_to_conn(conn, ack)
                         # For approval_request, response comes async from device
