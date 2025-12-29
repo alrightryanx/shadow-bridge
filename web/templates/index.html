@@ -36,29 +36,6 @@
     </div>
 </div>
 
-<!-- Quick Actions -->
-<section class="section quick-actions-section">
-    <h2>Quick Actions</h2>
-    <div class="quick-actions">
-        <button class="quick-action-btn" onclick="window.location.href='/settings'">
-            <span class="material-symbols-outlined">qr_code_2</span>
-            <span>Connect Device</span>
-        </button>
-        <button class="quick-action-btn" onclick="refreshData()">
-            <span class="material-symbols-outlined">sync</span>
-            <span>Sync Now</span>
-        </button>
-        <button class="quick-action-btn" onclick="window.location.href='/analytics'">
-            <span class="material-symbols-outlined">analytics</span>
-            <span>View Analytics</span>
-        </button>
-        <button class="quick-action-btn" onclick="window.location.href='/teams'">
-            <span class="material-symbols-outlined">group</span>
-            <span>Manage Teams</span>
-        </button>
-    </div>
-</section>
-
 <!-- Two Column Layout -->
 <div class="dashboard-columns">
     <!-- Recent Projects -->
@@ -315,40 +292,6 @@ function getTimeAgo(date) {
 .dashboard-stats .stat-label {
     font-size: 13px;
     color: var(--text-dim);
-}
-
-.quick-actions-section {
-    margin-bottom: var(--spacing-lg);
-}
-
-.quick-actions {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.quick-action-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 20px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    font-size: 14px;
-    cursor: pointer;
-    transition: all 0.15s;
-}
-
-.quick-action-btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--accent);
-}
-
-.quick-action-btn .material-symbols-outlined {
-    font-size: 20px;
-    color: var(--accent);
 }
 
 .dashboard-columns {
