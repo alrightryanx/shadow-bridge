@@ -138,6 +138,19 @@ This project spans multiple repos. Commit to the appropriate repo:
 - `shadow-bridge/` - ShadowBridge Python/web changes
 - `claude-shadow/` - Claude Code plugin changes
 
+### Version Increment Rules
+When committing changes to a component, increment its version using `X.YYY` format (e.g., 1.000 → 1.001 → 1.002):
+
+**shadow-android** (`app/build.gradle.kts`):
+- `versionCode`: increment by 1
+- `versionName`: increment by 0.001 (e.g., "3.620" → "3.621")
+
+**shadow-bridge** (`shadow_bridge_gui.py` or `version.py`):
+- Update `VERSION` string (e.g., "1.000" → "1.001")
+
+**claude-shadow** (`.claude-plugin/plugin.json`):
+- Update `version` field (e.g., "1.000" → "1.001")
+
 ### Recovery Purpose
 Frequent commits enable:
 - Easy rollback if something breaks
