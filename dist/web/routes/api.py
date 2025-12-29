@@ -221,6 +221,18 @@ def api_projects():
     return jsonify(get_projects(device_id))
 
 
+@api_bp.route('/projects', methods=['POST'])
+def api_create_project():
+    """Create a new project."""
+    from ..services.data_service import create_project
+    data = request.get_json()
+    if not data or not data.get("name"):
+        return jsonify({"error": "Name is required"}), 400
+    device_id = data.get("device_id", "web")
+    result = create_project(data, device_id)
+    return jsonify(result)
+
+
 @api_bp.route('/projects/<project_id>')
 def api_project(project_id):
     """Get project details."""
@@ -241,18 +253,24 @@ def api_open_project(project_id):
     if not path:
         return jsonify({"error": "No path for project"}), 400
 
+    # Validate path - must be absolute and exist
+    import os
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return jsonify({"error": "Path does not exist"}), 400
+
     # Try to open in VS Code or Claude Code
     try:
-        # Try VS Code first
-        subprocess.Popen(["code", path], shell=True)
+        # Try VS Code first (no shell=True for security)
+        subprocess.Popen(["code", path])
         return jsonify({"success": True, "editor": "vscode", "path": path})
-    except:
+    except Exception:
         try:
-            # Fallback to explorer
-            subprocess.Popen(["explorer", path], shell=True)
+            # Fallback to explorer (no shell=True for security)
+            subprocess.Popen(["explorer", path])
             return jsonify({"success": True, "editor": "explorer", "path": path})
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": "Failed to open editor"}), 500
 
 
 @api_bp.route('/projects/sync', methods=['POST'])
@@ -283,6 +301,18 @@ def api_notes():
     device_id = request.args.get('device_id')
     search = request.args.get('search')
     return jsonify(get_notes(device_id, search))
+
+
+@api_bp.route('/notes', methods=['POST'])
+def api_create_note():
+    """Create a new note."""
+    from ..services.data_service import create_note
+    data = request.get_json()
+    if not data or not data.get("title"):
+        return jsonify({"error": "Title is required"}), 400
+    device_id = data.get("device_id", "web")
+    result = create_note(data, device_id)
+    return jsonify(result)
 
 
 @api_bp.route('/notes/<note_id>')
@@ -575,6 +605,18 @@ def api_automations():
     return jsonify(get_automations(device_id))
 
 
+@api_bp.route('/automations', methods=['POST'])
+def api_create_automation():
+    """Create a new automation."""
+    from ..services.data_service import create_automation
+    data = request.get_json()
+    if not data or not data.get("name"):
+        return jsonify({"error": "Name is required"}), 400
+    device_id = data.get("device_id", "web")
+    result = create_automation(data, device_id)
+    return jsonify(result)
+
+
 @api_bp.route('/automations/<automation_id>')
 def api_automation(automation_id):
     """Get automation details."""
@@ -676,7 +718,7 @@ def api_qr():
         hostname = socket.gethostname()
         try:
             local_ip = socket.gethostbyname(hostname)
-        except:
+        except socket.error:
             local_ip = "127.0.0.1"
 
         # Create QR code data

@@ -5,6 +5,9 @@
 
 {% block content %}
 <div class="page-actions">
+    <button class="btn btn-primary" onclick="showCreateProjectModal()">
+        <span class="material-symbols-outlined">add</span> Create New
+    </button>
     <input type="text" id="search-input" class="search-input" placeholder="Search projects..." oninput="filterProjects()">
     <label class="filter-checkbox">
         <input type="checkbox" id="show-favorites" onchange="filterProjects()"> Favorites only
@@ -19,6 +22,48 @@
     <div class="loading">Loading projects...</div>
 </div>
 {% endblock %}
+
+<!-- Create Project Modal -->
+<div id="create-project-modal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2>Create Project</h2>
+            <button class="modal-close" onclick="closeCreateProjectModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="create-project-name">Project Name *</label>
+                <input type="text" id="create-project-name" class="form-input" placeholder="My Project">
+            </div>
+            <div class="form-group">
+                <label for="create-project-path">Path</label>
+                <input type="text" id="create-project-path" class="form-input" placeholder="C:\Projects\my-project">
+            </div>
+            <div class="form-group">
+                <label for="create-project-description">Description</label>
+                <textarea id="create-project-description" class="form-input" rows="3" placeholder="Project description..."></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="create-project-group">Group</label>
+                    <input type="text" id="create-project-group" class="form-input" placeholder="Personal">
+                </div>
+                <div class="form-group">
+                    <label for="create-project-color">Color</label>
+                    <input type="color" id="create-project-color" class="form-input form-color" value="#6750A4">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="create-project-github">GitHub URL</label>
+                <input type="text" id="create-project-github" class="form-input" placeholder="https://github.com/user/repo">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateProjectModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createProject()">Create</button>
+        </div>
+    </div>
+</div>
 
 <!-- Edit Project Modal -->
 <div id="edit-project-modal" class="modal hidden">
@@ -146,6 +191,48 @@ async function saveProject() {
     }
 }
 
+function showCreateProjectModal() {
+    // Clear form
+    document.getElementById('create-project-name').value = '';
+    document.getElementById('create-project-path').value = '';
+    document.getElementById('create-project-description').value = '';
+    document.getElementById('create-project-group').value = '';
+    document.getElementById('create-project-color').value = '#6750A4';
+    document.getElementById('create-project-github').value = '';
+    document.getElementById('create-project-modal').classList.remove('hidden');
+}
+
+function closeCreateProjectModal() {
+    document.getElementById('create-project-modal').classList.add('hidden');
+}
+
+async function createProject() {
+    const name = document.getElementById('create-project-name').value.trim();
+    if (!name) {
+        showToast('Please enter a project name', 'warning');
+        return;
+    }
+
+    const data = {
+        name: name,
+        path: document.getElementById('create-project-path').value.trim(),
+        description: document.getElementById('create-project-description').value.trim(),
+        group: document.getElementById('create-project-group').value.trim() || null,
+        color: document.getElementById('create-project-color').value,
+        github_repo_url: document.getElementById('create-project-github').value.trim() || null,
+        device_id: getDeviceIdParam() || 'web'
+    };
+
+    const result = await api.createProject(data);
+    if (result.success) {
+        showToast('Project created', 'success');
+        closeCreateProjectModal();
+        loadProjects();
+    } else {
+        showToast('Failed to create: ' + (result.error || 'Unknown error'), 'error');
+    }
+}
+
 function renderProjects(projects) {
     const container = document.getElementById('projects-container');
     container.className = currentView === 'grid' ? 'projects-grid' : 'projects-list';
@@ -236,6 +323,21 @@ function renderProjects(projects) {
 .projects-list {
     display: flex;
     flex-direction: column;
+}
+
+.form-row {
+    display: flex;
+    gap: var(--spacing-md);
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.form-color {
+    height: 40px;
+    padding: 4px;
+    cursor: pointer;
 }
 </style>
 {% endblock %}

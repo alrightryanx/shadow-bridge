@@ -5,7 +5,7 @@ a = Analysis(
     ['shadow_bridge_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('web', 'web')],  # Bundle web templates, static files, and routes
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

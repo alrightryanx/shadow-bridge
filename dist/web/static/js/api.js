@@ -120,6 +120,13 @@ const api = {
         return this.fetch(`/projects/${id}/open`, { method: 'POST' });
     },
 
+    async createProject(data) {
+        return this.fetch('/projects', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
     // Notes
     async getNotes(deviceId = null, search = null) {
         const params = new URLSearchParams();
@@ -148,6 +155,13 @@ const api = {
         return this.fetch(`/notes/${id}/export`, { method: 'POST' });
     },
 
+    async createNote(data) {
+        return this.fetch('/notes', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
     // Automations
     async getAutomations(deviceId = null) {
         const params = deviceId ? `?device_id=${deviceId}` : '';
@@ -164,6 +178,13 @@ const api = {
 
     async runAutomation(id) {
         return this.fetch(`/automations/${id}/run`, { method: 'POST' });
+    },
+
+    async createAutomation(data) {
+        return this.fetch('/automations', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
     },
 
     // Agents

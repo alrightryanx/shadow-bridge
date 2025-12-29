@@ -719,7 +719,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.0.0",
+        "version": "1.001",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }
@@ -1253,3 +1253,200 @@ def get_category_breakdown(period: str = "7D") -> Dict:
             for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True)
         ]
     }
+
+
+# ============ Create Functions (Web-originated) ============
+
+def create_project(data: Dict, device_id: str = "web") -> Dict:
+    """Create a new project from web dashboard.
+
+    Projects are stored under the specified device_id with pending_sync flag
+    for bi-directional sync back to Android.
+    """
+    file_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
+
+    timestamp = int(datetime.now().timestamp() * 1000)
+    project = {
+        "id": _generate_id(),
+        "name": data.get("name", "New Project"),
+        "path": data.get("path", ""),
+        "description": data.get("description", ""),
+        "labels": data.get("labels", []),
+        "group": data.get("group"),
+        "color": data.get("color"),
+        "github_repo_url": data.get("github_repo_url"),
+        "github_branch": data.get("github_branch"),
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "source": "web",
+        "pending_sync": True,
+        "synced_at": None
+    }
+
+    # Ensure device entry exists
+    if "devices" not in file_data:
+        file_data["devices"] = {}
+    if device_id not in file_data["devices"]:
+        file_data["devices"][device_id] = {"projects": []}
+    if "projects" not in file_data["devices"][device_id]:
+        file_data["devices"][device_id]["projects"] = []
+
+    file_data["devices"][device_id]["projects"].append(project)
+    _write_json_file(PROJECTS_FILE, file_data)
+    return {"success": True, "project": project}
+
+
+def create_note(data: Dict, device_id: str = "web") -> Dict:
+    """Create a new note from web dashboard.
+
+    Notes are stored under the specified device_id with pending_sync flag
+    for bi-directional sync back to Android.
+    """
+    file_data = _read_json_file(NOTES_FILE) or {"devices": {}}
+
+    timestamp = int(datetime.now().timestamp() * 1000)
+    note = {
+        "id": _generate_id(),
+        "title": data.get("title", "New Note"),
+        "content": data.get("content", ""),
+        "category": data.get("category", "General"),
+        "tags": data.get("tags", []),
+        "priority": data.get("priority", "NORMAL"),
+        "note_type": data.get("note_type", "TEXT"),
+        "is_pinned": data.get("is_pinned", False),
+        "is_favorite": data.get("is_favorite", False),
+        "is_archived": False,
+        "ai_protection_level": data.get("ai_protection_level", "STANDARD"),
+        "ai_can_read": True,
+        "ai_can_edit": False,
+        "ai_can_summarize": True,
+        "ai_can_extract_tasks": True,
+        "project_id": data.get("project_id"),
+        "folder_path": data.get("folder_path"),
+        "createdAt": timestamp,
+        "updatedAt": timestamp,
+        "source": "web",
+        "pending_sync": True,
+        "synced_at": None
+    }
+
+    # Ensure device entry exists
+    if "devices" not in file_data:
+        file_data["devices"] = {}
+    if device_id not in file_data["devices"]:
+        file_data["devices"][device_id] = {"notes": []}
+    if "notes" not in file_data["devices"][device_id]:
+        file_data["devices"][device_id]["notes"] = []
+
+    file_data["devices"][device_id]["notes"].append(note)
+    _write_json_file(NOTES_FILE, file_data)
+    return {"success": True, "note": note}
+
+
+def create_automation(data: Dict, device_id: str = "web") -> Dict:
+    """Create a new automation from web dashboard.
+
+    Automations are stored under the specified device_id with pending_sync flag
+    for bi-directional sync back to Android.
+    """
+    file_data = _read_json_file(AUTOMATIONS_FILE) or {}
+
+    timestamp = int(datetime.now().timestamp() * 1000)
+    automation = {
+        "id": _generate_id(),
+        "name": data.get("name", "New Automation"),
+        "description": data.get("description", ""),
+        "enabled": data.get("enabled", True),
+        "trigger_type": data.get("trigger_type", "MANUAL"),
+        "schedule_expression": data.get("schedule_expression"),
+        "voice_trigger_phrase": data.get("voice_trigger_phrase"),
+        "ai_command": data.get("ai_command", ""),
+        "ai_permission_level": data.get("ai_permission_level", "FULL"),
+        "use_note_as_context": data.get("use_note_as_context", True),
+        "max_iterations": data.get("max_iterations", 50),
+        "timeout_minutes": data.get("timeout_minutes", 30),
+        "project_id": data.get("project_id"),
+        "note_id": data.get("note_id"),
+        "output_destination": data.get("output_destination", "SHOW_DIALOG"),
+        "output_note_title": data.get("output_note_title"),
+        "icon_name": data.get("icon_name", "ic_automation"),
+        "color": data.get("color", "#FF9800"),
+        "created_at": timestamp,
+        "last_run_at": None,
+        "last_run_status": "NEVER_RUN",
+        "last_run_result": None,
+        "run_count": 0,
+        "source": "web",
+        "pending_sync": True,
+        "synced_at": None
+    }
+
+    # Ensure device entry exists
+    if device_id not in file_data:
+        file_data[device_id] = {"automations": []}
+    if "automations" not in file_data[device_id]:
+        file_data[device_id]["automations"] = []
+
+    file_data[device_id]["automations"].append(automation)
+    _write_json_file(AUTOMATIONS_FILE, file_data)
+    return {"success": True, "automation": automation}
+
+
+def get_pending_sync_items(device_id: str) -> Dict:
+    """Get all items pending sync for a specific device."""
+    pending = {
+        "projects": [],
+        "notes": [],
+        "automations": []
+    }
+
+    # Check projects
+    projects_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
+    device_projects = projects_data.get("devices", {}).get(device_id, {}).get("projects", [])
+    pending["projects"] = [p for p in device_projects if p.get("pending_sync")]
+
+    # Check notes
+    notes_data = _read_json_file(NOTES_FILE) or {"devices": {}}
+    device_notes = notes_data.get("devices", {}).get(device_id, {}).get("notes", [])
+    pending["notes"] = [n for n in device_notes if n.get("pending_sync")]
+
+    # Check automations
+    auto_data = _read_json_file(AUTOMATIONS_FILE) or {}
+    device_autos = auto_data.get(device_id, {}).get("automations", [])
+    pending["automations"] = [a for a in device_autos if a.get("pending_sync")]
+
+    return pending
+
+
+def mark_items_synced(device_id: str, item_type: str, item_ids: List[str]) -> bool:
+    """Mark items as synced after successful push to Android."""
+    timestamp = int(datetime.now().timestamp() * 1000)
+
+    if item_type == "projects":
+        file_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
+        projects = file_data.get("devices", {}).get(device_id, {}).get("projects", [])
+        for p in projects:
+            if p.get("id") in item_ids:
+                p["pending_sync"] = False
+                p["synced_at"] = timestamp
+        _write_json_file(PROJECTS_FILE, file_data)
+
+    elif item_type == "notes":
+        file_data = _read_json_file(NOTES_FILE) or {"devices": {}}
+        notes = file_data.get("devices", {}).get(device_id, {}).get("notes", [])
+        for n in notes:
+            if n.get("id") in item_ids:
+                n["pending_sync"] = False
+                n["synced_at"] = timestamp
+        _write_json_file(NOTES_FILE, file_data)
+
+    elif item_type == "automations":
+        file_data = _read_json_file(AUTOMATIONS_FILE) or {}
+        autos = file_data.get(device_id, {}).get("automations", [])
+        for a in autos:
+            if a.get("id") in item_ids:
+                a["pending_sync"] = False
+                a["synced_at"] = timestamp
+        _write_json_file(AUTOMATIONS_FILE, file_data)
+
+    return True

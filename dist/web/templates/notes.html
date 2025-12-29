@@ -5,6 +5,9 @@
 
 {% block content %}
 <div class="page-actions">
+    <button class="btn btn-primary" onclick="showCreateNoteModal()">
+        <span class="material-symbols-outlined">add</span> Create New
+    </button>
     <input type="text" id="search-input" class="search-input" placeholder="Search notes..." oninput="filterNotes()">
     <label class="filter-checkbox">
         <input type="checkbox" id="show-favorites" onchange="filterNotes()"> Favorites only
@@ -13,6 +16,64 @@
 
 <div class="notes-list" id="notes-container">
     <div class="loading">Loading notes...</div>
+</div>
+
+<!-- Create Note Modal -->
+<div id="create-note-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2>Create Note</h2>
+            <button class="modal-close" onclick="closeCreateNoteModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="create-note-title">Title *</label>
+                <input type="text" id="create-note-title" class="form-input" placeholder="Note title">
+            </div>
+            <div class="form-group">
+                <label for="create-note-content">Content</label>
+                <textarea id="create-note-content" class="form-input note-textarea" rows="8" placeholder="Write your note here... (Markdown supported)"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="create-note-category">Category</label>
+                    <select id="create-note-category" class="form-input">
+                        <option value="General">General</option>
+                        <option value="Work">Work</option>
+                        <option value="Personal">Personal</option>
+                        <option value="Ideas">Ideas</option>
+                        <option value="Todo">Todo</option>
+                        <option value="Reference">Reference</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="create-note-priority">Priority</label>
+                    <select id="create-note-priority" class="form-input">
+                        <option value="LOW">Low</option>
+                        <option value="NORMAL" selected>Normal</option>
+                        <option value="HIGH">High</option>
+                        <option value="URGENT">Urgent</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="create-note-tags">Tags</label>
+                <input type="text" id="create-note-tags" class="form-input" placeholder="tag1, tag2, tag3 (comma separated)">
+            </div>
+            <div class="form-row">
+                <label class="form-checkbox">
+                    <input type="checkbox" id="create-note-pinned"> Pin this note
+                </label>
+                <label class="form-checkbox">
+                    <input type="checkbox" id="create-note-favorite"> Mark as favorite
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateNoteModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createNote()">Create</button>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
@@ -227,6 +288,54 @@ function renderNoteContentInline(noteId, content) {
         contentInner.innerHTML = '<pre class="note-text">' + escapeHtml(content) + '</pre>';
     }
 }
+
+function showCreateNoteModal() {
+    // Clear form
+    document.getElementById('create-note-title').value = '';
+    document.getElementById('create-note-content').value = '';
+    document.getElementById('create-note-category').value = 'General';
+    document.getElementById('create-note-priority').value = 'NORMAL';
+    document.getElementById('create-note-tags').value = '';
+    document.getElementById('create-note-pinned').checked = false;
+    document.getElementById('create-note-favorite').checked = false;
+    document.getElementById('create-note-modal').classList.remove('hidden');
+}
+
+function closeCreateNoteModal() {
+    document.getElementById('create-note-modal').classList.add('hidden');
+}
+
+async function createNote() {
+    const title = document.getElementById('create-note-title').value.trim();
+    if (!title) {
+        showToast('Please enter a note title', 'warning');
+        return;
+    }
+
+    // Parse tags
+    const tagsInput = document.getElementById('create-note-tags').value.trim();
+    const tags = tagsInput ? tagsInput.split(',').map(t => t.trim()).filter(t => t) : [];
+
+    const data = {
+        title: title,
+        content: document.getElementById('create-note-content').value,
+        category: document.getElementById('create-note-category').value,
+        priority: document.getElementById('create-note-priority').value,
+        tags: tags,
+        is_pinned: document.getElementById('create-note-pinned').checked,
+        is_favorite: document.getElementById('create-note-favorite').checked,
+        device_id: getDeviceIdParam() || 'web'
+    };
+
+    const result = await api.createNote(data);
+    if (result.success) {
+        showToast('Note created', 'success');
+        closeCreateNoteModal();
+        loadNotes();
+    } else {
+        showToast('Failed to create: ' + (result.error || 'Unknown error'), 'error');
+    }
+}
 </script>
 
 <style>
@@ -383,6 +492,37 @@ function renderNoteContentInline(noteId, content) {
 .note-content-inner .markdown-body pre code {
     background: none;
     padding: 0;
+}
+
+.form-row {
+    display: flex;
+    gap: var(--spacing-md);
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.form-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.form-checkbox input {
+    cursor: pointer;
+}
+
+.note-textarea {
+    font-family: 'Consolas', 'Monaco', monospace;
+    resize: vertical;
+}
+
+.modal-medium {
+    max-width: 600px;
 }
 </style>
 {% endblock %}
