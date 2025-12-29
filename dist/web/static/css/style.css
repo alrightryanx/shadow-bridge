@@ -2360,22 +2360,32 @@ body {
 }
 
 .btn-icon-small {
-    width: 24px;
-    height: 24px;
+    width: 36px;
+    height: 36px;
+    padding: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     cursor: pointer;
-    font-size: 12px;
     transition: all var(--transition-fast);
+    color: var(--accent);
+}
+
+.btn-icon-small .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--accent);
 }
 
 .btn-icon-small:hover {
     background: var(--accent-container);
     border-color: var(--accent);
+}
+
+.btn-icon-small:hover .material-symbols-outlined {
+    color: var(--md-sys-color-on-surface);
 }
 
 /* Agent Cards Enhancement */
