@@ -37,7 +37,10 @@ from ..services.data_service import (
     # Email Verification
     request_email_verification, verify_email_code,
     get_verified_email, get_all_verified_emails, remove_verified_email,
-    get_devices_by_email, set_email_config
+    get_devices_by_email, set_email_config,
+    # Team Membership
+    invite_team_member, accept_team_invitation, get_pending_invitations,
+    remove_team_member, get_teams_for_email, update_team_member_role
 )
 
 api_bp = Blueprint('api', __name__)
@@ -1607,3 +1610,134 @@ def api_set_email_config():
     if "error" in result:
         return jsonify(result), 400
     return jsonify(result)
+
+
+# ============ Team Membership ============
+
+@api_bp.route('/teams/<team_id>/invite', methods=['POST'])
+def api_invite_team_member(team_id):
+    """Invite a user to a team by email.
+
+    Request body:
+    {
+        "inviter_email": "owner@example.com",
+        "invitee_email": "newuser@example.com",
+        "role": "member" | "admin"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    inviter_email = data.get('inviter_email')
+    invitee_email = data.get('invitee_email')
+    role = data.get('role', 'member')
+
+    if not inviter_email or not invitee_email:
+        return jsonify({"error": "inviter_email and invitee_email are required"}), 400
+
+    result = invite_team_member(team_id, inviter_email, invitee_email, role)
+    if "error" in result:
+        return jsonify(result), 403
+    return jsonify(result)
+
+
+@api_bp.route('/teams/invitations/accept', methods=['POST'])
+def api_accept_team_invitation():
+    """Accept a team invitation.
+
+    Request body:
+    {
+        "invitation_code": "ABCD1234",
+        "email": "user@example.com",
+        "device_id": "optional_device_id"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    code = data.get('invitation_code')
+    email = data.get('email')
+    device_id = data.get('device_id')
+
+    if not code or not email:
+        return jsonify({"error": "invitation_code and email are required"}), 400
+
+    result = accept_team_invitation(code, email, device_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@api_bp.route('/teams/invitations/pending')
+def api_get_pending_invitations():
+    """Get pending team invitations for an email.
+
+    Query params:
+    - email: The email to check for invitations
+    """
+    email = request.args.get('email')
+    if not email:
+        return jsonify({"error": "email is required"}), 400
+
+    invitations = get_pending_invitations(email)
+    return jsonify({"invitations": invitations})
+
+
+@api_bp.route('/teams/<team_id>/members/<member_email>', methods=['DELETE'])
+def api_remove_team_member(team_id, member_email):
+    """Remove a member from a team.
+
+    Query params:
+    - remover_email: Email of the person removing (must be owner/admin)
+    """
+    remover_email = request.args.get('remover_email')
+    if not remover_email:
+        return jsonify({"error": "remover_email is required"}), 400
+
+    result = remove_team_member(team_id, remover_email, member_email)
+    if "error" in result:
+        return jsonify(result), 403
+    return jsonify(result)
+
+
+@api_bp.route('/teams/<team_id>/members/<member_email>/role', methods=['PUT'])
+def api_update_member_role(team_id, member_email):
+    """Update a team member's role.
+
+    Request body:
+    {
+        "updater_email": "owner@example.com",
+        "new_role": "admin" | "member"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    updater_email = data.get('updater_email')
+    new_role = data.get('new_role')
+
+    if not updater_email or not new_role:
+        return jsonify({"error": "updater_email and new_role are required"}), 400
+
+    result = update_team_member_role(team_id, updater_email, member_email, new_role)
+    if "error" in result:
+        return jsonify(result), 403
+    return jsonify(result)
+
+
+@api_bp.route('/teams/my-teams')
+def api_get_my_teams():
+    """Get all teams the user is a member of.
+
+    Query params:
+    - email: The user's email
+    """
+    email = request.args.get('email')
+    if not email:
+        return jsonify({"error": "email is required"}), 400
+
+    teams = get_teams_for_email(email)
+    return jsonify({"teams": teams})
