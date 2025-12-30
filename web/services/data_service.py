@@ -1293,6 +1293,9 @@ def create_project(data: Dict, device_id: str = "web") -> Dict:
 
     Projects are stored under the specified device_id with pending_sync flag
     for bi-directional sync back to Android.
+
+    Ownership: The creating device becomes the owner. shared_with list controls
+    which other devices can access and at what permission level.
     """
     file_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
 
@@ -1311,7 +1314,10 @@ def create_project(data: Dict, device_id: str = "web") -> Dict:
         "updated_at": timestamp,
         "source": "web",
         "pending_sync": True,
-        "synced_at": None
+        "synced_at": None,
+        # Ownership tracking
+        "owner_device": device_id,
+        "shared_with": []  # List of {"device_id": str, "permission": "view"|"edit"|"full"}
     }
 
     # Ensure device entry exists
@@ -1332,6 +1338,9 @@ def create_note(data: Dict, device_id: str = "web") -> Dict:
 
     Notes are stored under the specified device_id with pending_sync flag
     for bi-directional sync back to Android.
+
+    Ownership: The creating device becomes the owner. shared_with list controls
+    which other devices can access and at what permission level.
     """
     file_data = _read_json_file(NOTES_FILE) or {"devices": {}}
 
@@ -1358,7 +1367,10 @@ def create_note(data: Dict, device_id: str = "web") -> Dict:
         "updatedAt": timestamp,
         "source": "web",
         "pending_sync": True,
-        "synced_at": None
+        "synced_at": None,
+        # Ownership tracking
+        "owner_device": device_id,
+        "shared_with": []  # List of {"device_id": str, "permission": "view"|"edit"|"full"}
     }
 
     # Ensure device entry exists
@@ -1632,3 +1644,365 @@ def reorder_project_todos(project_id: str, todo_ids: List[str]) -> Dict:
     _write_json_file(TODOS_FILE, file_data)
 
     return {"success": True}
+
+
+# ============ Ownership & Sharing ============
+
+def get_permission_level(item: Dict, requesting_device: str) -> Optional[str]:
+    """Get the permission level for a device on a content item.
+
+    Permission levels:
+    - 'owner': Full control including deletion and sharing management
+    - 'full': Everything except removing owner or changing ownership
+    - 'edit': Can view and modify, but cannot delete
+    - 'view': Read-only access
+    - None: No access
+
+    Args:
+        item: The project/note/automation dict with owner_device and shared_with
+        requesting_device: The device_id requesting access
+
+    Returns:
+        Permission level string or None if no access
+    """
+    owner_device = item.get("owner_device")
+
+    # Owner has full control
+    if owner_device == requesting_device:
+        return "owner"
+
+    # Check shared_with list
+    shared_with = item.get("shared_with", [])
+    for share in shared_with:
+        if share.get("device_id") == requesting_device:
+            return share.get("permission", "view")
+
+    # Legacy items without owner_device - treat original device as owner
+    # This handles backward compatibility with pre-ownership data
+    if owner_device is None:
+        # If the item is under this device's storage, they're the implicit owner
+        return None  # No access by default for non-owners on legacy items
+
+    return None
+
+
+def can_view(item: Dict, requesting_device: str) -> bool:
+    """Check if device can view this item."""
+    permission = get_permission_level(item, requesting_device)
+    return permission in ("owner", "full", "edit", "view")
+
+
+def can_edit(item: Dict, requesting_device: str) -> bool:
+    """Check if device can edit this item."""
+    permission = get_permission_level(item, requesting_device)
+    return permission in ("owner", "full", "edit")
+
+
+def can_delete(item: Dict, requesting_device: str) -> bool:
+    """Check if device can delete this item.
+
+    Only owner and 'full' permission can delete.
+    """
+    permission = get_permission_level(item, requesting_device)
+    return permission in ("owner", "full")
+
+
+def can_share(item: Dict, requesting_device: str) -> bool:
+    """Check if device can share this item with others.
+
+    Only owner can manage sharing.
+    """
+    permission = get_permission_level(item, requesting_device)
+    return permission == "owner"
+
+
+def share_note(note_id: str, owner_device: str, target_device: str, permission: str) -> Dict:
+    """Share a note with another device.
+
+    Args:
+        note_id: The note to share
+        owner_device: Device requesting to share (must be owner)
+        target_device: Device to share with
+        permission: Permission level ('view', 'edit', 'full')
+
+    Returns:
+        {"success": True} or {"error": "..."}
+    """
+    if permission not in ("view", "edit", "full"):
+        return {"error": f"Invalid permission level: {permission}"}
+
+    data = _read_json_file(NOTES_FILE)
+    if not data:
+        return {"error": "Notes file not found"}
+
+    devices_data = data.get("devices", {})
+
+    for device_id, device_info in devices_data.items():
+        notes = device_info.get("notes", [])
+        for i, note in enumerate(notes):
+            if note.get("id") == note_id:
+                # Check ownership
+                if not can_share(note, owner_device):
+                    return {"error": "Only the owner can share this note"}
+
+                # Initialize shared_with if needed
+                if "shared_with" not in note:
+                    note["shared_with"] = []
+
+                # Update or add share entry
+                shared_with = note.get("shared_with", [])
+                found = False
+                for share in shared_with:
+                    if share.get("device_id") == target_device:
+                        share["permission"] = permission
+                        found = True
+                        break
+
+                if not found:
+                    shared_with.append({
+                        "device_id": target_device,
+                        "permission": permission
+                    })
+
+                note["shared_with"] = shared_with
+                note["updatedAt"] = int(datetime.now().timestamp() * 1000)
+                devices_data[device_id]["notes"][i] = note
+                _write_json_file(NOTES_FILE, data)
+                return {"success": True, "shared_with": shared_with}
+
+    return {"error": "Note not found"}
+
+
+def unshare_note(note_id: str, owner_device: str, target_device: str) -> Dict:
+    """Remove sharing for a note.
+
+    Args:
+        note_id: The note to unshare
+        owner_device: Device requesting to unshare (must be owner)
+        target_device: Device to remove access from
+
+    Returns:
+        {"success": True} or {"error": "..."}
+    """
+    data = _read_json_file(NOTES_FILE)
+    if not data:
+        return {"error": "Notes file not found"}
+
+    devices_data = data.get("devices", {})
+
+    for device_id, device_info in devices_data.items():
+        notes = device_info.get("notes", [])
+        for i, note in enumerate(notes):
+            if note.get("id") == note_id:
+                # Check ownership
+                if not can_share(note, owner_device):
+                    return {"error": "Only the owner can manage sharing"}
+
+                # Remove from shared_with
+                shared_with = note.get("shared_with", [])
+                note["shared_with"] = [
+                    s for s in shared_with if s.get("device_id") != target_device
+                ]
+                note["updatedAt"] = int(datetime.now().timestamp() * 1000)
+                devices_data[device_id]["notes"][i] = note
+                _write_json_file(NOTES_FILE, data)
+                return {"success": True}
+
+    return {"error": "Note not found"}
+
+
+def share_project(project_id: str, owner_device: str, target_device: str, permission: str) -> Dict:
+    """Share a project with another device.
+
+    Args:
+        project_id: The project to share
+        owner_device: Device requesting to share (must be owner)
+        target_device: Device to share with
+        permission: Permission level ('view', 'edit', 'full')
+
+    Returns:
+        {"success": True} or {"error": "..."}
+    """
+    if permission not in ("view", "edit", "full"):
+        return {"error": f"Invalid permission level: {permission}"}
+
+    data = _read_json_file(PROJECTS_FILE)
+    if not data:
+        return {"error": "Projects file not found"}
+
+    devices_data = data.get("devices", {})
+
+    for device_id, device_info in devices_data.items():
+        projects = device_info.get("projects", [])
+        for i, project in enumerate(projects):
+            if project.get("id") == project_id or project.get("path") == project_id:
+                # Check ownership
+                if not can_share(project, owner_device):
+                    return {"error": "Only the owner can share this project"}
+
+                # Initialize shared_with if needed
+                if "shared_with" not in project:
+                    project["shared_with"] = []
+
+                # Update or add share entry
+                shared_with = project.get("shared_with", [])
+                found = False
+                for share in shared_with:
+                    if share.get("device_id") == target_device:
+                        share["permission"] = permission
+                        found = True
+                        break
+
+                if not found:
+                    shared_with.append({
+                        "device_id": target_device,
+                        "permission": permission
+                    })
+
+                project["shared_with"] = shared_with
+                project["updated_at"] = int(datetime.now().timestamp() * 1000)
+                devices_data[device_id]["projects"][i] = project
+                _write_json_file(PROJECTS_FILE, data)
+                return {"success": True, "shared_with": shared_with}
+
+    return {"error": "Project not found"}
+
+
+def unshare_project(project_id: str, owner_device: str, target_device: str) -> Dict:
+    """Remove sharing for a project."""
+    data = _read_json_file(PROJECTS_FILE)
+    if not data:
+        return {"error": "Projects file not found"}
+
+    devices_data = data.get("devices", {})
+
+    for device_id, device_info in devices_data.items():
+        projects = device_info.get("projects", [])
+        for i, project in enumerate(projects):
+            if project.get("id") == project_id or project.get("path") == project_id:
+                # Check ownership
+                if not can_share(project, owner_device):
+                    return {"error": "Only the owner can manage sharing"}
+
+                # Remove from shared_with
+                shared_with = project.get("shared_with", [])
+                project["shared_with"] = [
+                    s for s in shared_with if s.get("device_id") != target_device
+                ]
+                project["updated_at"] = int(datetime.now().timestamp() * 1000)
+                devices_data[device_id]["projects"][i] = project
+                _write_json_file(PROJECTS_FILE, data)
+                return {"success": True}
+
+    return {"error": "Project not found"}
+
+
+def get_shared_content_for_device(device_id: str) -> Dict:
+    """Get all content shared with a specific device.
+
+    Returns projects and notes that have been shared with this device
+    (where device_id appears in shared_with but is not the owner).
+    """
+    shared = {
+        "projects": [],
+        "notes": []
+    }
+
+    # Check projects
+    projects_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
+    for owner_device_id, device_info in projects_data.get("devices", {}).items():
+        for project in device_info.get("projects", []):
+            shared_with = project.get("shared_with", [])
+            for share in shared_with:
+                if share.get("device_id") == device_id:
+                    shared["projects"].append({
+                        **project,
+                        "owner_device_name": device_info.get("name", owner_device_id),
+                        "my_permission": share.get("permission", "view")
+                    })
+                    break
+
+    # Check notes
+    notes_data = _read_json_file(NOTES_FILE) or {"devices": {}}
+    for owner_device_id, device_info in notes_data.get("devices", {}).items():
+        for note in device_info.get("notes", []):
+            shared_with = note.get("shared_with", [])
+            for share in shared_with:
+                if share.get("device_id") == device_id:
+                    shared["notes"].append({
+                        **note,
+                        "owner_device_name": device_info.get("name", owner_device_id),
+                        "my_permission": share.get("permission", "view")
+                    })
+                    break
+
+    return shared
+
+
+def delete_note_with_permission(note_id: str, requesting_device: str) -> Dict:
+    """Delete a note with permission check.
+
+    Only owner or devices with 'full' permission can delete.
+
+    Args:
+        note_id: The note to delete
+        requesting_device: The device attempting to delete
+
+    Returns:
+        {"success": True} or {"error": "..."}
+    """
+    data = _read_json_file(NOTES_FILE)
+    if not data:
+        return {"error": "Notes file not found"}
+
+    devices_data = data.get("devices", {})
+
+    for device_id, device_info in devices_data.items():
+        notes = device_info.get("notes", [])
+        for note in notes:
+            if note.get("id") == note_id:
+                # Check delete permission
+                if not can_delete(note, requesting_device):
+                    permission = get_permission_level(note, requesting_device)
+                    if permission:
+                        return {"error": f"Your permission level ({permission}) does not allow deletion"}
+                    else:
+                        return {"error": "You don't have access to this note"}
+
+                # Permission granted - delete the note
+                device_info["notes"] = [n for n in notes if n.get("id") != note_id]
+                _write_json_file(NOTES_FILE, data)
+                return {"success": True}
+
+    return {"error": "Note not found"}
+
+
+def delete_project_with_permission(project_id: str, requesting_device: str) -> Dict:
+    """Delete a project with permission check.
+
+    Only owner or devices with 'full' permission can delete.
+    """
+    data = _read_json_file(PROJECTS_FILE)
+    if not data:
+        return {"error": "Projects file not found"}
+
+    devices_data = data.get("devices", {})
+
+    for device_id, device_info in devices_data.items():
+        projects = device_info.get("projects", [])
+        for project in projects:
+            if project.get("id") == project_id or project.get("path") == project_id:
+                # Check delete permission
+                if not can_delete(project, requesting_device):
+                    permission = get_permission_level(project, requesting_device)
+                    if permission:
+                        return {"error": f"Your permission level ({permission}) does not allow deletion"}
+                    else:
+                        return {"error": "You don't have access to this project"}
+
+                # Permission granted - delete the project
+                device_info["projects"] = [p for p in projects if p.get("id") != project_id and p.get("path") != project_id]
+                _write_json_file(PROJECTS_FILE, data)
+                return {"success": True}
+
+    return {"error": "Project not found"}
