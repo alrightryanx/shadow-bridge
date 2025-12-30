@@ -492,6 +492,36 @@ def get_note_content(note_id: str) -> Optional[Dict]:
     return None
 
 
+def delete_note(note_id: str) -> Dict:
+    """Delete a note from the local cache.
+
+    Removes the note from notes.json. Note: This is a local deletion only.
+    The note will reappear if the device syncs it again unless the device
+    also deletes it.
+
+    Returns: {"success": True} or {"success": False, "error": "..."}
+    """
+    data = _read_json_file(NOTES_FILE)
+    if not data:
+        return {"success": False, "error": "Notes file not found"}
+
+    devices_data = data.get("devices", {})
+    deleted = False
+
+    for device_id, device_info in devices_data.items():
+        notes = device_info.get("notes", [])
+        original_len = len(notes)
+        device_info["notes"] = [n for n in notes if n.get("id") != note_id]
+        if len(device_info["notes"]) < original_len:
+            deleted = True
+
+    if deleted:
+        _write_json_file(NOTES_FILE, data)
+        return {"success": True}
+    else:
+        return {"success": False, "error": "Note not found"}
+
+
 def save_note_content(note_id: str, title: str, content: str, updated_at: int) -> bool:
     """Save note content to local cache for instant loading.
 

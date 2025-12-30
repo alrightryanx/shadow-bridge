@@ -155,6 +155,10 @@ const api = {
         return this.fetch(`/notes/${id}/export`, { method: 'POST' });
     },
 
+    async deleteNote(id) {
+        return this.fetch(`/notes/${id}`, { method: 'DELETE' });
+    },
+
     async createNote(data) {
         return this.fetch('/notes', {
             method: 'POST',

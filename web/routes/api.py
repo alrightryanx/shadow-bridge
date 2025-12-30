@@ -490,6 +490,17 @@ def api_update_note_content(note_id):
         return jsonify({"error": str(e)}), 500
 
 
+@api_bp.route('/notes/<note_id>', methods=['DELETE'])
+def api_delete_note(note_id):
+    """Delete a note from the local cache."""
+    from ..services.data_service import delete_note
+    result = delete_note(note_id)
+    if result.get("success"):
+        return jsonify({"success": True})
+    else:
+        return jsonify(result), 404
+
+
 @api_bp.route('/notes/<note_id>/export', methods=['POST'])
 def api_export_note(note_id):
     """Export note to file."""
