@@ -151,6 +151,49 @@
     </div>
 </section>
 
+<!-- Email Verification -->
+<section class="section">
+    <h2>Email Verification</h2>
+    <p class="section-description">Verify your email to enable team features, remote sharing, and account recovery.</p>
+
+    <div id="email-verified-section" class="email-status-section" style="display: none;">
+        <div class="email-verified-badge">
+            <span class="material-symbols-outlined">verified</span>
+            <span>Verified: <strong id="verified-email-display"></strong></span>
+        </div>
+        <button class="btn btn-small btn-secondary" onclick="removeVerifiedEmail()">
+            <span class="material-symbols-outlined">link_off</span> Unlink Email
+        </button>
+    </div>
+
+    <div id="email-unverified-section">
+        <div class="email-form" id="email-request-form">
+            <div class="form-group">
+                <label for="email-input">Email Address</label>
+                <input type="email" id="email-input" class="form-input" placeholder="your@email.com">
+            </div>
+            <button class="btn btn-primary" onclick="requestVerification()">
+                <span class="material-symbols-outlined">send</span> Send Verification Code
+            </button>
+        </div>
+
+        <div class="email-form" id="email-verify-form" style="display: none;">
+            <p class="verify-instructions">Enter the 6-digit code sent to <strong id="verify-email-label"></strong></p>
+            <div class="form-group">
+                <label for="verify-code-input">Verification Code</label>
+                <input type="text" id="verify-code-input" class="form-input verification-code" maxlength="6" placeholder="000000" pattern="[0-9]*" inputmode="numeric">
+            </div>
+            <div class="email-form-actions">
+                <button class="btn btn-secondary" onclick="cancelVerification()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmVerification()">
+                    <span class="material-symbols-outlined">check</span> Verify
+                </button>
+            </div>
+            <p class="verify-note">Code expires in 10 minutes. <a href="#" onclick="requestVerification(); return false;">Resend code</a></p>
+        </div>
+    </div>
+</section>
+
 <!-- Data Management -->
 <section class="section">
     <h2>Data Management</h2>
@@ -241,7 +284,159 @@ document.addEventListener('DOMContentLoaded', function() {
     loadDataStats();
     loadPreferences();
     updateThemeButton();
+    loadEmailVerificationStatus();
 });
+
+// ============ Email Verification ============
+
+let pendingVerificationEmail = null;
+
+async function loadEmailVerificationStatus() {
+    // Get current device ID (use stored or generate)
+    const deviceId = getCurrentDeviceId();
+
+    try {
+        const response = await fetch(`/api/email/verified/${encodeURIComponent(deviceId)}`);
+        const data = await response.json();
+
+        if (data.email) {
+            // Email is verified
+            document.getElementById('email-verified-section').style.display = 'flex';
+            document.getElementById('email-unverified-section').style.display = 'none';
+            document.getElementById('verified-email-display').textContent = data.email;
+        } else {
+            // No verified email
+            document.getElementById('email-verified-section').style.display = 'none';
+            document.getElementById('email-unverified-section').style.display = 'block';
+        }
+    } catch (e) {
+        console.error('Failed to load email status:', e);
+    }
+}
+
+function getCurrentDeviceId() {
+    // Use stored device ID or generate one for web
+    let deviceId = localStorage.getItem('shadow_device_id');
+    if (!deviceId) {
+        deviceId = 'web_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('shadow_device_id', deviceId);
+    }
+    return deviceId;
+}
+
+async function requestVerification() {
+    const email = document.getElementById('email-input').value.trim();
+    if (!email || !email.includes('@')) {
+        showToast('Please enter a valid email address', 'error');
+        return;
+    }
+
+    const deviceId = getCurrentDeviceId();
+
+    try {
+        const response = await fetch('/api/email/verify/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, device_id: deviceId })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            pendingVerificationEmail = email;
+            document.getElementById('email-request-form').style.display = 'none';
+            document.getElementById('email-verify-form').style.display = 'block';
+            document.getElementById('verify-email-label').textContent = email;
+            document.getElementById('verify-code-input').value = '';
+            document.getElementById('verify-code-input').focus();
+
+            // If code is returned (test mode), show it
+            if (result.code) {
+                showToast(`Test mode - Code: ${result.code}`, 'info');
+            } else {
+                showToast(result.message, 'success');
+            }
+        } else {
+            showToast(result.error || 'Failed to send verification', 'error');
+        }
+    } catch (e) {
+        console.error('Request verification error:', e);
+        showToast('Failed to send verification code', 'error');
+    }
+}
+
+function cancelVerification() {
+    pendingVerificationEmail = null;
+    document.getElementById('email-request-form').style.display = 'block';
+    document.getElementById('email-verify-form').style.display = 'none';
+}
+
+async function confirmVerification() {
+    const code = document.getElementById('verify-code-input').value.trim();
+    if (!code || code.length !== 6) {
+        showToast('Please enter the 6-digit code', 'error');
+        return;
+    }
+
+    if (!pendingVerificationEmail) {
+        showToast('No pending verification', 'error');
+        cancelVerification();
+        return;
+    }
+
+    const deviceId = getCurrentDeviceId();
+
+    try {
+        const response = await fetch('/api/email/verify/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: pendingVerificationEmail,
+                code: code,
+                device_id: deviceId
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Email verified successfully!', 'success');
+            pendingVerificationEmail = null;
+            loadEmailVerificationStatus();
+        } else {
+            showToast(result.error || 'Verification failed', 'error');
+        }
+    } catch (e) {
+        console.error('Confirm verification error:', e);
+        showToast('Verification failed', 'error');
+    }
+}
+
+async function removeVerifiedEmail() {
+    if (!confirm('Remove verified email? You will need to verify again to use email-based features.')) {
+        return;
+    }
+
+    const deviceId = getCurrentDeviceId();
+
+    try {
+        const response = await fetch(`/api/email/verified/${encodeURIComponent(deviceId)}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Email unlinked', 'success');
+            loadEmailVerificationStatus();
+        } else {
+            showToast(result.error || 'Failed to unlink email', 'error');
+        }
+    } catch (e) {
+        console.error('Remove email error:', e);
+        showToast('Failed to unlink email', 'error');
+    }
+}
 
 async function loadStatus() {
     const status = await api.getStatus();
@@ -615,6 +810,95 @@ async function exportAllData() {
 
 @keyframes spin {
     to { transform: rotate(360deg); }
+}
+
+/* Email Verification Section */
+.section-description {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-bottom: var(--spacing-lg);
+}
+
+.email-status-section {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md);
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--success);
+}
+
+.email-verified-badge {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--success);
+}
+
+.email-verified-badge .material-symbols-outlined {
+    font-size: 24px;
+}
+
+.email-verified-badge strong {
+    color: var(--text);
+}
+
+.email-form {
+    background: var(--bg-card);
+    padding: var(--spacing-lg);
+    border-radius: var(--radius-md);
+}
+
+.email-form .form-group {
+    margin-bottom: var(--spacing-md);
+}
+
+.email-form label {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: var(--spacing-xs);
+}
+
+.email-form .form-input {
+    width: 100%;
+    max-width: 400px;
+}
+
+.verification-code {
+    font-size: 24px;
+    letter-spacing: 8px;
+    text-align: center;
+    font-family: monospace;
+    max-width: 200px !important;
+}
+
+.verify-instructions {
+    margin-bottom: var(--spacing-md);
+    color: var(--text);
+}
+
+.email-form-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-top: var(--spacing-md);
+}
+
+.verify-note {
+    margin-top: var(--spacing-md);
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.verify-note a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.verify-note a:hover {
+    text-decoration: underline;
 }
 </style>
 {% endblock %}
