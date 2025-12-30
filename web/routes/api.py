@@ -958,7 +958,9 @@ def api_create_team():
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
-    result = create_team(data)
+    owner_email = data.pop('owner_email', None)
+    owner_device = data.pop('owner_device', None)
+    result = create_team(data, owner_email=owner_email, owner_device=owner_device)
     return jsonify(result)
 
 

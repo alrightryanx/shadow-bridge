@@ -194,6 +194,117 @@
     </div>
 </section>
 
+<!-- Team Management -->
+<section class="section" id="team-management-section">
+    <h2>Teams</h2>
+    <p class="section-description">Create and manage teams for collaborative work. Requires verified email.</p>
+
+    <div id="teams-requires-email" style="display: none;">
+        <div class="info-banner">
+            <span class="material-symbols-outlined">info</span>
+            <span>Verify your email above to enable team features.</span>
+        </div>
+    </div>
+
+    <div id="teams-content" style="display: none;">
+        <!-- Pending Invitations -->
+        <div id="pending-invitations-section" class="team-subsection" style="display: none;">
+            <h3>Pending Invitations</h3>
+            <div id="pending-invitations-list" class="invitations-list"></div>
+        </div>
+
+        <!-- My Teams -->
+        <div class="team-subsection">
+            <div class="subsection-header">
+                <h3>My Teams</h3>
+                <button class="btn btn-small btn-primary" onclick="openCreateTeamModal()">
+                    <span class="material-symbols-outlined">add</span> Create Team
+                </button>
+            </div>
+            <div id="my-teams-list" class="teams-list">
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">groups</span>
+                    <p>You're not a member of any teams yet.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Create Team Modal -->
+<div id="create-team-modal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">group_add</span> Create Team</h2>
+            <button class="modal-close" onclick="closeCreateTeamModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="new-team-name">Team Name</label>
+                <input type="text" id="new-team-name" class="form-input" placeholder="My Team">
+            </div>
+            <div class="form-group">
+                <label for="new-team-description">Description (optional)</label>
+                <textarea id="new-team-description" class="form-input form-textarea" placeholder="What is this team for?"></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateTeamModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createTeam()">
+                <span class="material-symbols-outlined">check</span> Create
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Team Details Modal -->
+<div id="team-details-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">groups</span> <span id="team-details-name">Team</span></h2>
+            <button class="modal-close" onclick="closeTeamDetailsModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p id="team-details-description" class="team-description"></p>
+
+            <!-- Members List -->
+            <div class="team-members-section">
+                <div class="subsection-header">
+                    <h3>Members</h3>
+                    <button class="btn btn-small btn-primary" id="invite-member-btn" onclick="toggleInviteForm()" style="display: none;">
+                        <span class="material-symbols-outlined">person_add</span> Invite
+                    </button>
+                </div>
+
+                <!-- Invite Form (hidden by default) -->
+                <div id="invite-member-form" class="invite-form" style="display: none;">
+                    <div class="invite-form-row">
+                        <input type="email" id="invite-email" class="form-input" placeholder="email@example.com">
+                        <select id="invite-role" class="form-select">
+                            <option value="member">Member</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="inviteMember()">Send</button>
+                        <button class="btn btn-secondary" onclick="toggleInviteForm()">Cancel</button>
+                    </div>
+                </div>
+
+                <div id="team-members-list" class="members-list"></div>
+            </div>
+
+            <!-- Team Actions -->
+            <div id="team-actions" class="team-actions" style="display: none;">
+                <button class="btn btn-danger" id="leave-team-btn" onclick="leaveTeam()">
+                    <span class="material-symbols-outlined">logout</span> Leave Team
+                </button>
+                <button class="btn btn-danger" id="delete-team-btn" onclick="deleteTeam()" style="display: none;">
+                    <span class="material-symbols-outlined">delete</span> Delete Team
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Data Management -->
 <section class="section">
     <h2>Data Management</h2>
@@ -285,6 +396,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadPreferences();
     updateThemeButton();
     loadEmailVerificationStatus();
+    loadTeamManagement();
 });
 
 // ============ Email Verification ============
@@ -436,6 +548,468 @@ async function removeVerifiedEmail() {
         console.error('Remove email error:', e);
         showToast('Failed to unlink email', 'error');
     }
+}
+
+// ============ Team Management ============
+
+let currentVerifiedEmail = null;
+let currentTeamId = null;
+let currentUserRole = null;
+
+async function loadTeamManagement() {
+    const deviceId = getCurrentDeviceId();
+
+    try {
+        // Check if user has verified email
+        const response = await fetch(`/api/email/verified/${encodeURIComponent(deviceId)}`);
+        const data = await response.json();
+
+        if (data.email) {
+            currentVerifiedEmail = data.email;
+            document.getElementById('teams-requires-email').style.display = 'none';
+            document.getElementById('teams-content').style.display = 'block';
+
+            // Load teams and invitations
+            await Promise.all([
+                loadMyTeams(),
+                loadPendingInvitations()
+            ]);
+        } else {
+            currentVerifiedEmail = null;
+            document.getElementById('teams-requires-email').style.display = 'block';
+            document.getElementById('teams-content').style.display = 'none';
+        }
+    } catch (e) {
+        console.error('Failed to load team management:', e);
+    }
+}
+
+async function loadMyTeams() {
+    if (!currentVerifiedEmail) return;
+
+    try {
+        const response = await fetch(`/api/teams/my-teams?email=${encodeURIComponent(currentVerifiedEmail)}`);
+        const data = await response.json();
+
+        const container = document.getElementById('my-teams-list');
+
+        if (!data.teams || data.teams.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">groups</span>
+                    <p>You're not a member of any teams yet.</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = data.teams.map(team => {
+            const memberCount = team.members ? team.members.length : 0;
+            const myRole = team.members?.find(m => m.email === currentVerifiedEmail)?.role || 'member';
+            const roleIcon = myRole === 'owner' ? 'shield' : myRole === 'admin' ? 'admin_panel_settings' : 'person';
+
+            return `
+                <div class="team-card" onclick="openTeamDetails('${team.id}')">
+                    <div class="team-card-header">
+                        <span class="team-name">${escapeHtml(team.name)}</span>
+                        <span class="team-role" title="${myRole}">
+                            <span class="material-symbols-outlined">${roleIcon}</span>
+                        </span>
+                    </div>
+                    <p class="team-card-description">${escapeHtml(team.description || 'No description')}</p>
+                    <div class="team-card-footer">
+                        <span class="team-member-count">
+                            <span class="material-symbols-outlined">group</span> ${memberCount}
+                        </span>
+                        <span class="team-created">${formatDate(team.created_at)}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error('Failed to load teams:', e);
+    }
+}
+
+async function loadPendingInvitations() {
+    if (!currentVerifiedEmail) return;
+
+    try {
+        const response = await fetch(`/api/teams/invitations/pending?email=${encodeURIComponent(currentVerifiedEmail)}`);
+        const data = await response.json();
+
+        const section = document.getElementById('pending-invitations-section');
+        const container = document.getElementById('pending-invitations-list');
+
+        if (!data.invitations || data.invitations.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+
+        section.style.display = 'block';
+        container.innerHTML = data.invitations.map(inv => `
+            <div class="invitation-card">
+                <div class="invitation-info">
+                    <span class="invitation-team">${escapeHtml(inv.team_name || 'Unknown Team')}</span>
+                    <span class="invitation-from">Invited by ${escapeHtml(inv.inviter_email)}</span>
+                    <span class="invitation-role">Role: ${inv.role}</span>
+                </div>
+                <div class="invitation-actions">
+                    <button class="btn btn-small btn-primary" onclick="acceptInvitation('${inv.code}')">Accept</button>
+                    <button class="btn btn-small btn-secondary" onclick="declineInvitation('${inv.code}')">Decline</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('Failed to load invitations:', e);
+    }
+}
+
+async function acceptInvitation(code) {
+    if (!currentVerifiedEmail) return;
+
+    try {
+        const response = await fetch('/api/teams/invitations/accept', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                invitation_code: code,
+                accepter_email: currentVerifiedEmail,
+                accepter_device: getCurrentDeviceId()
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Invitation accepted!', 'success');
+            await Promise.all([loadMyTeams(), loadPendingInvitations()]);
+        } else {
+            showToast(result.error || 'Failed to accept invitation', 'error');
+        }
+    } catch (e) {
+        console.error('Accept invitation error:', e);
+        showToast('Failed to accept invitation', 'error');
+    }
+}
+
+async function declineInvitation(code) {
+    // For now, just hide the invitation (proper decline would remove from server)
+    showToast('Invitation declined', 'info');
+    await loadPendingInvitations();
+}
+
+function openCreateTeamModal() {
+    document.getElementById('new-team-name').value = '';
+    document.getElementById('new-team-description').value = '';
+    document.getElementById('create-team-modal').classList.remove('hidden');
+}
+
+function closeCreateTeamModal() {
+    document.getElementById('create-team-modal').classList.add('hidden');
+}
+
+async function createTeam() {
+    const name = document.getElementById('new-team-name').value.trim();
+    const description = document.getElementById('new-team-description').value.trim();
+
+    if (!name) {
+        showToast('Please enter a team name', 'error');
+        return;
+    }
+
+    if (!currentVerifiedEmail) {
+        showToast('Email verification required', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/teams', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name,
+                description,
+                owner_email: currentVerifiedEmail,
+                owner_device: getCurrentDeviceId()
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.id) {
+            showToast('Team created!', 'success');
+            closeCreateTeamModal();
+            await loadMyTeams();
+        } else {
+            showToast(result.error || 'Failed to create team', 'error');
+        }
+    } catch (e) {
+        console.error('Create team error:', e);
+        showToast('Failed to create team', 'error');
+    }
+}
+
+async function openTeamDetails(teamId) {
+    currentTeamId = teamId;
+
+    try {
+        const response = await fetch(`/api/teams/${teamId}`);
+        const team = await response.json();
+
+        if (team.error) {
+            showToast(team.error, 'error');
+            return;
+        }
+
+        document.getElementById('team-details-name').textContent = team.name;
+        document.getElementById('team-details-description').textContent = team.description || '';
+
+        // Find current user's role
+        currentUserRole = 'member';
+        if (team.members) {
+            const myMembership = team.members.find(m => m.email === currentVerifiedEmail);
+            if (myMembership) {
+                currentUserRole = myMembership.role;
+            }
+        }
+
+        // Show invite button for admins and owners
+        const inviteBtn = document.getElementById('invite-member-btn');
+        if (currentUserRole === 'owner' || currentUserRole === 'admin') {
+            inviteBtn.style.display = 'flex';
+        } else {
+            inviteBtn.style.display = 'none';
+        }
+
+        // Render members list
+        renderTeamMembers(team.members || []);
+
+        // Show actions
+        const actionsDiv = document.getElementById('team-actions');
+        const leaveBtn = document.getElementById('leave-team-btn');
+        const deleteBtn = document.getElementById('delete-team-btn');
+
+        actionsDiv.style.display = 'flex';
+
+        if (currentUserRole === 'owner') {
+            leaveBtn.style.display = 'none';
+            deleteBtn.style.display = 'flex';
+        } else {
+            leaveBtn.style.display = 'flex';
+            deleteBtn.style.display = 'none';
+        }
+
+        document.getElementById('team-details-modal').classList.remove('hidden');
+    } catch (e) {
+        console.error('Open team details error:', e);
+        showToast('Failed to load team details', 'error');
+    }
+}
+
+function closeTeamDetailsModal() {
+    document.getElementById('team-details-modal').classList.add('hidden');
+    document.getElementById('invite-member-form').style.display = 'none';
+    currentTeamId = null;
+    currentUserRole = null;
+}
+
+function renderTeamMembers(members) {
+    const container = document.getElementById('team-members-list');
+
+    if (!members || members.length === 0) {
+        container.innerHTML = '<p class="empty-state-small">No members</p>';
+        return;
+    }
+
+    container.innerHTML = members.map(member => {
+        const isMe = member.email === currentVerifiedEmail;
+        const roleIcon = member.role === 'owner' ? 'shield' : member.role === 'admin' ? 'admin_panel_settings' : 'person';
+        const canManage = (currentUserRole === 'owner' || (currentUserRole === 'admin' && member.role === 'member')) && !isMe;
+
+        return `
+            <div class="member-row${isMe ? ' is-me' : ''}">
+                <div class="member-info">
+                    <span class="member-email">${escapeHtml(member.email)}${isMe ? ' (you)' : ''}</span>
+                    <span class="member-role">
+                        <span class="material-symbols-outlined">${roleIcon}</span>
+                        ${member.role}
+                    </span>
+                </div>
+                ${canManage ? `
+                    <div class="member-actions">
+                        <select class="form-select form-select-small" onchange="changeMemberRole('${escapeHtml(member.email)}', this.value)">
+                            <option value="member"${member.role === 'member' ? ' selected' : ''}>Member</option>
+                            <option value="admin"${member.role === 'admin' ? ' selected' : ''}>Admin</option>
+                            ${currentUserRole === 'owner' ? `<option value="owner"${member.role === 'owner' ? ' selected' : ''}>Owner</option>` : ''}
+                        </select>
+                        <button class="btn btn-small btn-danger" onclick="removeMember('${escapeHtml(member.email)}')">
+                            <span class="material-symbols-outlined">person_remove</span>
+                        </button>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+function toggleInviteForm() {
+    const form = document.getElementById('invite-member-form');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    if (form.style.display !== 'none') {
+        document.getElementById('invite-email').value = '';
+        document.getElementById('invite-email').focus();
+    }
+}
+
+async function inviteMember() {
+    const email = document.getElementById('invite-email').value.trim();
+    const role = document.getElementById('invite-role').value;
+
+    if (!email || !email.includes('@')) {
+        showToast('Please enter a valid email', 'error');
+        return;
+    }
+
+    if (!currentTeamId || !currentVerifiedEmail) {
+        showToast('Invalid state', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}/invite`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                inviter_email: currentVerifiedEmail,
+                invitee_email: email,
+                role: role
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(`Invitation sent to ${email}`, 'success');
+            document.getElementById('invite-email').value = '';
+            toggleInviteForm();
+
+            // Show invitation code if returned (test mode)
+            if (result.invitation_code) {
+                showToast(`Test mode - Code: ${result.invitation_code}`, 'info');
+            }
+        } else {
+            showToast(result.error || 'Failed to send invitation', 'error');
+        }
+    } catch (e) {
+        console.error('Invite member error:', e);
+        showToast('Failed to send invitation', 'error');
+    }
+}
+
+async function changeMemberRole(memberEmail, newRole) {
+    if (!currentTeamId || !currentVerifiedEmail) return;
+
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}/members/${encodeURIComponent(memberEmail)}/role`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                updater_email: currentVerifiedEmail,
+                new_role: newRole
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(`Role updated to ${newRole}`, 'success');
+            await openTeamDetails(currentTeamId); // Refresh
+        } else {
+            showToast(result.error || 'Failed to update role', 'error');
+            await openTeamDetails(currentTeamId); // Refresh to reset
+        }
+    } catch (e) {
+        console.error('Change role error:', e);
+        showToast('Failed to update role', 'error');
+    }
+}
+
+async function removeMember(memberEmail) {
+    if (!confirm(`Remove ${memberEmail} from the team?`)) return;
+    if (!currentTeamId || !currentVerifiedEmail) return;
+
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}/members/${encodeURIComponent(memberEmail)}?remover_email=${encodeURIComponent(currentVerifiedEmail)}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Member removed', 'success');
+            await openTeamDetails(currentTeamId); // Refresh
+        } else {
+            showToast(result.error || 'Failed to remove member', 'error');
+        }
+    } catch (e) {
+        console.error('Remove member error:', e);
+        showToast('Failed to remove member', 'error');
+    }
+}
+
+async function leaveTeam() {
+    if (!confirm('Are you sure you want to leave this team?')) return;
+    if (!currentTeamId || !currentVerifiedEmail) return;
+
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}/members/${encodeURIComponent(currentVerifiedEmail)}?remover_email=${encodeURIComponent(currentVerifiedEmail)}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('You left the team', 'success');
+            closeTeamDetailsModal();
+            await loadMyTeams();
+        } else {
+            showToast(result.error || 'Failed to leave team', 'error');
+        }
+    } catch (e) {
+        console.error('Leave team error:', e);
+        showToast('Failed to leave team', 'error');
+    }
+}
+
+async function deleteTeam() {
+    if (!confirm('Are you sure you want to delete this team? This cannot be undone.')) return;
+    if (!currentTeamId) return;
+
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Team deleted', 'success');
+            closeTeamDetailsModal();
+            await loadMyTeams();
+        } else {
+            showToast(result.error || 'Failed to delete team', 'error');
+        }
+    } catch (e) {
+        console.error('Delete team error:', e);
+        showToast('Failed to delete team', 'error');
+    }
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString();
 }
 
 async function loadStatus() {
@@ -899,6 +1473,285 @@ async function exportAllData() {
 
 .verify-note a:hover {
     text-decoration: underline;
+}
+
+/* Team Management Styles */
+.info-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--warning);
+    color: var(--text-dim);
+}
+
+.info-banner .material-symbols-outlined {
+    color: var(--warning);
+}
+
+.team-subsection {
+    margin-bottom: var(--spacing-xl);
+}
+
+.team-subsection h3 {
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: var(--spacing-md);
+    color: var(--text);
+}
+
+.subsection-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+}
+
+.subsection-header h3 {
+    margin-bottom: 0;
+}
+
+.teams-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--spacing-md);
+}
+
+.team-card {
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+    border: 1px solid var(--border);
+}
+
+.team-card:hover {
+    background: var(--bg-hover);
+    transform: translateY(-2px);
+}
+
+.team-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-sm);
+}
+
+.team-name {
+    font-weight: 600;
+    font-size: 16px;
+    color: var(--text);
+}
+
+.team-role {
+    color: var(--accent);
+}
+
+.team-role .material-symbols-outlined {
+    font-size: 20px;
+}
+
+.team-card-description {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: var(--spacing-md);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.team-card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.team-member-count {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.team-member-count .material-symbols-outlined {
+    font-size: 16px;
+}
+
+/* Invitations */
+.invitations-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.invitation-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-md);
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--accent);
+}
+
+.invitation-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.invitation-team {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.invitation-from,
+.invitation-role {
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.invitation-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+/* Team Details Modal */
+.team-description {
+    color: var(--text-dim);
+    margin-bottom: var(--spacing-lg);
+}
+
+.team-members-section {
+    margin-bottom: var(--spacing-lg);
+}
+
+.invite-form {
+    background: var(--bg-input);
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--spacing-md);
+}
+
+.invite-form-row {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.invite-form-row .form-input {
+    flex: 1;
+    min-width: 200px;
+}
+
+.invite-form-row .form-select {
+    width: auto;
+}
+
+.members-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.member-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+}
+
+.member-row.is-me {
+    border: 1px solid var(--accent);
+}
+
+.member-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.member-email {
+    font-weight: 500;
+    color: var(--text);
+}
+
+.member-role {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.member-role .material-symbols-outlined {
+    font-size: 14px;
+}
+
+.member-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+}
+
+.form-select-small {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.team-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border);
+}
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xl);
+    color: var(--text-dim);
+    text-align: center;
+}
+
+.empty-state .material-symbols-outlined {
+    font-size: 48px;
+    opacity: 0.5;
+}
+
+.empty-state-small {
+    color: var(--text-dim);
+    font-size: 14px;
+    padding: var(--spacing-md);
+    text-align: center;
+}
+
+/* Modal styles (shared) */
+.modal-small .modal-content {
+    max-width: 400px;
+}
+
+.form-textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border);
 }
 </style>
 {% endblock %}
