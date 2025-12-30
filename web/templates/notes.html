@@ -5,12 +5,12 @@
 
 {% block content %}
 <div class="page-actions">
-    <button class="btn btn-primary" onclick="showCreateNoteModal()">
-        <span class="material-symbols-outlined">add</span> Create New
-    </button>
     <input type="text" id="search-input" class="search-input" placeholder="Search notes..." oninput="filterNotes()">
     <button class="btn btn-small filter-btn" id="show-pinned-btn" onclick="togglePinnedFilter()">
         <span class="material-symbols-outlined">push_pin</span> Pinned
+    </button>
+    <button class="btn btn-primary" onclick="showCreateNoteModal()">
+        <span class="material-symbols-outlined">add</span> Create New
     </button>
 </div>
 

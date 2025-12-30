@@ -107,12 +107,20 @@ class ShadowWebSocket {
     }
 
     updateStatusIndicator(connected) {
+        // Only update status text for websocket connection state
+        // The dot color is controlled by app.js based on actual device count
         const indicator = document.getElementById('status-indicator');
         if (!indicator) return;
 
-        const dot = indicator.querySelector('.status-dot');
-        if (dot) {
-            dot.className = connected ? 'status-dot online' : 'status-dot offline';
+        const text = indicator.querySelector('.status-text');
+        if (text && !connected) {
+            // Only update to show disconnected state - don't override device count display
+            text.textContent = 'Connecting...';
+        }
+
+        // Trigger a status refresh to update based on actual device count
+        if (connected && typeof updateStatus === 'function') {
+            updateStatus();
         }
     }
 
