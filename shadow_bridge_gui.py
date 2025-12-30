@@ -1515,6 +1515,7 @@ class CompanionRelayServer(threading.Thread):
     - Plugin sends approval requests, session events to Android
     - Android sends approval responses, user replies back to plugin
     - Clipboard sync for reply injection
+    - Session handoff: Android can request PC session context
     """
 
     def __init__(self, on_status_change=None):
@@ -1531,6 +1532,11 @@ class CompanionRelayServer(threading.Thread):
         # Pending messages for offline devices
         self._pending_messages = {}  # device_id -> [messages]
         self._pending_lock = threading.Lock()
+
+        # PC Session state for handoff (enables Android to continue PC sessions)
+        self._pc_session = None  # Current active session
+        self._pc_session_lock = threading.Lock()
+        self._session_history = []  # Recent interactions for context (max 20)
 
     def run(self):
         try:
@@ -1652,6 +1658,10 @@ class CompanionRelayServer(threading.Thread):
                     elif msg_type in ['approval_request', 'session_start', 'session_complete',
                                      'session_end', 'notification', 'approval_dismiss']:
                         target_device = message.get('deviceId')
+
+                        # Track PC session state for handoff
+                        self._track_session_event(msg_type, message)
+
                         relayed = self._relay_to_device(target_device, message)
 
                         # Send immediate ack for fire-and-forget messages
@@ -1660,6 +1670,18 @@ class CompanionRelayServer(threading.Thread):
                             self._send_to_conn(conn, ack)
                         # For approval_request, response comes async from device
                         # The plugin connection is tracked via _plugin_conn from handshake
+
+                    # Handle Android requesting PC session for handoff
+                    elif msg_type == 'get_pc_session':
+                        session_data = self._get_pc_session_for_handoff()
+                        response = {
+                            'type': 'pc_session_response',
+                            'id': f"msg_{int(time.time()*1000)}",
+                            'timestamp': int(time.time() * 1000),
+                            'session': session_data
+                        }
+                        self._send_to_conn(conn, response)
+                        log.info(f"Sent PC session data to device: {device_id}")
 
                     else:
                         log.debug(f"Unknown message type: {msg_type}")
@@ -1783,6 +1805,124 @@ class CompanionRelayServer(threading.Thread):
                     subprocess.run(['xclip', '-selection', 'clipboard'], input=text.encode(), check=True)
             except Exception as e:
                 log.warning(f"Clipboard copy not available: {e}")
+
+    def _track_session_event(self, msg_type, message):
+        """Track session events for handoff capability.
+
+        Stores PC session state so Android can request context for continuing
+        conversations across devices (PC -> Phone -> Car -> Watch).
+        """
+        with self._pc_session_lock:
+            payload = message.get('payload', {})
+            session_id = message.get('sessionId')
+            timestamp = message.get('timestamp', int(time.time() * 1000))
+
+            if msg_type == 'session_start':
+                # New Claude Code session started
+                self._pc_session = {
+                    'sessionId': session_id,
+                    'hostname': payload.get('hostname', socket.gethostname()),
+                    'cwd': payload.get('cwd', ''),
+                    'username': payload.get('username', os.environ.get('USERNAME', 'user')),
+                    'transcriptPath': payload.get('transcriptPath', ''),
+                    'startedAt': timestamp,
+                    'lastActivityAt': timestamp,
+                    'isActive': True,
+                    'deviceType': 'PC',
+                    'deviceName': f"PC-{socket.gethostname()[:8]}"
+                }
+                self._session_history = []  # Reset history for new session
+                log.info(f"PC session started: {session_id}")
+
+                # Broadcast to all connected devices that PC session is available
+                self._broadcast_session_availability()
+
+            elif msg_type in ['session_end', 'session_complete']:
+                # Session ended
+                if self._pc_session:
+                    self._pc_session['isActive'] = False
+                    self._pc_session['endedAt'] = timestamp
+                    log.info(f"PC session ended: {session_id}")
+
+            elif msg_type in ['approval_request', 'notification']:
+                # Track activity for context
+                if self._pc_session:
+                    self._pc_session['lastActivityAt'] = timestamp
+
+                    # Add to history for context (last 20 items)
+                    history_item = {
+                        'type': msg_type,
+                        'timestamp': timestamp,
+                        'summary': payload.get('prompt', payload.get('message', ''))[:200]
+                    }
+                    if msg_type == 'approval_request':
+                        history_item['toolName'] = payload.get('toolName', '')
+
+                    self._session_history.append(history_item)
+                    if len(self._session_history) > 20:
+                        self._session_history = self._session_history[-20:]
+
+    def _broadcast_session_availability(self):
+        """Notify all connected devices that a PC session is available for handoff."""
+        with self._pc_session_lock:
+            if not self._pc_session:
+                return
+
+            message = {
+                'type': 'pc_session_available',
+                'id': f"msg_{int(time.time()*1000)}",
+                'timestamp': int(time.time() * 1000),
+                'payload': {
+                    'sessionId': self._pc_session.get('sessionId'),
+                    'hostname': self._pc_session.get('hostname'),
+                    'cwd': self._pc_session.get('cwd'),
+                    'deviceName': self._pc_session.get('deviceName'),
+                    'startedAt': self._pc_session.get('startedAt')
+                }
+            }
+
+        # Send to all connected devices
+        with self._conns_lock:
+            for device_id, conn in self._device_conns.items():
+                try:
+                    self._send_to_conn(conn, message)
+                    log.info(f"Broadcast PC session availability to {device_id}")
+                except Exception as e:
+                    log.debug(f"Failed to broadcast to {device_id}: {e}")
+
+    def _get_pc_session_for_handoff(self):
+        """Get current PC session data for handoff to Android.
+
+        Returns session context that Android can use to continue the conversation.
+        """
+        with self._pc_session_lock:
+            if not self._pc_session or not self._pc_session.get('isActive'):
+                return None
+
+            return {
+                'version': 1,
+                'session': {
+                    'sessionId': self._pc_session.get('sessionId'),
+                    'projectId': 'pc_claude_code',  # Virtual project for PC sessions
+                    'hostname': self._pc_session.get('hostname'),
+                    'cwd': self._pc_session.get('cwd'),
+                    'username': self._pc_session.get('username'),
+                    'deviceType': 'PC',
+                    'deviceName': self._pc_session.get('deviceName'),
+                    'startedAt': self._pc_session.get('startedAt'),
+                    'lastActivityAt': self._pc_session.get('lastActivityAt'),
+                    'isActive': True
+                },
+                'recentActivity': list(self._session_history),
+                'handoffHint': f"Continue your Claude Code session from {self._pc_session.get('hostname')}"
+            }
+
+    def get_active_pc_session(self):
+        """Public method to check if there's an active PC session (for UI display)."""
+        with self._pc_session_lock:
+            if self._pc_session and self._pc_session.get('isActive'):
+                return self._pc_session.copy()
+            return None
 
 
 class DiscoveryServer(threading.Thread):
