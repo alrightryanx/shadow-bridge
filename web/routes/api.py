@@ -28,7 +28,10 @@ from ..services.data_service import (
     search_all,
     get_privacy_score, get_token_usage, get_category_breakdown,
     get_usage_stats, get_backend_usage, get_activity_timeline,
-    get_status
+    get_status,
+    # Ownership & Sharing
+    share_note, unshare_note, share_project, unshare_project,
+    get_shared_content_for_device, get_permission_level
 )
 
 api_bp = Blueprint('api', __name__)
@@ -1196,3 +1199,187 @@ def api_category_breakdown():
     """Get audit category breakdown."""
     period = request.args.get('period', '7D')
     return jsonify(get_category_breakdown(period))
+
+
+# ============ Sharing & Permissions ============
+
+@api_bp.route('/notes/<note_id>/share', methods=['POST'])
+def api_share_note(note_id):
+    """Share a note with another device.
+
+    Request body:
+    {
+        "owner_device": "device_id_of_owner",
+        "target_device": "device_id_to_share_with",
+        "permission": "view" | "edit" | "full"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    owner_device = data.get('owner_device')
+    target_device = data.get('target_device')
+    permission = data.get('permission', 'view')
+
+    if not owner_device or not target_device:
+        return jsonify({"error": "owner_device and target_device are required"}), 400
+
+    result = share_note(note_id, owner_device, target_device, permission)
+    if "error" in result:
+        return jsonify(result), 403
+    return jsonify(result)
+
+
+@api_bp.route('/notes/<note_id>/share', methods=['DELETE'])
+def api_unshare_note(note_id):
+    """Remove sharing for a note.
+
+    Request body:
+    {
+        "owner_device": "device_id_of_owner",
+        "target_device": "device_id_to_remove"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    owner_device = data.get('owner_device')
+    target_device = data.get('target_device')
+
+    if not owner_device or not target_device:
+        return jsonify({"error": "owner_device and target_device are required"}), 400
+
+    result = unshare_note(note_id, owner_device, target_device)
+    if "error" in result:
+        return jsonify(result), 403
+    return jsonify(result)
+
+
+@api_bp.route('/projects/<project_id>/share', methods=['POST'])
+def api_share_project(project_id):
+    """Share a project with another device.
+
+    Request body:
+    {
+        "owner_device": "device_id_of_owner",
+        "target_device": "device_id_to_share_with",
+        "permission": "view" | "edit" | "full"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    owner_device = data.get('owner_device')
+    target_device = data.get('target_device')
+    permission = data.get('permission', 'view')
+
+    if not owner_device or not target_device:
+        return jsonify({"error": "owner_device and target_device are required"}), 400
+
+    result = share_project(project_id, owner_device, target_device, permission)
+    if "error" in result:
+        return jsonify(result), 403
+    return jsonify(result)
+
+
+@api_bp.route('/projects/<project_id>/share', methods=['DELETE'])
+def api_unshare_project(project_id):
+    """Remove sharing for a project."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    owner_device = data.get('owner_device')
+    target_device = data.get('target_device')
+
+    if not owner_device or not target_device:
+        return jsonify({"error": "owner_device and target_device are required"}), 400
+
+    result = unshare_project(project_id, owner_device, target_device)
+    if "error" in result:
+        return jsonify(result), 403
+    return jsonify(result)
+
+
+@api_bp.route('/devices/<device_id>/shared')
+def api_get_shared_with_device(device_id):
+    """Get all content shared with a device.
+
+    Returns projects and notes where this device appears in shared_with.
+    """
+    result = get_shared_content_for_device(device_id)
+    return jsonify(result)
+
+
+@api_bp.route('/notes/<note_id>/permissions')
+def api_get_note_permissions(note_id):
+    """Get permissions info for a note.
+
+    Query params:
+    - device_id: The device to check permissions for
+    """
+    device_id = request.args.get('device_id')
+    if not device_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    note = get_note(note_id)
+    if not note:
+        return jsonify({"error": "Note not found"}), 404
+
+    # Get the full note data to check permissions
+    from ..services.data_service import _read_json_file, NOTES_FILE
+    data = _read_json_file(NOTES_FILE)
+    if data:
+        for dev_id, device_info in data.get("devices", {}).items():
+            for n in device_info.get("notes", []):
+                if n.get("id") == note_id:
+                    permission = get_permission_level(n, device_id)
+                    return jsonify({
+                        "note_id": note_id,
+                        "device_id": device_id,
+                        "permission": permission,
+                        "can_view": permission in ("owner", "full", "edit", "view"),
+                        "can_edit": permission in ("owner", "full", "edit"),
+                        "can_delete": permission in ("owner", "full"),
+                        "can_share": permission == "owner",
+                        "owner_device": n.get("owner_device"),
+                        "shared_with": n.get("shared_with", [])
+                    })
+
+    return jsonify({"error": "Note not found"}), 404
+
+
+@api_bp.route('/projects/<project_id>/permissions')
+def api_get_project_permissions(project_id):
+    """Get permissions info for a project."""
+    device_id = request.args.get('device_id')
+    if not device_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    project = get_project(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+
+    from ..services.data_service import _read_json_file, PROJECTS_FILE
+    data = _read_json_file(PROJECTS_FILE)
+    if data:
+        for dev_id, device_info in data.get("devices", {}).items():
+            for p in device_info.get("projects", []):
+                if p.get("id") == project_id or p.get("path") == project_id:
+                    permission = get_permission_level(p, device_id)
+                    return jsonify({
+                        "project_id": project_id,
+                        "device_id": device_id,
+                        "permission": permission,
+                        "can_view": permission in ("owner", "full", "edit", "view"),
+                        "can_edit": permission in ("owner", "full", "edit"),
+                        "can_delete": permission in ("owner", "full"),
+                        "can_share": permission == "owner",
+                        "owner_device": p.get("owner_device"),
+                        "shared_with": p.get("shared_with", [])
+                    })
+
+    return jsonify({"error": "Project not found"}), 404
