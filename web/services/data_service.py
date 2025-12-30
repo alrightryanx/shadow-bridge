@@ -18,6 +18,7 @@ AUTOMATIONS_FILE = SHADOWAI_DIR / "automations.json"
 AGENTS_FILE = SHADOWAI_DIR / "agents.json"
 ANALYTICS_FILE = SHADOWAI_DIR / "analytics.json"
 SYNC_KEYS_FILE = SHADOWAI_DIR / "sync_keys.json"
+EMAILS_FILE = SHADOWAI_DIR / "emails.json"
 
 # Note encryption constants (must match Android SyncEncryption.kt)
 SYNC_ENC_PREFIX = "SYNC_ENC:"
@@ -2006,3 +2007,280 @@ def delete_project_with_permission(project_id: str, requesting_device: str) -> D
                 return {"success": True}
 
     return {"error": "Project not found"}
+
+
+# ============ Email Verification ============
+
+import random
+import string
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# Verification code settings
+VERIFICATION_CODE_LENGTH = 6
+VERIFICATION_CODE_EXPIRY_SECONDS = 600  # 10 minutes
+
+# Email configuration file
+EMAIL_CONFIG_FILE = SHADOWAI_DIR / "email_config.json"
+
+
+def _generate_verification_code() -> str:
+    """Generate a random 6-digit verification code."""
+    return ''.join(random.choices(string.digits, k=VERIFICATION_CODE_LENGTH))
+
+
+def _get_email_config() -> Optional[Dict]:
+    """Get SMTP email configuration."""
+    return _read_json_file(EMAIL_CONFIG_FILE)
+
+
+def set_email_config(smtp_host: str, smtp_port: int, smtp_user: str,
+                     smtp_password: str, from_email: str) -> Dict:
+    """Configure SMTP settings for sending verification emails."""
+    config = {
+        "smtp_host": smtp_host,
+        "smtp_port": smtp_port,
+        "smtp_user": smtp_user,
+        "smtp_password": smtp_password,
+        "from_email": from_email
+    }
+    if _write_json_file(EMAIL_CONFIG_FILE, config):
+        return {"success": True}
+    return {"error": "Failed to save email configuration"}
+
+
+def request_email_verification(email: str, device_id: str) -> Dict:
+    """Request email verification - generates code and sends email.
+
+    Args:
+        email: Email address to verify
+        device_id: Device requesting verification
+
+    Returns:
+        {"success": True, "message": "..."} or {"error": "..."}
+    """
+    if not email or '@' not in email:
+        return {"error": "Invalid email address"}
+
+    email = email.lower().strip()
+
+    # Check if email is already verified for this device
+    emails_data = _read_json_file(EMAILS_FILE) or {
+        "verified_emails": {},
+        "pending_verifications": {}
+    }
+
+    verified = emails_data.get("verified_emails", {})
+    if device_id in verified and verified[device_id].get("email") == email:
+        return {"error": "Email already verified for this device"}
+
+    # Generate verification code
+    code = _generate_verification_code()
+    expires_at = datetime.now().timestamp() + VERIFICATION_CODE_EXPIRY_SECONDS
+
+    # Store pending verification
+    if "pending_verifications" not in emails_data:
+        emails_data["pending_verifications"] = {}
+
+    emails_data["pending_verifications"][email] = {
+        "code": code,
+        "device_id": device_id,
+        "expires_at": expires_at,
+        "created_at": datetime.now().timestamp()
+    }
+
+    _write_json_file(EMAILS_FILE, emails_data)
+
+    # Try to send email
+    email_sent = _send_verification_email(email, code)
+
+    if email_sent:
+        return {
+            "success": True,
+            "message": f"Verification code sent to {email}",
+            "expires_in_seconds": VERIFICATION_CODE_EXPIRY_SECONDS
+        }
+    else:
+        # Email not configured - return code for manual testing
+        # In production, you'd want to fail here
+        return {
+            "success": True,
+            "message": "Email service not configured. Code generated for testing.",
+            "code": code,  # Only for development/testing
+            "expires_in_seconds": VERIFICATION_CODE_EXPIRY_SECONDS
+        }
+
+
+def _send_verification_email(to_email: str, code: str) -> bool:
+    """Send verification email via SMTP.
+
+    Returns True if email was sent, False if email is not configured.
+    """
+    config = _get_email_config()
+    if not config:
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = config.get('from_email', config.get('smtp_user'))
+        msg['To'] = to_email
+        msg['Subject'] = 'ShadowAI - Email Verification Code'
+
+        body = f"""
+Your ShadowAI verification code is:
+
+    {code}
+
+This code expires in 10 minutes.
+
+If you didn't request this, you can ignore this email.
+
+- ShadowAI Team
+"""
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP(config['smtp_host'], config['smtp_port'])
+        server.starttls()
+        server.login(config['smtp_user'], config['smtp_password'])
+        server.send_message(msg)
+        server.quit()
+
+        return True
+    except Exception as e:
+        print(f"Failed to send verification email: {e}")
+        return False
+
+
+def verify_email_code(email: str, code: str, device_id: str) -> Dict:
+    """Verify the email code and mark email as verified.
+
+    Args:
+        email: Email address being verified
+        code: Verification code entered by user
+        device_id: Device requesting verification
+
+    Returns:
+        {"success": True} or {"error": "..."}
+    """
+    email = email.lower().strip()
+
+    emails_data = _read_json_file(EMAILS_FILE)
+    if not emails_data:
+        return {"error": "No pending verifications"}
+
+    pending = emails_data.get("pending_verifications", {}).get(email)
+    if not pending:
+        return {"error": "No pending verification for this email"}
+
+    # Check expiry
+    if datetime.now().timestamp() > pending.get("expires_at", 0):
+        # Clean up expired verification
+        del emails_data["pending_verifications"][email]
+        _write_json_file(EMAILS_FILE, emails_data)
+        return {"error": "Verification code expired. Please request a new one."}
+
+    # Check code
+    if pending.get("code") != code:
+        return {"error": "Invalid verification code"}
+
+    # Check device
+    if pending.get("device_id") != device_id:
+        return {"error": "Verification was requested from a different device"}
+
+    # Get device name
+    device = get_device(device_id)
+    device_name = device.get("name", device_id) if device else device_id
+
+    # Mark as verified
+    if "verified_emails" not in emails_data:
+        emails_data["verified_emails"] = {}
+
+    emails_data["verified_emails"][device_id] = {
+        "email": email,
+        "verified_at": datetime.now().timestamp(),
+        "device_name": device_name
+    }
+
+    # Clean up pending verification
+    del emails_data["pending_verifications"][email]
+
+    _write_json_file(EMAILS_FILE, emails_data)
+
+    return {"success": True, "email": email}
+
+
+def get_verified_email(device_id: str) -> Optional[str]:
+    """Get the verified email for a device."""
+    emails_data = _read_json_file(EMAILS_FILE)
+    if not emails_data:
+        return None
+
+    verified = emails_data.get("verified_emails", {}).get(device_id)
+    if verified:
+        return verified.get("email")
+    return None
+
+
+def get_all_verified_emails() -> List[Dict]:
+    """Get all verified emails with device info."""
+    emails_data = _read_json_file(EMAILS_FILE)
+    if not emails_data:
+        return []
+
+    verified = emails_data.get("verified_emails", {})
+    result = []
+
+    for device_id, info in verified.items():
+        result.append({
+            "device_id": device_id,
+            "email": info.get("email"),
+            "verified_at": info.get("verified_at"),
+            "verified_at_formatted": _format_timestamp(int(info.get("verified_at", 0) * 1000)),
+            "device_name": info.get("device_name", device_id)
+        })
+
+    return result
+
+
+def remove_verified_email(device_id: str) -> Dict:
+    """Remove verified email for a device."""
+    emails_data = _read_json_file(EMAILS_FILE)
+    if not emails_data:
+        return {"error": "No verified emails"}
+
+    verified = emails_data.get("verified_emails", {})
+    if device_id not in verified:
+        return {"error": "No verified email for this device"}
+
+    del verified[device_id]
+    emails_data["verified_emails"] = verified
+    _write_json_file(EMAILS_FILE, emails_data)
+
+    return {"success": True}
+
+
+def get_devices_by_email(email: str) -> List[Dict]:
+    """Get all devices that have verified a specific email.
+
+    Useful for finding all devices belonging to a user.
+    """
+    email = email.lower().strip()
+    emails_data = _read_json_file(EMAILS_FILE)
+    if not emails_data:
+        return []
+
+    verified = emails_data.get("verified_emails", {})
+    devices = []
+
+    for device_id, info in verified.items():
+        if info.get("email") == email:
+            device = get_device(device_id)
+            devices.append({
+                "device_id": device_id,
+                "device_name": info.get("device_name", device_id),
+                "verified_at": info.get("verified_at"),
+                "is_online": device.get("status") == "online" if device else False
+            })
+
+    return devices

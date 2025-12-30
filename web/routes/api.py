@@ -7,8 +7,10 @@ import socket
 import json
 import os
 import time
-from functools import lru_cache
+import logging
+from functools import lru_cache, wraps
 from threading import Lock
+from collections import defaultdict
 
 from ..services.data_service import (
     get_note_content as get_cached_note_content,
@@ -31,10 +33,101 @@ from ..services.data_service import (
     get_status,
     # Ownership & Sharing
     share_note, unshare_note, share_project, unshare_project,
-    get_shared_content_for_device, get_permission_level
+    get_shared_content_for_device, get_permission_level,
+    # Email Verification
+    request_email_verification, verify_email_code,
+    get_verified_email, get_all_verified_emails, remove_verified_email,
+    get_devices_by_email, set_email_config
 )
 
 api_bp = Blueprint('api', __name__)
+
+# Logger for API errors
+logger = logging.getLogger(__name__)
+
+# ============ Rate Limiting ============
+
+class RateLimiter:
+    """Simple in-memory rate limiter using sliding window."""
+
+    def __init__(self, requests_per_minute: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.window_seconds = 60
+        self.requests = defaultdict(list)
+        self.lock = Lock()
+
+    def is_allowed(self, key: str) -> bool:
+        """Check if request is allowed and record it."""
+        with self.lock:
+            now = time.time()
+            window_start = now - self.window_seconds
+
+            # Clean up old requests
+            self.requests[key] = [t for t in self.requests[key] if t > window_start]
+
+            # Check limit
+            if len(self.requests[key]) >= self.requests_per_minute:
+                return False
+
+            # Record request
+            self.requests[key].append(now)
+            return True
+
+    def get_remaining(self, key: str) -> int:
+        """Get remaining requests in current window."""
+        with self.lock:
+            now = time.time()
+            window_start = now - self.window_seconds
+            recent = [t for t in self.requests[key] if t > window_start]
+            return max(0, self.requests_per_minute - len(recent))
+
+
+# Global rate limiter instance
+_rate_limiter = RateLimiter(requests_per_minute=120)
+
+
+def rate_limit(f):
+    """Decorator to apply rate limiting to an endpoint."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Use client IP as rate limit key
+        client_ip = request.remote_addr or "unknown"
+
+        if not _rate_limiter.is_allowed(client_ip):
+            return jsonify({
+                "error": "Rate limit exceeded",
+                "retry_after": 60
+            }), 429
+
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def api_error_handler(f):
+    """Decorator to provide consistent error handling for API endpoints."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except socket.timeout:
+            logger.warning(f"Timeout in {f.__name__}")
+            return jsonify({"error": "Device connection timeout"}), 504
+        except ConnectionRefusedError:
+            logger.warning(f"Connection refused in {f.__name__}")
+            return jsonify({"error": "Device not accepting connections"}), 503
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON decode error in {f.__name__}: {e}")
+            return jsonify({"error": "Invalid JSON data"}), 400
+        except ValueError as e:
+            logger.warning(f"Value error in {f.__name__}: {e}")
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            logger.exception(f"Unexpected error in {f.__name__}")
+            return jsonify({"error": "Internal server error"}), 500
+    return decorated_function
+
+
+# ============ Note Content Cache ============
 
 # Note content cache for faster repeated access
 # Key: note_id, Value: (content_dict, timestamp)
@@ -1383,3 +1476,134 @@ def api_get_project_permissions(project_id):
                     })
 
     return jsonify({"error": "Project not found"}), 404
+
+
+# ============ Email Verification ============
+
+@api_bp.route('/email/verify/request', methods=['POST'])
+def api_request_email_verification():
+    """Request email verification - sends code to email.
+
+    Request body:
+    {
+        "email": "user@example.com",
+        "device_id": "device_fingerprint"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    email = data.get('email')
+    device_id = data.get('device_id')
+
+    if not email:
+        return jsonify({"error": "email is required"}), 400
+    if not device_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    result = request_email_verification(email, device_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@api_bp.route('/email/verify/confirm', methods=['POST'])
+def api_verify_email_code():
+    """Verify the email code.
+
+    Request body:
+    {
+        "email": "user@example.com",
+        "code": "123456",
+        "device_id": "device_fingerprint"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    email = data.get('email')
+    code = data.get('code')
+    device_id = data.get('device_id')
+
+    if not email or not code or not device_id:
+        return jsonify({"error": "email, code, and device_id are required"}), 400
+
+    result = verify_email_code(email, code, device_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@api_bp.route('/email/verified')
+def api_get_all_verified_emails():
+    """Get all verified emails."""
+    return jsonify({"emails": get_all_verified_emails()})
+
+
+@api_bp.route('/email/verified/<device_id>')
+def api_get_verified_email(device_id):
+    """Get verified email for a specific device."""
+    email = get_verified_email(device_id)
+    if email:
+        return jsonify({"device_id": device_id, "email": email})
+    return jsonify({"device_id": device_id, "email": None})
+
+
+@api_bp.route('/email/verified/<device_id>', methods=['DELETE'])
+def api_remove_verified_email(device_id):
+    """Remove verified email for a device."""
+    result = remove_verified_email(device_id)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@api_bp.route('/email/devices')
+def api_get_devices_by_email():
+    """Get all devices that have verified a specific email.
+
+    Query params:
+    - email: The email address to look up
+    """
+    email = request.args.get('email')
+    if not email:
+        return jsonify({"error": "email is required"}), 400
+
+    devices = get_devices_by_email(email)
+    return jsonify({"email": email, "devices": devices})
+
+
+@api_bp.route('/email/config', methods=['POST'])
+def api_set_email_config():
+    """Configure SMTP settings for sending emails.
+
+    Request body:
+    {
+        "smtp_host": "smtp.gmail.com",
+        "smtp_port": 587,
+        "smtp_user": "user@gmail.com",
+        "smtp_password": "app_password",
+        "from_email": "noreply@shadowai.app"
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'from_email']
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"{field} is required"}), 400
+
+    result = set_email_config(
+        data['smtp_host'],
+        data['smtp_port'],
+        data['smtp_user'],
+        data['smtp_password'],
+        data['from_email']
+    )
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)

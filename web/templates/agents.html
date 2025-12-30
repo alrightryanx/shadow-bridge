@@ -51,67 +51,146 @@
 
 {% block scripts %}
 <script>
+// Refresh interval for auto-updates (30 seconds)
+const REFRESH_INTERVAL_MS = 30000;
+// Maximum retry attempts
+const MAX_RETRIES = 3;
+// Delay between retries (exponential backoff base)
+const RETRY_DELAY_MS = 1000;
+
+let refreshTimer = null;
+let isLoading = false;
+
 document.addEventListener('DOMContentLoaded', function() {
-    loadAgents();
-    loadMetrics();
+    loadAll();
+    // Start auto-refresh
+    refreshTimer = setInterval(loadAll, REFRESH_INTERVAL_MS);
 });
 
+// Cleanup on page unload
+window.addEventListener('beforeunload', function() {
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+    }
+});
+
+async function loadAll() {
+    if (isLoading) return; // Prevent concurrent loads
+    isLoading = true;
+
+    try {
+        await Promise.all([
+            loadAgents(),
+            loadMetrics()
+        ]);
+    } finally {
+        isLoading = false;
+    }
+}
+
+async function fetchWithRetry(fetchFn, retries = MAX_RETRIES) {
+    let lastError;
+    for (let attempt = 0; attempt < retries; attempt++) {
+        try {
+            return await fetchFn();
+        } catch (error) {
+            lastError = error;
+            console.warn(`Attempt ${attempt + 1} failed:`, error.message);
+            if (attempt < retries - 1) {
+                // Exponential backoff
+                await new Promise(resolve =>
+                    setTimeout(resolve, RETRY_DELAY_MS * Math.pow(2, attempt))
+                );
+            }
+        }
+    }
+    throw lastError;
+}
+
 async function loadAgents() {
-    const agents = await api.getAgents();
     const container = document.getElementById('agents-container');
 
-    if (agents.length === 0) {
-        container.innerHTML = '<div class="empty-state">No agents configured</div>';
-        return;
+    try {
+        const agents = await fetchWithRetry(() => api.getAgents());
+
+        if (!agents || agents.length === 0) {
+            container.innerHTML = '<div class="empty-state">No agents configured</div>';
+            updateActiveTasks([]);
+            return;
+        }
+
+        container.innerHTML = agents.map(a => `
+            <div class="agent-card" data-agent-id="${escapeHtml(a.id || '')}">
+                <div class="agent-header">
+                    <div class="agent-avatar">${(a.name || '?').charAt(0)}</div>
+                    <div class="agent-info">
+                        <div class="agent-name">${escapeHtml(a.name || 'Unknown')}</div>
+                        <span class="status-badge ${escapeHtml(a.status || 'unknown')}">${escapeHtml(a.status || 'unknown')}</span>
+                    </div>
+                </div>
+                <div class="agent-specialty">${escapeHtml(a.specialty || 'General purpose')}</div>
+                ${a.current_task ? `
+                    <div class="agent-task">
+                        <span class="task-label">Current:</span>
+                        <span class="task-name">${escapeHtml(a.current_task)}</span>
+                    </div>
+                ` : ''}
+                <div class="agent-stats">
+                    <span>${a.tasks_completed || 0} tasks completed</span>
+                </div>
+            </div>
+        `).join('');
+
+        // Update active tasks
+        const activeTasks = agents
+            .filter(a => a.current_task)
+            .map(a => ({
+                agent: a.name,
+                task: a.current_task
+            }));
+        updateActiveTasks(activeTasks);
+
+    } catch (error) {
+        console.error('Failed to load agents:', error);
+        container.innerHTML = `
+            <div class="error-state">
+                <span class="error-icon">!</span>
+                <span class="error-message">Failed to load agents</span>
+                <button class="retry-btn" onclick="loadAgents()">Retry</button>
+            </div>
+        `;
     }
+}
 
-    container.innerHTML = agents.map(a => `
-        <div class="agent-card">
-            <div class="agent-header">
-                <div class="agent-avatar">${a.name.charAt(0)}</div>
-                <div class="agent-info">
-                    <div class="agent-name">${escapeHtml(a.name)}</div>
-                    <span class="status-badge ${a.status}">${a.status}</span>
-                </div>
-            </div>
-            <div class="agent-specialty">${escapeHtml(a.specialty || 'General purpose')}</div>
-            ${a.current_task ? `
-                <div class="agent-task">
-                    <span class="task-label">Current:</span>
-                    <span class="task-name">${escapeHtml(a.current_task)}</span>
-                </div>
-            ` : ''}
-            <div class="agent-stats">
-                <span>${a.tasks_completed} tasks completed</span>
-            </div>
-        </div>
-    `).join('');
-
-    // Update active tasks
-    const activeTasks = agents.filter(a => a.current_task).map(a => ({
-        agent: a.name,
-        task: a.current_task
-    }));
-
+function updateActiveTasks(activeTasks) {
     const tasksContainer = document.getElementById('active-tasks');
-    if (activeTasks.length === 0) {
+    if (!activeTasks || activeTasks.length === 0) {
         tasksContainer.innerHTML = '<div class="empty-state">No active tasks</div>';
     } else {
         tasksContainer.innerHTML = activeTasks.map(t => `
             <div class="task-item">
-                <span class="task-agent">${escapeHtml(t.agent)}</span>
-                <span class="task-name">${escapeHtml(t.task)}</span>
+                <span class="task-agent">${escapeHtml(t.agent || 'Unknown')}</span>
+                <span class="task-name">${escapeHtml(t.task || 'Unknown task')}</span>
             </div>
         `).join('');
     }
 }
 
 async function loadMetrics() {
-    const metrics = await api.getAgentMetrics();
-    document.getElementById('total-agents').textContent = metrics.total_agents || 0;
-    document.getElementById('active-agents').textContent = metrics.active_agents || 0;
-    document.getElementById('idle-agents').textContent = metrics.idle_agents || 0;
-    document.getElementById('tasks-completed').textContent = metrics.total_tasks_completed || 0;
+    try {
+        const metrics = await fetchWithRetry(() => api.getAgentMetrics());
+        document.getElementById('total-agents').textContent = metrics.total_agents || 0;
+        document.getElementById('active-agents').textContent = metrics.active_agents || 0;
+        document.getElementById('idle-agents').textContent = metrics.idle_agents || 0;
+        document.getElementById('tasks-completed').textContent = metrics.total_tasks_completed || 0;
+    } catch (error) {
+        console.error('Failed to load metrics:', error);
+        // Show error indicator but don't replace existing values
+        document.getElementById('total-agents').textContent = '-';
+        document.getElementById('active-agents').textContent = '-';
+        document.getElementById('idle-agents').textContent = '-';
+        document.getElementById('tasks-completed').textContent = '-';
+    }
 }
 </script>
 {% endblock %}
