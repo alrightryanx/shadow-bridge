@@ -2551,8 +2551,6 @@ class ShadowBridgeApp:
         )
         self.broadcast_status_label.pack(anchor='e')
 
-        add_divider(left_inner, 6, 12)
-
         # QR Code card - elevated with subtle border
         qr_card = tk.Frame(left_inner, bg=COLORS['bg_card'], padx=16, pady=12)
         qr_card.pack(fill=tk.X, pady=(0, 10))
@@ -2668,7 +2666,7 @@ class ShadowBridgeApp:
                 if b.cget('text') == 'Install':
                     b.configure(bg=COLORS['accent_hover'], fg='white')
                 elif b.cget('text') == 'Uninstall':
-                    b.configure(bg='#ff4444', fg='white')
+                    b.configure(bg=COLORS['accent_hover'], fg='white')
             def on_leave(e, b=btn):
                 if b.cget('text') == 'Install':
                     b.configure(bg=COLORS['bg_elevated'], fg=COLORS['text'])
@@ -2705,8 +2703,18 @@ class ShadowBridgeApp:
             command=self.install_tailscale
         )
         self.tailscale_btn.pack(side=tk.RIGHT)
-        self.tailscale_btn.bind('<Enter>', lambda e: self.tailscale_btn.configure(bg=COLORS['accent'], fg='white'))
-        self.tailscale_btn.bind('<Leave>', lambda e: self.tailscale_btn.configure(bg=COLORS['bg_elevated'], fg=COLORS['text']) if self.tailscale_btn.cget('text') == 'Install' else None)
+        def ts_on_enter(e):
+            if self.tailscale_btn.cget('text') == 'Install':
+                self.tailscale_btn.configure(bg=COLORS['accent_hover'], fg='white')
+            else:
+                self.tailscale_btn.configure(bg=COLORS['accent_hover'], fg='white')
+        def ts_on_leave(e):
+            if self.tailscale_btn.cget('text') == 'Install':
+                self.tailscale_btn.configure(bg=COLORS['bg_elevated'], fg=COLORS['text'])
+            else:
+                self.tailscale_btn.configure(bg=COLORS['accent'], fg='white')
+        self.tailscale_btn.bind('<Enter>', ts_on_enter)
+        self.tailscale_btn.bind('<Leave>', ts_on_leave)
 
         # Check tool status
         self.root.after(300, self.check_tools)
