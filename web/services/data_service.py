@@ -806,17 +806,44 @@ def get_team(team_id: str) -> Optional[Dict]:
     return None
 
 
-def create_team(data: Dict) -> Dict:
-    """Create a new team."""
-    file_data = _read_json_file(TEAMS_FILE) or {"teams": []}
+def create_team(data: Dict, owner_email: Optional[str] = None, owner_device: Optional[str] = None) -> Dict:
+    """Create a new team with email-based membership.
+
+    Args:
+        data: Team data (name, description)
+        owner_email: Email of the team owner (optional but recommended)
+        owner_device: Device ID of the team owner
+
+    Returns:
+        {"success": True, "team": {...}} or {"error": "..."}
+    """
+    file_data = _read_json_file(TEAMS_FILE) or {"teams": [], "invitations": []}
+
+    team_id = _generate_id()
+    timestamp = int(datetime.now().timestamp() * 1000)
+
     team = {
-        "id": _generate_id(),
+        "id": team_id,
         "name": data.get("name", "New Team"),
         "description": data.get("description", ""),
         "agents": [],
         "status": "ACTIVE",
-        "created_at": int(datetime.now().timestamp() * 1000)
+        "created_at": timestamp,
+        # Email-based membership
+        "owner_email": owner_email,
+        "owner_device": owner_device,
+        "members": [
+            {
+                "email": owner_email,
+                "device_id": owner_device,
+                "role": "owner",  # owner, admin, member
+                "joined_at": timestamp
+            }
+        ] if owner_email or owner_device else []
     }
+
+    if "teams" not in file_data:
+        file_data["teams"] = []
     file_data["teams"].append(team)
     _write_json_file(TEAMS_FILE, file_data)
     return {"success": True, "team": team}
@@ -854,6 +881,359 @@ def get_team_metrics() -> Dict:
         "pending_tasks": len([t for t in tasks if t.get("status") == "PENDING"]),
         "completed_tasks": len([t for t in tasks if t.get("status") == "COMPLETED"])
     }
+
+
+# ============ Team Membership ============
+
+TEAM_INVITATION_EXPIRY_SECONDS = 7 * 24 * 60 * 60  # 7 days
+
+
+def invite_team_member(team_id: str, inviter_email: str, invitee_email: str, role: str = "member") -> Dict:
+    """Invite a user to a team by email.
+
+    Args:
+        team_id: Team to invite to
+        inviter_email: Email of the person inviting (must be owner/admin)
+        invitee_email: Email to invite
+        role: Role to assign (member, admin)
+
+    Returns:
+        {"success": True, "invitation_code": "..."} or {"error": "..."}
+    """
+    if role not in ("member", "admin"):
+        return {"error": "Invalid role. Use 'member' or 'admin'."}
+
+    invitee_email = invitee_email.lower().strip()
+    inviter_email = inviter_email.lower().strip()
+
+    file_data = _read_json_file(TEAMS_FILE) or {"teams": [], "invitations": []}
+
+    # Find team and check permissions
+    team = None
+    for t in file_data.get("teams", []):
+        if t.get("id") == team_id:
+            team = t
+            break
+
+    if not team:
+        return {"error": "Team not found"}
+
+    # Check if inviter has permission
+    inviter_role = None
+    for member in team.get("members", []):
+        if member.get("email") == inviter_email:
+            inviter_role = member.get("role")
+            break
+
+    if inviter_role not in ("owner", "admin"):
+        return {"error": "Only owners and admins can invite members"}
+
+    # Check if already a member
+    for member in team.get("members", []):
+        if member.get("email") == invitee_email:
+            return {"error": "User is already a team member"}
+
+    # Generate invitation code
+    invitation_code = _generate_id()[:8].upper()
+    expires_at = datetime.now().timestamp() + TEAM_INVITATION_EXPIRY_SECONDS
+
+    if "invitations" not in file_data:
+        file_data["invitations"] = []
+
+    # Remove any existing invitation for this email/team
+    file_data["invitations"] = [
+        inv for inv in file_data["invitations"]
+        if not (inv.get("team_id") == team_id and inv.get("email") == invitee_email)
+    ]
+
+    # Add new invitation
+    file_data["invitations"].append({
+        "code": invitation_code,
+        "team_id": team_id,
+        "team_name": team.get("name"),
+        "email": invitee_email,
+        "role": role,
+        "inviter_email": inviter_email,
+        "created_at": datetime.now().timestamp(),
+        "expires_at": expires_at
+    })
+
+    _write_json_file(TEAMS_FILE, file_data)
+
+    # Try to send invitation email
+    _send_team_invitation_email(invitee_email, team.get("name"), inviter_email, invitation_code)
+
+    return {
+        "success": True,
+        "invitation_code": invitation_code,
+        "message": f"Invitation sent to {invitee_email}"
+    }
+
+
+def _send_team_invitation_email(to_email: str, team_name: str, inviter_email: str, code: str) -> bool:
+    """Send team invitation email."""
+    config = _get_email_config()
+    if not config:
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = config.get('from_email', config.get('smtp_user'))
+        msg['To'] = to_email
+        msg['Subject'] = f'ShadowAI - Team Invitation: {team_name}'
+
+        body = f"""
+You've been invited to join a team on ShadowAI!
+
+Team: {team_name}
+Invited by: {inviter_email}
+
+Your invitation code: {code}
+
+To accept, enter this code in the ShadowAI app or web dashboard.
+This invitation expires in 7 days.
+
+If you didn't expect this invitation, you can ignore this email.
+
+- ShadowAI Team
+"""
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP(config['smtp_host'], config['smtp_port'])
+        server.starttls()
+        server.login(config['smtp_user'], config['smtp_password'])
+        server.send_message(msg)
+        server.quit()
+
+        return True
+    except Exception as e:
+        print(f"Failed to send team invitation email: {e}")
+        return False
+
+
+def accept_team_invitation(invitation_code: str, accepter_email: str, accepter_device: Optional[str] = None) -> Dict:
+    """Accept a team invitation.
+
+    Args:
+        invitation_code: The invitation code
+        accepter_email: Email of the user accepting
+        accepter_device: Device ID of the accepter (optional)
+
+    Returns:
+        {"success": True, "team": {...}} or {"error": "..."}
+    """
+    accepter_email = accepter_email.lower().strip()
+    invitation_code = invitation_code.upper().strip()
+
+    file_data = _read_json_file(TEAMS_FILE) or {"teams": [], "invitations": []}
+
+    # Find invitation
+    invitation = None
+    for inv in file_data.get("invitations", []):
+        if inv.get("code") == invitation_code:
+            invitation = inv
+            break
+
+    if not invitation:
+        return {"error": "Invalid invitation code"}
+
+    # Check expiry
+    if datetime.now().timestamp() > invitation.get("expires_at", 0):
+        return {"error": "Invitation has expired"}
+
+    # Check email matches (or any verified email for the device)
+    if invitation.get("email") != accepter_email:
+        return {"error": "This invitation was sent to a different email address"}
+
+    # Find team
+    team = None
+    team_index = None
+    for i, t in enumerate(file_data.get("teams", [])):
+        if t.get("id") == invitation.get("team_id"):
+            team = t
+            team_index = i
+            break
+
+    if not team:
+        return {"error": "Team no longer exists"}
+
+    # Add member to team
+    if "members" not in team:
+        team["members"] = []
+
+    team["members"].append({
+        "email": accepter_email,
+        "device_id": accepter_device,
+        "role": invitation.get("role", "member"),
+        "joined_at": int(datetime.now().timestamp() * 1000)
+    })
+
+    file_data["teams"][team_index] = team
+
+    # Remove the invitation
+    file_data["invitations"] = [
+        inv for inv in file_data["invitations"]
+        if inv.get("code") != invitation_code
+    ]
+
+    _write_json_file(TEAMS_FILE, file_data)
+
+    return {"success": True, "team": team}
+
+
+def get_pending_invitations(email: str) -> List[Dict]:
+    """Get pending team invitations for an email."""
+    email = email.lower().strip()
+    file_data = _read_json_file(TEAMS_FILE) or {"teams": [], "invitations": []}
+
+    now = datetime.now().timestamp()
+    invitations = []
+
+    for inv in file_data.get("invitations", []):
+        if inv.get("email") == email and inv.get("expires_at", 0) > now:
+            invitations.append({
+                "code": inv.get("code"),
+                "team_id": inv.get("team_id"),
+                "team_name": inv.get("team_name"),
+                "role": inv.get("role"),
+                "inviter_email": inv.get("inviter_email"),
+                "expires_at": inv.get("expires_at")
+            })
+
+    return invitations
+
+
+def remove_team_member(team_id: str, remover_email: str, member_email: str) -> Dict:
+    """Remove a member from a team.
+
+    Args:
+        team_id: Team ID
+        remover_email: Email of person removing (must be owner/admin)
+        member_email: Email of member to remove
+
+    Returns:
+        {"success": True} or {"error": "..."}
+    """
+    remover_email = remover_email.lower().strip()
+    member_email = member_email.lower().strip()
+
+    file_data = _read_json_file(TEAMS_FILE) or {"teams": [], "invitations": []}
+
+    # Find team
+    team = None
+    team_index = None
+    for i, t in enumerate(file_data.get("teams", [])):
+        if t.get("id") == team_id:
+            team = t
+            team_index = i
+            break
+
+    if not team:
+        return {"error": "Team not found"}
+
+    # Check permissions
+    remover_role = None
+    member_role = None
+    for member in team.get("members", []):
+        if member.get("email") == remover_email:
+            remover_role = member.get("role")
+        if member.get("email") == member_email:
+            member_role = member.get("role")
+
+    if remover_role not in ("owner", "admin"):
+        return {"error": "Only owners and admins can remove members"}
+
+    if member_role == "owner":
+        return {"error": "Cannot remove the team owner"}
+
+    if member_role == "admin" and remover_role != "owner":
+        return {"error": "Only owners can remove admins"}
+
+    # Remove member
+    team["members"] = [m for m in team.get("members", []) if m.get("email") != member_email]
+    file_data["teams"][team_index] = team
+    _write_json_file(TEAMS_FILE, file_data)
+
+    return {"success": True}
+
+
+def get_teams_for_email(email: str) -> List[Dict]:
+    """Get all teams a user is a member of."""
+    email = email.lower().strip()
+    teams = get_teams()
+
+    user_teams = []
+    for team in teams:
+        for member in team.get("members", []):
+            if member.get("email") == email:
+                user_teams.append({
+                    **team,
+                    "my_role": member.get("role")
+                })
+                break
+
+    return user_teams
+
+
+def update_team_member_role(team_id: str, updater_email: str, member_email: str, new_role: str) -> Dict:
+    """Update a team member's role.
+
+    Args:
+        team_id: Team ID
+        updater_email: Email of person updating (must be owner)
+        member_email: Email of member to update
+        new_role: New role (admin, member)
+
+    Returns:
+        {"success": True} or {"error": "..."}
+    """
+    if new_role not in ("admin", "member"):
+        return {"error": "Invalid role. Use 'admin' or 'member'."}
+
+    updater_email = updater_email.lower().strip()
+    member_email = member_email.lower().strip()
+
+    file_data = _read_json_file(TEAMS_FILE) or {"teams": [], "invitations": []}
+
+    # Find team
+    team = None
+    team_index = None
+    for i, t in enumerate(file_data.get("teams", [])):
+        if t.get("id") == team_id:
+            team = t
+            team_index = i
+            break
+
+    if not team:
+        return {"error": "Team not found"}
+
+    # Check permissions - only owner can change roles
+    updater_role = None
+    for member in team.get("members", []):
+        if member.get("email") == updater_email:
+            updater_role = member.get("role")
+            break
+
+    if updater_role != "owner":
+        return {"error": "Only the team owner can change roles"}
+
+    # Update member role
+    found = False
+    for member in team.get("members", []):
+        if member.get("email") == member_email:
+            if member.get("role") == "owner":
+                return {"error": "Cannot change the owner's role"}
+            member["role"] = new_role
+            found = True
+            break
+
+    if not found:
+        return {"error": "Member not found in team"}
+
+    file_data["teams"][team_index] = team
+    _write_json_file(TEAMS_FILE, file_data)
+
+    return {"success": True}
 
 
 # ============ Tasks ============
