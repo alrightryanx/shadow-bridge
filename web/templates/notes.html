@@ -278,10 +278,15 @@ function closeCreateNoteModal() {
 async function confirmDeleteNote(noteId, title, event) {
     if (event) event.stopPropagation();
 
-    if (confirm(`Delete "${title}"?\n\nThis will remove the note from the dashboard. If the note still exists on your device, it may reappear after the next sync.`)) {
+    if (confirm(`Delete "${title}"?\n\nThis will permanently delete the note from your device.`)) {
         const result = await api.deleteNote(noteId);
         if (result.success) {
-            showToast('Note deleted', 'success');
+            if (result.warning) {
+                // Deleted locally but device was offline
+                showToast(result.warning, 'warning');
+            } else {
+                showToast('Note deleted', 'success');
+            }
             loadNotes();
         } else {
             showToast('Failed to delete: ' + (result.error || 'Unknown error'), 'error');

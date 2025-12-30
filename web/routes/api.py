@@ -492,13 +492,79 @@ def api_update_note_content(note_id):
 
 @api_bp.route('/notes/<note_id>', methods=['DELETE'])
 def api_delete_note(note_id):
-    """Delete a note from the local cache."""
+    """Delete a note from the device and local cache."""
     from ..services.data_service import delete_note
-    result = delete_note(note_id)
-    if result.get("success"):
-        return jsonify({"success": True})
+
+    # Get note info to find device
+    note = get_note(note_id)
+    if not note:
+        return jsonify({"error": "Note not found"}), 404
+
+    # Gather device IPs
+    device_ip = note.get("device_ip")
+    device_id = note.get("device_id")
+    note_port = note.get("note_content_port")
+    device_ips = []
+    note_ips = note.get("device_ips", [])
+    if isinstance(note_ips, list):
+        for candidate in note_ips:
+            if isinstance(candidate, str) and candidate:
+                device_ips.append(candidate)
+    if device_ip:
+        device_ips.append(device_ip)
+    if device_id:
+        device_info = get_device(device_id)
+        fallback_ip = device_info.get("ip") if device_info else None
+        if fallback_ip and fallback_ip not in device_ips:
+            device_ips.append(fallback_ip)
+    deduped_ips = []
+    for candidate in device_ips:
+        if candidate not in deduped_ips:
+            deduped_ips.append(candidate)
+    device_ips = deduped_ips
+
+    port = DEFAULT_NOTE_CONTENT_PORT
+    if isinstance(note_port, int) and 1 <= note_port <= 65535:
+        port = note_port
+
+    # Try to delete from device first
+    device_deleted = False
+    device_error = None
+    if device_ips:
+        try:
+            delete_request = {
+                "action": "delete_note",
+                "note_id": note_id
+            }
+            response = _try_note_request(device_ips, port, delete_request, timeout_s=10, retries=2)
+            if response.get("success"):
+                device_deleted = True
+            else:
+                device_error = response.get("message", "Device delete failed")
+        except socket.timeout:
+            device_error = "Device connection timeout"
+        except ConnectionRefusedError:
+            device_error = "Device not accepting connections"
+        except Exception as e:
+            device_error = str(e)
+
+    # Always delete from local cache
+    local_result = delete_note(note_id)
+
+    if device_deleted:
+        return jsonify({
+            "success": True,
+            "message": "Note deleted from device and dashboard"
+        })
+    elif local_result.get("success"):
+        # Local delete worked but device failed - warn user
+        return jsonify({
+            "success": True,
+            "warning": f"Deleted from dashboard. Device: {device_error or 'unreachable'}",
+            "message": "Note deleted from dashboard (device may be offline)"
+        })
     else:
-        return jsonify(result), 404
+        return jsonify({"error": "Failed to delete note"}), 500
 
 
 @api_bp.route('/notes/<note_id>/export', methods=['POST'])
