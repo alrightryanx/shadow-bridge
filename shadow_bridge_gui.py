@@ -134,7 +134,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.004"
+APP_VERSION = "1.005"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -162,8 +162,8 @@ COLORS = {
     'success_dim': '#2e4a2f',
     'warning': '#ffb74d',
     'warning_dim': '#4a3a1f',
-    'error': '#e57373',
-    'error_dim': '#4a2020',
+    'error': '#e8967a',
+    'error_dim': '#3d2a22',
 
     # Text colors
     'text': '#faf6f1',

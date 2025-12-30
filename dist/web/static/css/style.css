@@ -47,8 +47,8 @@
     --success-container: rgba(129, 199, 132, 0.15);
     --warning: #ffb74d;
     --warning-container: rgba(255, 183, 77, 0.15);
-    --error: #e57373;
-    --error-container: rgba(229, 115, 115, 0.15);
+    --error: #e8967a;
+    --error-container: rgba(217, 119, 87, 0.15);
 
     /* Typography */
     --font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -116,8 +116,8 @@
     --success-container: rgba(46, 125, 50, 0.15);
     --warning: #e65100;
     --warning-container: rgba(230, 81, 0, 0.15);
-    --error: #b71c1c;
-    --error-container: rgba(183, 28, 28, 0.15);
+    --error: #c4613f;
+    --error-container: rgba(196, 97, 63, 0.15);
 }
 
 [data-theme="light"] body {

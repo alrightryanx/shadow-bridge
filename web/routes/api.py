@@ -911,7 +911,7 @@ def api_qr():
         qr.make(fit=True)
 
         # Create image with dark theme colors
-        img = qr.make_image(fill_color="#e53935", back_color="#1a1a1a")
+        img = qr.make_image(fill_color="#D97757", back_color="#1a1a1a")
 
         # Convert to base64
         buffer = io.BytesIO()
