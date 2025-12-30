@@ -1651,6 +1651,19 @@ class CompanionRelayServer(threading.Thread):
                             self._copy_to_clipboard(text)
                             log.info(f"Reply copied to clipboard: {text[:50]}...")
 
+                        elif action == 'terminal_inject' and text:
+                            # Inject text into terminal (preserves clipboard)
+                            auto_submit = payload.get('autoSubmit', True)
+                            success = self._inject_terminal_input(text, auto_submit=auto_submit)
+                            # Send result back to device
+                            result_msg = {
+                                'type': 'terminal_inject_result',
+                                'success': success,
+                                'text': text[:50]
+                            }
+                            self._send_to_conn(conn, result_msg)
+                            log.info(f"Terminal inject {'succeeded' if success else 'failed'}: {text[:50]}...")
+
                         # Also relay to plugin
                         self._relay_to_plugin(message)
 
@@ -1805,6 +1818,218 @@ class CompanionRelayServer(threading.Thread):
                     subprocess.run(['xclip', '-selection', 'clipboard'], input=text.encode(), check=True)
             except Exception as e:
                 log.warning(f"Clipboard copy not available: {e}")
+
+    def _get_clipboard(self):
+        """Get current clipboard contents (to restore later)."""
+        if IS_WINDOWS:
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                CF_UNICODETEXT = 13
+
+                ctypes.windll.user32.OpenClipboard(0)
+                try:
+                    if ctypes.windll.user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+                        handle = ctypes.windll.user32.GetClipboardData(CF_UNICODETEXT)
+                        if handle:
+                            ptr = ctypes.windll.kernel32.GlobalLock(handle)
+                            if ptr:
+                                # Read as wide string
+                                text = ctypes.wstring_at(ptr)
+                                ctypes.windll.kernel32.GlobalUnlock(handle)
+                                return text
+                finally:
+                    ctypes.windll.user32.CloseClipboard()
+            except Exception as e:
+                log.debug(f"Failed to get clipboard: {e}")
+        return None
+
+    def _find_terminal_window(self):
+        """Find a terminal window likely running Claude Code.
+
+        Searches for windows with titles containing 'claude', 'Claude Code',
+        'Windows Terminal', 'cmd.exe', or 'PowerShell'.
+        Returns window handle (HWND) or None.
+        """
+        if not IS_WINDOWS:
+            return None
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+
+            # Window patterns to look for (in priority order)
+            patterns = [
+                'claude',           # Most specific - Claude Code session
+                'Claude Code',
+                'Windows Terminal', # Common modern terminal
+                'Command Prompt',
+                'PowerShell',
+                'cmd.exe',
+            ]
+
+            found_windows = []
+
+            # Callback for EnumWindows
+            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def enum_callback(hwnd, lparam):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buffer = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buffer, length + 1)
+                        title = buffer.value.lower()
+
+                        for i, pattern in enumerate(patterns):
+                            if pattern.lower() in title:
+                                found_windows.append((i, hwnd, buffer.value))
+                                break
+                return True
+
+            user32.EnumWindows(EnumWindowsProc(enum_callback), 0)
+
+            if found_windows:
+                # Sort by priority (lower index = higher priority)
+                found_windows.sort(key=lambda x: x[0])
+                best_match = found_windows[0]
+                log.info(f"Found terminal window: '{best_match[2]}' (hwnd={best_match[1]})")
+                return best_match[1]
+
+            log.warning("No terminal window found")
+            return None
+
+        except Exception as e:
+            log.error(f"Error finding terminal window: {e}")
+            return None
+
+    def _send_keystrokes(self, hwnd, ctrl_v=True, enter=True):
+        """Send Ctrl+V and Enter keystrokes to a window.
+
+        Uses SendInput for reliable keystroke injection.
+        """
+        if not IS_WINDOWS:
+            return False
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+
+            # Bring window to foreground
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.1)  # Brief delay for window to focus
+
+            # Define input structures
+            INPUT_KEYBOARD = 1
+            KEYEVENTF_KEYUP = 0x0002
+
+            VK_CONTROL = 0x11
+            VK_V = 0x56
+            VK_RETURN = 0x0D
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk", wintypes.WORD),
+                    ("wScan", wintypes.WORD),
+                    ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))
+                ]
+
+            class INPUT(ctypes.Structure):
+                _fields_ = [
+                    ("type", wintypes.DWORD),
+                    ("ki", KEYBDINPUT),
+                    ("padding", ctypes.c_ubyte * 8)
+                ]
+
+            def make_key_input(vk, flags=0):
+                inp = INPUT()
+                inp.type = INPUT_KEYBOARD
+                inp.ki.wVk = vk
+                inp.ki.dwFlags = flags
+                return inp
+
+            inputs = []
+
+            if ctrl_v:
+                # Ctrl down, V down, V up, Ctrl up
+                inputs.append(make_key_input(VK_CONTROL))
+                inputs.append(make_key_input(VK_V))
+                inputs.append(make_key_input(VK_V, KEYEVENTF_KEYUP))
+                inputs.append(make_key_input(VK_CONTROL, KEYEVENTF_KEYUP))
+
+            if enter:
+                time.sleep(0.05)  # Brief delay before Enter
+                inputs.append(make_key_input(VK_RETURN))
+                inputs.append(make_key_input(VK_RETURN, KEYEVENTF_KEYUP))
+
+            # Send all inputs
+            if inputs:
+                input_array = (INPUT * len(inputs))(*inputs)
+                user32.SendInput(len(inputs), input_array, ctypes.sizeof(INPUT))
+
+            log.info("Sent keystrokes to terminal")
+            return True
+
+        except Exception as e:
+            log.error(f"Error sending keystrokes: {e}")
+            return False
+
+    def _inject_terminal_input(self, text, auto_submit=True):
+        """Inject text into terminal by clipboard paste.
+
+        Preserves user's clipboard contents by saving and restoring.
+
+        Args:
+            text: The text to inject
+            auto_submit: If True, press Enter after pasting
+
+        Returns:
+            bool: True if successful
+        """
+        if not IS_WINDOWS:
+            log.warning("Terminal injection only supported on Windows")
+            return False
+
+        # Find terminal window first
+        hwnd = self._find_terminal_window()
+        if not hwnd:
+            log.error("No terminal window found for injection")
+            return False
+
+        # Save current clipboard
+        original_clipboard = self._get_clipboard()
+        log.debug(f"Saved clipboard: {original_clipboard[:50] if original_clipboard else 'None'}...")
+
+        try:
+            # Copy our text to clipboard
+            self._copy_to_clipboard(text)
+            time.sleep(0.05)  # Brief delay for clipboard
+
+            # Send Ctrl+V (and Enter if auto_submit)
+            success = self._send_keystrokes(hwnd, ctrl_v=True, enter=auto_submit)
+
+            if success:
+                log.info(f"Injected text into terminal: {text[:50]}...")
+
+            return success
+
+        finally:
+            # Restore original clipboard after a delay
+            # (need to wait for paste to complete)
+            def restore_clipboard():
+                time.sleep(0.3)  # Wait for paste to complete
+                if original_clipboard is not None:
+                    self._copy_to_clipboard(original_clipboard)
+                    log.debug("Restored original clipboard")
+
+            threading.Thread(target=restore_clipboard, daemon=True).start()
 
     def _track_session_event(self, msg_type, message):
         """Track session events for handoff capability.
