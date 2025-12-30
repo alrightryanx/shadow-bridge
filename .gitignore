@@ -24,3 +24,14 @@ Thumbs.db
 
 # Config with secrets
 .shadowbridge-config.json
+email_config.json
+*_config.json
+*.credentials
+*.secret
+.env
+.env.*
+
+# Build artifacts
+build/
+dist/
+*.spec
