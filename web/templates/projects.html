@@ -199,6 +199,32 @@ async function togglePin(projectId, event) {
     }
 }
 
+async function deleteProject(projectId, projectName, event) {
+    if (event) event.stopPropagation();
+    if (!confirm(`Delete project "${projectName}"? This cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/projects/${projectId}`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Project deleted', 'success');
+            // Remove from local array and refresh
+            allProjects = allProjects.filter(p => p.id !== projectId);
+            filterProjects();
+        } else {
+            showToast(result.error || 'Failed to delete project', 'error');
+        }
+    } catch (e) {
+        console.error('Delete project error:', e);
+        showToast('Failed to delete project', 'error');
+    }
+}
+
 function showEditProjectModal(projectId, currentName, event) {
     if (event) event.stopPropagation();
     editingProjectId = projectId;
@@ -287,6 +313,7 @@ function renderProjects(projects) {
                     <div class="project-card-actions">
                         <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
                         <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
+                        <button class="btn-icon-small btn-danger" onclick="deleteProject('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Delete"><span class="material-symbols-outlined">delete</span></button>
                     </div>
                 </div>
                 <div class="project-name">${escapeHtml(p.name)}</div>
@@ -323,6 +350,7 @@ function renderProjects(projects) {
                                 <div class="action-buttons">
                                     <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
                                     <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
+                                    <button class="btn-icon-small btn-danger" onclick="deleteProject('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Delete"><span class="material-symbols-outlined">delete</span></button>
                                     <a href="/projects/${p.id}" class="btn btn-small btn-primary">Open</a>
                                 </div>
                             </td>

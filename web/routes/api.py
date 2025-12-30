@@ -1265,6 +1265,16 @@ def api_update_project(project_id):
     return jsonify(result)
 
 
+@api_bp.route('/projects/<project_id>', methods=['DELETE'])
+def api_delete_project(project_id):
+    """Delete a project."""
+    from ..services.data_service import delete_project
+    result = delete_project(project_id)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
 # ============ Global Search ============
 
 @api_bp.route('/search')

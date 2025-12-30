@@ -750,7 +750,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.002",
+        "version": "1.003",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }
@@ -1557,6 +1557,23 @@ def update_project(project_id: str, data: Dict) -> Dict:
                 device_info["projects"][i].update(data)
                 _write_json_file(PROJECTS_FILE, file_data)
                 return {"success": True, "project": device_info["projects"][i]}
+
+    return {"error": "Project not found"}
+
+
+def delete_project(project_id: str) -> Dict:
+    """Delete a project."""
+    file_data = _read_json_file(PROJECTS_FILE)
+    if not file_data:
+        return {"error": "Projects file not found"}
+
+    for device_id, device_info in file_data.get("devices", {}).items():
+        projects = device_info.get("projects", [])
+        for i, project in enumerate(projects):
+            if project.get("id") == project_id or project.get("path") == project_id:
+                deleted_project = projects.pop(i)
+                _write_json_file(PROJECTS_FILE, file_data)
+                return {"success": True, "deleted": deleted_project}
 
     return {"error": "Project not found"}
 
