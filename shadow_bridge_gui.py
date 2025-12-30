@@ -134,25 +134,28 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.003"
+APP_VERSION = "1.004"
+
+# Global reference for IPC to restore window
+_app_instance = None
 PROJECTS_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'projects.json')
 NOTES_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'notes.json')
 WINDOW_STATE_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'window_state.json')
 
-# Theme colors - M3 Dark Theme with Shadow Red
+# Theme colors - M3 Dark Theme with Claude Terracotta
 COLORS = {
-    # Backgrounds - deeper, richer darks
-    'bg_dark': '#0d0d0d',
-    'bg_surface': '#141414',
-    'bg_card': '#1a1a1a',
-    'bg_elevated': '#242424',
-    'bg_input': '#1e1e1e',
+    # Backgrounds - warm dark tones
+    'bg_dark': '#1a1714',
+    'bg_surface': '#211d19',
+    'bg_card': '#252019',
+    'bg_elevated': '#2a251f',
+    'bg_input': '#2a251f',
 
-    # Accent colors - vibrant red
-    'accent': '#e53935',
-    'accent_hover': '#ff5252',
-    'accent_light': '#ff6f60',
-    'accent_container': '#3d1a1a',
+    # Accent colors - Claude terracotta
+    'accent': '#D97757',
+    'accent_hover': '#e8967a',
+    'accent_light': '#e8967a',
+    'accent_container': '#3d2a20',
 
     # Status colors - softer, M3 style
     'success': '#81c784',
@@ -163,15 +166,15 @@ COLORS = {
     'error_dim': '#4a2020',
 
     # Text colors
-    'text': '#ece0df',
-    'text_secondary': '#b8a8a6',
-    'text_dim': '#8a7a78',
-    'text_muted': '#5a4a48',
+    'text': '#faf6f1',
+    'text_secondary': '#b8a99a',
+    'text_dim': '#8a7a6a',
+    'text_muted': '#5a4a3a',
 
     # Borders and dividers
-    'border': '#2a2a2a',
-    'border_light': '#3a3a3a',
-    'divider': '#1f1f1f'
+    'border': '#3d352c',
+    'border_light': '#4d453c',
+    'divider': '#2a251f'
 }
 
 # Enable DPI awareness on Windows BEFORE importing tkinter
@@ -759,14 +762,14 @@ def create_app_icon(size=64):
     # Fallback: create programmatic icon
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    draw.ellipse([2, 2, size-2, size-2], fill='#1a0808', outline='#e53935', width=2)
+    draw.ellipse([2, 2, size-2, size-2], fill='#1a1714', outline='#D97757', width=2)
     center = size // 2
     points = [
         (center + 8, center - 18), (center - 4, center - 2),
         (center + 4, center - 2), (center - 8, center + 18),
         (center + 4, center + 2), (center - 4, center + 2),
     ]
-    draw.polygon(points, fill='#e53935')
+    draw.polygon(points, fill='#D97757')
     return img
 
 
@@ -805,6 +808,12 @@ class DataReceiver(threading.Thread):
         self._approved_devices = set()  # Set of approved device_ids
         self._load_approved_devices()
 
+        # Transcript watching for bidirectional session sync
+        self._transcript_watcher_thread = None
+        self._transcript_path = None
+        self._transcript_last_pos = 0
+        self._transcript_stop_event = threading.Event()
+
     def _load_approved_devices(self):
         """Load list of approved device IDs from disk."""
         try:
@@ -829,6 +838,143 @@ class DataReceiver(threading.Thread):
                 json.dump({'approved': list(self._approved_devices)}, f, indent=2)
         except Exception as e:
             log.warning(f"Could not save approved devices: {e}")
+
+    def _start_transcript_watcher(self, transcript_path):
+        """Start watching a transcript file for new content."""
+        if not transcript_path or not os.path.exists(transcript_path):
+            log.warning(f"Transcript path invalid or doesn't exist: {transcript_path}")
+            return
+
+        # Stop any existing watcher
+        self._stop_transcript_watcher()
+
+        self._transcript_path = transcript_path
+        self._transcript_last_pos = os.path.getsize(transcript_path) if os.path.exists(transcript_path) else 0
+        self._transcript_stop_event.clear()
+
+        self._transcript_watcher_thread = threading.Thread(
+            target=self._watch_transcript,
+            daemon=True
+        )
+        self._transcript_watcher_thread.start()
+        log.info(f"Started transcript watcher for: {transcript_path}")
+
+    def _stop_transcript_watcher(self):
+        """Stop the transcript watcher."""
+        self._transcript_stop_event.set()
+        if self._transcript_watcher_thread and self._transcript_watcher_thread.is_alive():
+            self._transcript_watcher_thread.join(timeout=2)
+        self._transcript_watcher_thread = None
+        self._transcript_path = None
+        log.info("Stopped transcript watcher")
+
+    def _watch_transcript(self):
+        """Watch transcript file for new content and relay to devices."""
+        while not self._transcript_stop_event.is_set():
+            try:
+                if not self._transcript_path or not os.path.exists(self._transcript_path):
+                    time.sleep(1)
+                    continue
+
+                current_size = os.path.getsize(self._transcript_path)
+                if current_size > self._transcript_last_pos:
+                    # New content available
+                    with open(self._transcript_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        f.seek(self._transcript_last_pos)
+                        new_content = f.read()
+                        self._transcript_last_pos = f.tell()
+
+                    if new_content.strip():
+                        self._parse_and_relay_transcript(new_content)
+
+                time.sleep(0.5)  # Poll every 500ms
+
+            except Exception as e:
+                log.error(f"Transcript watcher error: {e}")
+                time.sleep(1)
+
+    def _parse_and_relay_transcript(self, content):
+        """Parse transcript content and relay messages to connected devices."""
+        try:
+            # Claude Code transcripts are typically JSONL format
+            # Each line is a JSON object with message data
+            lines = content.strip().split('\n')
+
+            for line in lines:
+                if not line.strip():
+                    continue
+
+                try:
+                    msg_data = json.loads(line)
+
+                    # Extract message details
+                    msg_type = msg_data.get('type', '')
+                    role = msg_data.get('role', msg_data.get('sender', ''))
+                    message_content = msg_data.get('content', msg_data.get('message', ''))
+
+                    # Handle different message formats
+                    if isinstance(message_content, list):
+                        # Content blocks format
+                        text_parts = []
+                        for block in message_content:
+                            if isinstance(block, dict):
+                                if block.get('type') == 'text':
+                                    text_parts.append(block.get('text', ''))
+                                elif block.get('type') == 'tool_use':
+                                    text_parts.append(f"[Tool: {block.get('name', 'unknown')}]")
+                            elif isinstance(block, str):
+                                text_parts.append(block)
+                        message_content = '\n'.join(text_parts)
+
+                    if not message_content:
+                        continue
+
+                    # Create relay message
+                    relay_msg = {
+                        'type': 'session_message',
+                        'id': f"msg_{int(time.time()*1000)}",
+                        'sessionId': self._pc_session.get('sessionId') if self._pc_session else None,
+                        'timestamp': int(time.time() * 1000),
+                        'payload': {
+                            'role': role or 'assistant',
+                            'content': message_content[:5000],  # Limit size
+                            'hostname': socket.gethostname()
+                        }
+                    }
+
+                    # Relay to all connected devices
+                    self._relay_to_all_devices(relay_msg)
+                    log.debug(f"Relayed session message: {role} - {message_content[:50]}...")
+
+                except json.JSONDecodeError:
+                    # Not JSON, might be plain text output
+                    if len(line.strip()) > 10:
+                        relay_msg = {
+                            'type': 'session_message',
+                            'id': f"msg_{int(time.time()*1000)}",
+                            'sessionId': self._pc_session.get('sessionId') if self._pc_session else None,
+                            'timestamp': int(time.time() * 1000),
+                            'payload': {
+                                'role': 'assistant',
+                                'content': line.strip()[:5000],
+                                'hostname': socket.gethostname()
+                            }
+                        }
+                        self._relay_to_all_devices(relay_msg)
+
+        except Exception as e:
+            log.error(f"Failed to parse transcript content: {e}")
+
+    def _relay_to_all_devices(self, message):
+        """Relay a message to all connected Android devices."""
+        with self._conns_lock:
+            for device_id, conn_info in list(self._device_conns.items()):
+                try:
+                    conn = conn_info.get('conn')
+                    if conn:
+                        self._send_to_conn(conn, message)
+                except Exception as e:
+                    log.debug(f"Failed to relay to device {device_id}: {e}")
 
     def approve_device(self, device_id):
         """Approve a device for SSH key installation."""
@@ -2044,12 +2190,13 @@ class CompanionRelayServer(threading.Thread):
 
             if msg_type == 'session_start':
                 # New Claude Code session started
+                transcript_path = payload.get('transcriptPath', '')
                 self._pc_session = {
                     'sessionId': session_id,
                     'hostname': payload.get('hostname', socket.gethostname()),
                     'cwd': payload.get('cwd', ''),
                     'username': payload.get('username', os.environ.get('USERNAME', 'user')),
-                    'transcriptPath': payload.get('transcriptPath', ''),
+                    'transcriptPath': transcript_path,
                     'startedAt': timestamp,
                     'lastActivityAt': timestamp,
                     'isActive': True,
@@ -2058,6 +2205,10 @@ class CompanionRelayServer(threading.Thread):
                 }
                 self._session_history = []  # Reset history for new session
                 log.info(f"PC session started: {session_id}")
+
+                # Start transcript watcher for bidirectional sync
+                if transcript_path:
+                    self._start_transcript_watcher(transcript_path)
 
                 # Broadcast to all connected devices that PC session is available
                 self._broadcast_session_availability()
@@ -2068,6 +2219,9 @@ class CompanionRelayServer(threading.Thread):
                     self._pc_session['isActive'] = False
                     self._pc_session['endedAt'] = timestamp
                     log.info(f"PC session ended: {session_id}")
+
+                # Stop transcript watcher
+                self._stop_transcript_watcher()
 
             elif msg_type in ['approval_request', 'notification']:
                 # Track activity for context
@@ -4504,6 +4658,23 @@ Or run in PowerShell (Admin):
         self.refresh_notes_ui()
 
 
+def _start_show_listener(lock_socket):
+    """Listen for SHOW commands from other instances."""
+    import threading
+    def listener():
+        while True:
+            try:
+                conn, _ = lock_socket.accept()
+                data = conn.recv(16).decode('utf-8', errors='ignore').strip()
+                conn.close()
+                if data == 'SHOW' and _app_instance:
+                    # Schedule window restore on main thread
+                    _app_instance.root.after(0, _app_instance.show_window)
+            except Exception:
+                pass
+    t = threading.Thread(target=listener, daemon=True)
+    t.start()
+
 def check_single_instance():
     """Check if another instance is already running. Returns lock socket if successful."""
     try:
@@ -4511,6 +4682,7 @@ def check_single_instance():
         lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         lock_socket.bind(('127.0.0.1', 19287))  # Use a dedicated port for instance lock (not 19286 - companion uses that)
         lock_socket.listen(1)
+        _start_show_listener(lock_socket)
         return lock_socket
     except socket.error:
         return None
@@ -4591,7 +4763,15 @@ def main():
         # Another instance is already running
         if IS_WINDOWS:
             import ctypes
-            ctypes.windll.user32.MessageBoxW(0, "ShadowBridge is already running.\n\nCheck your system tray.", "ShadowBridge", 0x40)
+            # Send SHOW command to existing instance via socket
+            try:
+                show_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                show_sock.settimeout(2)
+                show_sock.connect(('127.0.0.1', 19287))
+                show_sock.sendall(b'SHOW')
+                show_sock.close()
+            except Exception:
+                pass
         else:
             print("ShadowBridge is already running.")
         sys.exit(0)
@@ -4602,6 +4782,8 @@ def main():
 
     log.info(f"ShadowBridge v{APP_VERSION} starting...")
     app = ShadowBridgeApp()
+    global _app_instance
+    _app_instance = app
     log.info("ShadowBridge initialized")
 
     if start_minimized and HAS_TRAY:
