@@ -65,6 +65,57 @@
     </div>
 </div>
 
+<!-- Share Project Modal -->
+<div id="share-project-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">share</span> Share Project</h2>
+            <button class="modal-close" onclick="closeShareModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="share-item-title" id="share-project-title-display"></p>
+
+            <!-- Current shares -->
+            <div class="share-section">
+                <h3>Shared With</h3>
+                <div id="current-shares" class="share-list">
+                    <div class="empty-state">Not shared with anyone</div>
+                </div>
+            </div>
+
+            <!-- Add new share -->
+            <div class="share-section">
+                <h3>Add Device</h3>
+                <div class="share-add-form">
+                    <select id="share-device-select" class="form-input">
+                        <option value="">Select a device...</option>
+                    </select>
+                    <select id="share-permission-select" class="form-input">
+                        <option value="view">View only</option>
+                        <option value="edit">Can edit</option>
+                        <option value="full">Full access</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="addShare()">
+                        <span class="material-symbols-outlined">person_add</span> Share
+                    </button>
+                </div>
+            </div>
+
+            <div class="share-info">
+                <p><strong>Permission Levels:</strong></p>
+                <ul>
+                    <li><strong>View</strong> - Can see project details</li>
+                    <li><strong>Edit</strong> - Can view and modify</li>
+                    <li><strong>Full</strong> - Can view, modify, and delete</li>
+                </ul>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeShareModal()">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- Edit Project Modal -->
 <div id="edit-project-modal" class="modal hidden">
     <div class="modal-content modal-small">
@@ -233,7 +284,10 @@ function renderProjects(projects) {
             <div class="project-card">
                 <div class="project-card-header">
                     <button class="pin-btn ${p.is_pinned ? 'pinned' : ''}" onclick="togglePin('${p.id}', event)" title="Pin project"><span class="material-symbols-outlined">push_pin</span></button>
-                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
+                    <div class="project-card-actions">
+                        <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
+                        <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
+                    </div>
                 </div>
                 <div class="project-name">${escapeHtml(p.name)}</div>
                 <div class="project-path">${escapeHtml(p.path)}</div>
@@ -268,6 +322,7 @@ function renderProjects(projects) {
                             <td>
                                 <div class="action-buttons">
                                     <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
+                                    <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
                                     <a href="/projects/${p.id}" class="btn btn-small btn-primary">Open</a>
                                 </div>
                             </td>
@@ -276,6 +331,167 @@ function renderProjects(projects) {
                 </tbody>
             </table>
         `;
+    }
+}
+
+// ============ Sharing Functions ============
+
+let currentShareProjectId = null;
+let currentShareOwnerDevice = null;
+let allDevices = [];
+
+async function openShareModal(projectId, name, ownerDevice, event) {
+    if (event) event.stopPropagation();
+
+    currentShareProjectId = projectId;
+    currentShareOwnerDevice = ownerDevice;
+
+    document.getElementById('share-project-title-display').textContent = name;
+    document.getElementById('share-project-modal').classList.remove('hidden');
+
+    // Load devices for dropdown
+    await loadDevicesForSharing();
+
+    // Load current permissions
+    await loadProjectPermissions(projectId);
+}
+
+function closeShareModal() {
+    document.getElementById('share-project-modal').classList.add('hidden');
+    currentShareProjectId = null;
+    currentShareOwnerDevice = null;
+}
+
+async function loadDevicesForSharing() {
+    try {
+        allDevices = await api.getDevices();
+        const select = document.getElementById('share-device-select');
+        select.innerHTML = '<option value="">Select a device...</option>';
+
+        allDevices.forEach(device => {
+            // Don't show the owner device in the dropdown
+            if (device.id !== currentShareOwnerDevice) {
+                const option = document.createElement('option');
+                option.value = device.id;
+                option.textContent = device.name || device.id;
+                select.appendChild(option);
+            }
+        });
+    } catch (e) {
+        console.error('Failed to load devices:', e);
+    }
+}
+
+async function loadProjectPermissions(projectId) {
+    const container = document.getElementById('current-shares');
+
+    try {
+        // Get permissions info from API
+        const response = await fetch(`/api/projects/${projectId}/permissions?device_id=${encodeURIComponent(currentShareOwnerDevice)}`);
+        const data = await response.json();
+
+        if (data.error) {
+            container.innerHTML = '<div class="empty-state">Could not load sharing info</div>';
+            return;
+        }
+
+        const sharedWith = data.shared_with || [];
+
+        if (sharedWith.length === 0) {
+            container.innerHTML = '<div class="empty-state">Not shared with anyone</div>';
+            return;
+        }
+
+        // Render current shares
+        container.innerHTML = sharedWith.map(share => {
+            const device = allDevices.find(d => d.id === share.device_id);
+            const deviceName = device ? (device.name || device.id) : share.device_id;
+            const permissionLabel = {
+                'view': 'View only',
+                'edit': 'Can edit',
+                'full': 'Full access'
+            }[share.permission] || share.permission;
+
+            return `
+                <div class="share-item">
+                    <div class="share-device">
+                        <span class="material-symbols-outlined">smartphone</span>
+                        <span>${escapeHtml(deviceName)}</span>
+                    </div>
+                    <div class="share-permission">${permissionLabel}</div>
+                    <button class="btn-icon-small btn-danger" onclick="removeShare('${share.device_id}')" title="Remove access">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error('Failed to load permissions:', e);
+        container.innerHTML = '<div class="empty-state">Could not load sharing info</div>';
+    }
+}
+
+async function addShare() {
+    const targetDevice = document.getElementById('share-device-select').value;
+    const permission = document.getElementById('share-permission-select').value;
+
+    if (!targetDevice) {
+        showToast('Please select a device', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/projects/${currentShareProjectId}/share`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                owner_device: currentShareOwnerDevice,
+                target_device: targetDevice,
+                permission: permission
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Project shared successfully', 'success');
+            document.getElementById('share-device-select').value = '';
+            await loadProjectPermissions(currentShareProjectId);
+            await loadDevicesForSharing();  // Refresh dropdown
+        } else {
+            showToast(result.error || 'Failed to share', 'error');
+        }
+    } catch (e) {
+        console.error('Share error:', e);
+        showToast('Failed to share project', 'error');
+    }
+}
+
+async function removeShare(targetDevice) {
+    if (!confirm('Remove access for this device?')) return;
+
+    try {
+        const response = await fetch(`/api/projects/${currentShareProjectId}/share`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                owner_device: currentShareOwnerDevice,
+                target_device: targetDevice
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Access removed', 'success');
+            await loadProjectPermissions(currentShareProjectId);
+            await loadDevicesForSharing();  // Refresh dropdown
+        } else {
+            showToast(result.error || 'Failed to remove access', 'error');
+        }
+    } catch (e) {
+        console.error('Unshare error:', e);
+        showToast('Failed to remove access', 'error');
     }
 }
 </script>
@@ -345,6 +561,135 @@ function renderProjects(projects) {
     height: 40px;
     padding: 4px;
     cursor: pointer;
+}
+
+.project-card-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.modal-medium {
+    max-width: 600px;
+}
+
+/* Sharing UI Styles */
+.share-item-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 16px;
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    border-radius: 6px;
+}
+
+.share-section {
+    margin-bottom: 20px;
+}
+
+.share-section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.share-list {
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.share-list .empty-state {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 14px;
+}
+
+.share-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border-radius: 6px;
+    margin-bottom: 6px;
+}
+
+.share-item:last-child {
+    margin-bottom: 0;
+}
+
+.share-device {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    color: var(--text);
+}
+
+.share-device .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--text-dim);
+}
+
+.share-permission {
+    font-size: 13px;
+    color: var(--text-dim);
+    padding: 4px 10px;
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    margin-right: 8px;
+}
+
+.share-add-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.share-add-form .form-input {
+    flex: 1;
+}
+
+.share-add-form .btn {
+    white-space: nowrap;
+}
+
+.share-info {
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.share-info p {
+    margin: 0 0 8px 0;
+}
+
+.share-info ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.share-info li {
+    margin-bottom: 4px;
+}
+
+.share-info strong {
+    color: var(--text);
+}
+
+.btn-icon-small.btn-danger {
+    color: var(--error);
+}
+
+.btn-icon-small.btn-danger:hover {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--error);
 }
 </style>
 {% endblock %}
