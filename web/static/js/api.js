@@ -479,6 +479,45 @@ const api = {
         return this.fetch('/context/clear', { method: 'POST' });
     },
 
+    // ============ User Preference Learning (AGI-Readiness) ============
+    async getPreferences() {
+        return this.fetch('/preferences', {}, false);
+    },
+
+    async observePreference(action, resourceType, metadata = null) {
+        return this.fetch('/preferences/observe', {
+            method: 'POST',
+            body: JSON.stringify({
+                action: action,
+                resource_type: resourceType,
+                metadata: metadata
+            })
+        });
+    },
+
+    async submitPreferenceFeedback(category, value, isPositive) {
+        return this.fetch('/preferences/feedback', {
+            method: 'POST',
+            body: JSON.stringify({
+                category: category,
+                value: value,
+                is_positive: isPositive
+            })
+        });
+    },
+
+    async getPreferencesForAI() {
+        return this.fetch('/preferences/ai-context', {}, false);
+    },
+
+    async getPreferenceStats() {
+        return this.fetch('/preferences/stats', {}, false);
+    },
+
+    async resetPreferences() {
+        return this.fetch('/preferences/reset', { method: 'POST' });
+    },
+
     // ============ Enhanced Analytics ============
     async getPrivacyScore() {
         return this.fetch('/analytics/privacy', {}, true);

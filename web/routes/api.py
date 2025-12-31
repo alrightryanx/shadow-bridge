@@ -1744,6 +1744,127 @@ def api_context_clear():
     return jsonify({"success": True})
 
 
+# ============ User Preference Learning (AGI-Readiness) ============
+
+# Lazy import for preference service
+_preference_service = None
+
+def get_preference_service():
+    """Lazy load preference learning service."""
+    global _preference_service
+    if _preference_service is None:
+        try:
+            from ..services import preference_learning
+            _preference_service = preference_learning.get_preference_service()
+        except Exception as e:
+            logger.error(f"Failed to load preference service: {e}")
+            _preference_service = False
+    return _preference_service if _preference_service else None
+
+
+@api_bp.route('/preferences')
+def api_preferences():
+    """Get current user preferences."""
+    ps = get_preference_service()
+    if not ps:
+        return jsonify({"error": "Preference service not available"}), 503
+
+    return jsonify(ps.get_preferences().to_dict())
+
+
+@api_bp.route('/preferences/observe', methods=['POST'])
+def api_preferences_observe():
+    """
+    Observe a user action to learn preferences.
+
+    JSON body:
+    - action: Type of action (view, edit, search, etc.)
+    - resource_type: Type of resource (project, note, etc.)
+    - metadata: Optional additional context (search_mode, category, tags)
+    """
+    ps = get_preference_service()
+    if not ps:
+        return jsonify({"error": "Preference service not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    if 'action' not in data or 'resource_type' not in data:
+        return jsonify({"error": "Missing required fields: action, resource_type"}), 400
+
+    ps.observe_action(
+        action=data['action'],
+        resource_type=data['resource_type'],
+        metadata=data.get('metadata')
+    )
+
+    return jsonify({"success": True})
+
+
+@api_bp.route('/preferences/feedback', methods=['POST'])
+def api_preferences_feedback():
+    """
+    Learn from explicit user feedback.
+
+    JSON body:
+    - category: Preference category (search_mode, theme, verbosity)
+    - value: The preference value
+    - is_positive: Whether user liked it (true/false)
+    """
+    ps = get_preference_service()
+    if not ps:
+        return jsonify({"error": "Preference service not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ['category', 'value', 'is_positive']
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    ps.learn_from_feedback(
+        category=data['category'],
+        value=data['value'],
+        is_positive=bool(data['is_positive'])
+    )
+
+    return jsonify({"success": True})
+
+
+@api_bp.route('/preferences/ai-context')
+def api_preferences_ai_context():
+    """Get preferences formatted for AI context injection."""
+    ps = get_preference_service()
+    if not ps:
+        return jsonify({"error": "Preference service not available"}), 503
+
+    return jsonify(ps.get_context_for_ai())
+
+
+@api_bp.route('/preferences/stats')
+def api_preferences_stats():
+    """Get preference learning statistics."""
+    ps = get_preference_service()
+    if not ps:
+        return jsonify({"error": "Preference service not available"}), 503
+
+    return jsonify(ps.get_stats())
+
+
+@api_bp.route('/preferences/reset', methods=['POST'])
+def api_preferences_reset():
+    """Reset all learned preferences."""
+    ps = get_preference_service()
+    if not ps:
+        return jsonify({"error": "Preference service not available"}), 503
+
+    ps.reset()
+    return jsonify({"success": True})
+
+
 # ============ Favorites ============
 
 @api_bp.route('/favorites')

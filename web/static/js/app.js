@@ -463,6 +463,9 @@ function setSearchMode(mode) {
     // Re-run search if there's a query
     const query = document.getElementById('global-search')?.value?.trim();
     if (query) performSearch(query);
+
+    // Learn preference for search mode (AGI-Readiness)
+    api.observePreference('search', 'search_mode', { search_mode: mode }).catch(() => {});
 }
 
 async function performSearch(query) {
