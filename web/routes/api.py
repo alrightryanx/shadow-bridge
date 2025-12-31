@@ -566,9 +566,11 @@ def api_update_note_content(note_id):
         update_request = {
             "action": "update_note",
             "note_id": note_id,
-            "content": content_to_send,
-            "title": new_title
+            "content": content_to_send
         }
+        # Only include title if provided and non-empty (preserves existing title otherwise)
+        if new_title:
+            update_request["title"] = new_title
         response = _try_note_request(device_ips, port, update_request, timeout_s=12, retries=2)
         if response.get("success"):
             # Invalidate cache so next fetch gets fresh content

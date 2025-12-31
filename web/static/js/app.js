@@ -271,19 +271,19 @@ function renderNoteContent() {
 function updateModalButtons() {
     const editBtn = document.getElementById('edit-note-btn');
     const saveBtn = document.getElementById('save-note-btn');
-    const cancelBtn = document.getElementById('cancel-edit-btn');
     const exportBtn = document.getElementById('export-note-btn');
+    const toolbar = document.getElementById('markdown-toolbar');
 
     if (isEditMode) {
         if (editBtn) editBtn.classList.add('hidden');
         if (saveBtn) saveBtn.classList.remove('hidden');
-        if (cancelBtn) cancelBtn.classList.remove('hidden');
         if (exportBtn) exportBtn.classList.add('hidden');
+        if (toolbar) toolbar.classList.remove('hidden');
     } else {
         if (editBtn) editBtn.classList.remove('hidden');
         if (saveBtn) saveBtn.classList.add('hidden');
-        if (cancelBtn) cancelBtn.classList.add('hidden');
         if (exportBtn) exportBtn.classList.remove('hidden');
+        if (toolbar) toolbar.classList.add('hidden');
     }
 }
 
@@ -540,28 +540,6 @@ function insertMarkdown(before, after) {
     const newCursorPos = start + before.length + selectedText.length;
     editor.setSelectionRange(newCursorPos, newCursorPos);
     editor.focus();
-}
-
-function updateModalButtons() {
-    const editBtn = document.getElementById('edit-note-btn');
-    const saveBtn = document.getElementById('save-note-btn');
-    const cancelBtn = document.getElementById('cancel-edit-btn');
-    const exportBtn = document.getElementById('export-note-btn');
-    const toolbar = document.getElementById('markdown-toolbar');
-
-    if (isEditMode) {
-        if (editBtn) editBtn.classList.add('hidden');
-        if (saveBtn) saveBtn.classList.remove('hidden');
-        if (cancelBtn) cancelBtn.classList.remove('hidden');
-        if (exportBtn) exportBtn.classList.add('hidden');
-        if (toolbar) toolbar.classList.remove('hidden');
-    } else {
-        if (editBtn) editBtn.classList.remove('hidden');
-        if (saveBtn) saveBtn.classList.add('hidden');
-        if (cancelBtn) cancelBtn.classList.add('hidden');
-        if (exportBtn) exportBtn.classList.remove('hidden');
-        if (toolbar) toolbar.classList.add('hidden');
-    }
 }
 
 // ============ Offline Status Indicator ============
