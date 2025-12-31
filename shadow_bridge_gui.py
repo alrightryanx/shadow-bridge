@@ -134,13 +134,18 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.008"
+APP_VERSION = "1.009"
 
 # Global reference for IPC to restore window
 _app_instance = None
 PROJECTS_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'projects.json')
 NOTES_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'notes.json')
 WINDOW_STATE_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'window_state.json')
+SETTINGS_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'settings.json')
+
+# GitHub release URL for auto-updates
+GITHUB_REPO = "alrightryanx/shadow-bridge"
+GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 # Theme colors - M3 Dark Theme with Claude Terracotta
 COLORS = {
@@ -727,6 +732,176 @@ def set_startup_enabled(enabled):
         finally:
             winreg.CloseKey(key)
     except Exception:
+        return False
+
+
+# ============ Settings Management ============
+
+def load_settings():
+    """Load settings from JSON file."""
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        log.warning(f"Failed to load settings: {e}")
+    return {"auto_update": True}  # Default settings
+
+
+def save_settings(settings):
+    """Save settings to JSON file."""
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+        return True
+    except Exception as e:
+        log.warning(f"Failed to save settings: {e}")
+        return False
+
+
+def is_auto_update_enabled():
+    """Check if auto-update is enabled."""
+    settings = load_settings()
+    return settings.get("auto_update", True)
+
+
+def set_auto_update_enabled(enabled):
+    """Enable or disable auto-update."""
+    settings = load_settings()
+    settings["auto_update"] = enabled
+    return save_settings(settings)
+
+
+# ============ Auto-Update System ============
+
+def check_for_updates():
+    """Check GitHub releases for a newer version. Returns (has_update, latest_version, download_url) or (False, None, None) on error."""
+    try:
+        import urllib.request
+        import ssl
+
+        # Create SSL context that works with GitHub
+        ctx = ssl.create_default_context()
+
+        req = urllib.request.Request(
+            GITHUB_RELEASES_API,
+            headers={"User-Agent": f"ShadowBridge/{APP_VERSION}"}
+        )
+
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+            data = json.loads(response.read().decode('utf-8'))
+
+        latest_tag = data.get("tag_name", "").lstrip("v")
+
+        # Find the EXE asset
+        download_url = None
+        for asset in data.get("assets", []):
+            if asset.get("name", "").endswith(".exe"):
+                download_url = asset.get("browser_download_url")
+                break
+
+        # Compare versions (simple string comparison works for X.XXX format)
+        if latest_tag and latest_tag > APP_VERSION:
+            return True, latest_tag, download_url
+
+        return False, latest_tag, None
+
+    except Exception as e:
+        log.warning(f"Failed to check for updates: {e}")
+        return False, None, None
+
+
+def download_update(download_url, progress_callback=None):
+    """Download update to temp folder. Returns path to downloaded file or None on error."""
+    try:
+        import urllib.request
+        import ssl
+
+        ctx = ssl.create_default_context()
+
+        req = urllib.request.Request(
+            download_url,
+            headers={"User-Agent": f"ShadowBridge/{APP_VERSION}"}
+        )
+
+        # Download to temp directory
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, "ShadowBridge_update.exe")
+
+        with urllib.request.urlopen(req, timeout=120, context=ctx) as response:
+            total_size = int(response.headers.get('Content-Length', 0))
+            downloaded = 0
+            block_size = 8192
+
+            with open(temp_path, 'wb') as f:
+                while True:
+                    chunk = response.read(block_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback and total_size:
+                        progress_callback(downloaded / total_size)
+
+        return temp_path
+
+    except Exception as e:
+        log.error(f"Failed to download update: {e}")
+        return None
+
+
+def apply_update(update_path):
+    """Apply the downloaded update. Creates a batch script to replace EXE after app closes."""
+    try:
+        if not os.path.exists(update_path):
+            return False
+
+        current_exe = sys.executable if getattr(sys, 'frozen', False) else None
+        if not current_exe:
+            log.warning("Cannot apply update: not running as frozen executable")
+            return False
+
+        # Create batch script to replace EXE
+        batch_path = os.path.join(tempfile.gettempdir(), "shadowbridge_update.bat")
+
+        batch_content = f'''@echo off
+echo Updating ShadowBridge...
+timeout /t 2 /nobreak >nul
+
+:waitloop
+tasklist /FI "IMAGENAME eq ShadowBridge.exe" 2>NUL | find /I /N "ShadowBridge.exe">NUL
+if "%ERRORLEVEL%"=="0" (
+    timeout /t 1 /nobreak >nul
+    goto waitloop
+)
+
+copy /Y "{update_path}" "{current_exe}"
+if errorlevel 1 (
+    echo Update failed!
+    pause
+    exit /b 1
+)
+
+del "{update_path}"
+start "" "{current_exe}"
+del "%~f0"
+'''
+
+        with open(batch_path, 'w') as f:
+            f.write(batch_content)
+
+        # Launch the batch script (hidden)
+        subprocess.Popen(
+            ['cmd', '/c', batch_path],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            shell=False
+        )
+
+        return True
+
+    except Exception as e:
+        log.error(f"Failed to apply update: {e}")
         return False
 
 
@@ -2428,6 +2603,7 @@ class ShadowBridgeApp:
         self.root.after(200, self.update_status)
         self.root.after(500, self.auto_start_broadcast)
         self.root.after(1000, self.auto_start_web_dashboard)
+        self.root.after(2000, self.check_for_updates_on_startup)
 
     def setup_styles(self):
         """Configure ttk styles for modern M3-inspired look."""
@@ -2752,6 +2928,16 @@ class ShadowBridgeApp:
                 highlightthickness=0, bd=0
             )
             startup_cb.pack(side=tk.LEFT)
+
+            self.auto_update_var = tk.BooleanVar(value=is_auto_update_enabled())
+            auto_update_cb = tk.Checkbutton(
+                opts, text="Auto-update", variable=self.auto_update_var,
+                command=self.toggle_auto_update, bg=COLORS['bg_surface'], fg=COLORS['text_secondary'],
+                selectcolor=COLORS['bg_elevated'], activebackground=COLORS['bg_surface'],
+                activeforeground=COLORS['text'], font=('Segoe UI', 9), cursor='hand2',
+                highlightthickness=0, bd=0
+            )
+            auto_update_cb.pack(side=tk.LEFT, padx=(10, 0))
 
         # Help link with hover effect
         help_link = tk.Label(
@@ -3678,6 +3864,107 @@ class ShadowBridgeApp:
         enabled = self.startup_var.get()
         if not set_startup_enabled(enabled):
             self.startup_var.set(not enabled)
+
+    def toggle_auto_update(self):
+        """Toggle auto-update setting."""
+        enabled = self.auto_update_var.get()
+        set_auto_update_enabled(enabled)
+
+    def check_for_updates_on_startup(self):
+        """Check for updates on startup (runs in background thread)."""
+        if not is_auto_update_enabled():
+            return
+
+        def check_update_thread():
+            try:
+                has_update, latest_version, download_url = check_for_updates()
+                if has_update and download_url:
+                    # Schedule UI update on main thread
+                    self.root.after(0, lambda: self.prompt_for_update(latest_version, download_url))
+            except Exception as e:
+                log.warning(f"Update check failed: {e}")
+
+        thread = threading.Thread(target=check_update_thread, daemon=True)
+        thread.start()
+
+    def prompt_for_update(self, latest_version, download_url):
+        """Show update prompt dialog."""
+        import tkinter.messagebox as messagebox
+
+        result = messagebox.askyesno(
+            "Update Available",
+            f"ShadowBridge v{latest_version} is available.\n"
+            f"You have v{APP_VERSION}.\n\n"
+            "Would you like to download and install the update?\n"
+            "(App will restart after update)",
+            parent=self.root
+        )
+
+        if result:
+            self.download_and_apply_update(download_url)
+
+    def download_and_apply_update(self, download_url):
+        """Download and apply update with progress dialog."""
+        import tkinter.messagebox as messagebox
+
+        # Create progress dialog
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("Updating...")
+        progress_win.geometry("300x100")
+        progress_win.configure(bg=COLORS['bg_dark'])
+        progress_win.transient(self.root)
+        progress_win.grab_set()
+
+        label = tk.Label(
+            progress_win, text="Downloading update...",
+            bg=COLORS['bg_dark'], fg=COLORS['text'],
+            font=('Segoe UI', 10)
+        )
+        label.pack(pady=20)
+
+        progress_var = tk.DoubleVar(value=0)
+        progress_bar = ttk.Progressbar(
+            progress_win, variable=progress_var,
+            maximum=100, length=250
+        )
+        progress_bar.pack(pady=10)
+
+        def update_progress(fraction):
+            self.root.after(0, lambda: progress_var.set(fraction * 100))
+
+        def download_thread():
+            try:
+                update_path = download_update(download_url, update_progress)
+                if update_path:
+                    self.root.after(0, lambda: label.configure(text="Applying update..."))
+                    if apply_update(update_path):
+                        self.root.after(0, progress_win.destroy)
+                        self.root.after(100, self.root.quit)
+                    else:
+                        self.root.after(0, progress_win.destroy)
+                        self.root.after(0, lambda: messagebox.showerror(
+                            "Update Failed",
+                            "Failed to apply update. Please try again.",
+                            parent=self.root
+                        ))
+                else:
+                    self.root.after(0, progress_win.destroy)
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Download Failed",
+                        "Failed to download update. Please try again.",
+                        parent=self.root
+                    ))
+            except Exception as e:
+                log.error(f"Update failed: {e}")
+                self.root.after(0, progress_win.destroy)
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Update failed: {e}",
+                    parent=self.root
+                ))
+
+        thread = threading.Thread(target=download_thread, daemon=True)
+        thread.start()
 
     def show_ssh_help(self):
         """Show SSH help dialog."""
