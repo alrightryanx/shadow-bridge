@@ -40,7 +40,9 @@ from ..services.data_service import (
     get_devices_by_email, set_email_config,
     # Team Membership
     invite_team_member, accept_team_invitation, get_pending_invitations,
-    remove_team_member, get_teams_for_email, update_team_member_role
+    remove_team_member, get_teams_for_email, update_team_member_role,
+    # Unified Memory (AGI-readiness)
+    get_memory_stats, get_memory_search_results
 )
 
 api_bp = Blueprint('api', __name__)
@@ -1317,6 +1319,85 @@ def api_export_audit():
     period = request.args.get('period', '30D')
     result = export_audit_report(format, period)
     return jsonify(result)
+
+
+# ============ Unified Memory (AGI-Readiness) ============
+
+@api_bp.route('/memory/stats')
+def api_memory_stats():
+    """
+    Get unified memory statistics across all data stores.
+
+    Returns counts, storage estimates, and scope summaries for:
+    - Notes, Projects (USER_DATA)
+    - Agents, Automations (AI_DATA)
+    - Audit entries (COMPLIANCE)
+
+    This endpoint supports the AGI-readiness infrastructure.
+    """
+    return jsonify(get_memory_stats())
+
+
+@api_bp.route('/memory/search')
+def api_memory_search():
+    """
+    Unified search across memory scopes.
+
+    Query params:
+    - q: Search query (required)
+    - scopes: Comma-separated list of scopes (optional, default: all)
+              Valid: NOTES, PROJECTS, AGENTS, AUTOMATIONS
+    - limit: Maximum results (optional, default: 20, max: 100)
+
+    Currently uses keyword search. Will upgrade to semantic/vector search
+    when ChromaDB is integrated (Phase 2).
+    """
+    query = request.args.get('q', '')
+    if not query:
+        return jsonify({"error": "Query parameter 'q' is required"}), 400
+
+    scopes_param = request.args.get('scopes', '')
+    scopes = [s.strip().upper() for s in scopes_param.split(',') if s.strip()] if scopes_param else None
+
+    try:
+        limit = min(int(request.args.get('limit', 20)), 100)
+    except ValueError:
+        limit = 20
+
+    return jsonify(get_memory_search_results(query, scopes, limit))
+
+
+@api_bp.route('/memory/recent')
+def api_memory_recent():
+    """
+    Get recent items from memory.
+
+    Query params:
+    - scopes: Comma-separated list of scopes (optional)
+    - limit: Maximum results (optional, default: 10)
+
+    Returns most recently modified/created items across scopes.
+    """
+    scopes_param = request.args.get('scopes', '')
+    scopes = [s.strip().upper() for s in scopes_param.split(',') if s.strip()] if scopes_param else None
+
+    try:
+        limit = min(int(request.args.get('limit', 10)), 50)
+    except ValueError:
+        limit = 10
+
+    # For now, just search with empty query to get all, then sort by recency
+    # TODO: Implement proper recent items retrieval
+    results = get_memory_search_results("", scopes, limit * 2)
+    items = results.get("items", [])
+
+    # Sort by timestamp descending (newest first)
+    items.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+
+    return jsonify({
+        "items": items[:limit],
+        "scopes_searched": scopes or ["NOTES", "PROJECTS", "AGENTS", "AUTOMATIONS"]
+    })
 
 
 # ============ Favorites ============

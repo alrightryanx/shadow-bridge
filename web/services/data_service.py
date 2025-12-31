@@ -2681,3 +2681,169 @@ def get_devices_by_email(email: str) -> List[Dict]:
             })
 
     return devices
+
+
+# ============ Unified Memory Stats ============
+
+def get_memory_stats() -> Dict:
+    """
+    Get unified memory statistics across all data stores.
+
+    This aggregates stats from:
+    - Notes
+    - Projects
+    - Automations
+    - Agents
+    - Audit entries
+
+    Used by the AGI-readiness infrastructure for context awareness.
+    """
+    stats = {
+        "total_items": 0,
+        "by_scope": {},
+        "by_type": {},
+        "storage_estimate_kb": 0,
+        "oldest_timestamp": None,
+        "newest_timestamp": None
+    }
+
+    # Notes stats
+    notes = get_notes()
+    notes_count = len(notes) if notes else 0
+    stats["by_scope"]["NOTES"] = notes_count
+    stats["by_type"]["NOTE"] = notes_count
+    stats["total_items"] += notes_count
+
+    # Calculate notes storage estimate (rough)
+    if NOTES_FILE.exists():
+        stats["storage_estimate_kb"] += NOTES_FILE.stat().st_size // 1024
+
+    # Projects stats
+    projects = get_projects()
+    projects_count = len(projects) if projects else 0
+    stats["by_scope"]["PROJECTS"] = projects_count
+    stats["by_type"]["PROJECT"] = projects_count
+    stats["total_items"] += projects_count
+
+    if PROJECTS_FILE.exists():
+        stats["storage_estimate_kb"] += PROJECTS_FILE.stat().st_size // 1024
+
+    # Automations stats
+    automations = get_automations()
+    automations_count = len(automations) if automations else 0
+    stats["by_scope"]["AUTOMATIONS"] = automations_count
+    stats["by_type"]["AUTOMATION"] = automations_count
+    stats["total_items"] += automations_count
+
+    if AUTOMATIONS_FILE.exists():
+        stats["storage_estimate_kb"] += AUTOMATIONS_FILE.stat().st_size // 1024
+
+    # Agents stats
+    agents = get_agents()
+    agents_count = len(agents) if agents else 0
+    stats["by_scope"]["AGENTS"] = agents_count
+    stats["by_type"]["AGENT"] = agents_count
+    stats["total_items"] += agents_count
+
+    if AGENTS_FILE.exists():
+        stats["storage_estimate_kb"] += AGENTS_FILE.stat().st_size // 1024
+
+    # Audit stats (from audit_stats function)
+    audit_stats_data = get_audit_stats("30D")
+    audit_count = audit_stats_data.get("total_events", 0) if audit_stats_data else 0
+    stats["by_scope"]["AUDIT"] = audit_count
+    stats["by_type"]["AUDIT_ENTRY"] = audit_count
+    stats["total_items"] += audit_count
+
+    # Get timestamps from recent notes
+    timestamps = []
+    for note in (notes or []):
+        ts = note.get("timestamp")
+        if ts:
+            timestamps.append(ts)
+
+    for project in (projects or []):
+        ts = project.get("last_modified") or project.get("created_at")
+        if ts:
+            timestamps.append(ts)
+
+    if timestamps:
+        # timestamps could be strings or ints - handle both
+        numeric_ts = []
+        for ts in timestamps:
+            if isinstance(ts, (int, float)):
+                numeric_ts.append(ts)
+            elif isinstance(ts, str):
+                try:
+                    # Try parsing ISO format
+                    dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                    numeric_ts.append(dt.timestamp() * 1000)
+                except:
+                    pass
+
+        if numeric_ts:
+            stats["oldest_timestamp"] = int(min(numeric_ts))
+            stats["newest_timestamp"] = int(max(numeric_ts))
+
+    # Add scope summaries
+    stats["scope_summary"] = {
+        "USER_DATA": stats["by_scope"].get("NOTES", 0) + stats["by_scope"].get("PROJECTS", 0),
+        "AI_DATA": stats["by_scope"].get("AGENTS", 0) + stats["by_scope"].get("AUTOMATIONS", 0),
+        "COMPLIANCE": stats["by_scope"].get("AUDIT", 0)
+    }
+
+    return stats
+
+
+def get_memory_search_results(query: str, scopes: List[str] = None, limit: int = 20) -> Dict:
+    """
+    Unified search across memory scopes.
+
+    This is a keyword-based search until vector store is implemented.
+    Matches the UnifiedMemoryManager interface on Android.
+
+    Args:
+        query: Search query string
+        scopes: List of scopes to search (NOTES, PROJECTS, AGENTS, AUTOMATIONS)
+        limit: Maximum results to return
+
+    Returns:
+        Dict with items list and metadata
+    """
+    if scopes is None:
+        scopes = ["NOTES", "PROJECTS", "AGENTS", "AUTOMATIONS"]
+
+    # Map scopes to search_all types
+    type_map = {
+        "NOTES": "notes",
+        "PROJECTS": "projects",
+        "AGENTS": "agents",
+        "AUTOMATIONS": "automations"
+    }
+
+    types = [type_map[s] for s in scopes if s in type_map]
+
+    # Use existing search_all function
+    results = search_all(query, types)
+    items = results.get("items", [])[:limit]
+
+    # Transform to unified memory format
+    memory_items = []
+    for item in items:
+        memory_items.append({
+            "id": item.get("id"),
+            "type": item.get("type", "").upper(),
+            "scope": item.get("type", "").upper() + "S",  # "note" -> "NOTES"
+            "title": item.get("title", ""),
+            "content": item.get("preview", ""),
+            "timestamp": datetime.now().timestamp() * 1000,  # TODO: Get actual timestamp
+            "relevance_score": 1.0  # TODO: Implement ranking when vector store is added
+        })
+
+    return {
+        "items": memory_items,
+        "total_found": len(memory_items),
+        "query": query,
+        "scopes_searched": scopes,
+        "search_type": "keyword"  # Will become "semantic" when vector store is added
+    }
