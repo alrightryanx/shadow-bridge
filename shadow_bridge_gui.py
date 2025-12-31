@@ -2584,8 +2584,6 @@ class ShadowBridgeApp:
         )
         self.ssh_label.pack(side=tk.RIGHT)
 
-        add_divider(left_inner, 8, 12)
-
         # Tools section - elevated card
         tools_card = tk.Frame(left_inner, bg=COLORS['bg_card'], padx=16, pady=10)
         tools_card.pack(fill=tk.X, pady=(0, 8))
@@ -2663,15 +2661,12 @@ class ShadowBridgeApp:
             btn.pack(side=tk.RIGHT)
             # Hover effects - handle both Install and Uninstall states
             def on_enter(e, b=btn):
-                if b.cget('text') == 'Install':
-                    b.configure(bg=COLORS['accent_hover'], fg='white')
-                elif b.cget('text') == 'Uninstall':
-                    b.configure(bg=COLORS['accent_hover'], fg='white')
+                b.configure(bg=COLORS['accent_hover'], fg='white')
             def on_leave(e, b=btn):
                 if b.cget('text') == 'Install':
-                    b.configure(bg=COLORS['bg_elevated'], fg=COLORS['text'])
+                    b.configure(bg=COLORS['accent'], fg='white')
                 elif b.cget('text') == 'Uninstall':
-                    b.configure(bg=COLORS['error'], fg='white')
+                    b.configure(bg=COLORS['accent'], fg='white')
             btn.bind('<Enter>', on_enter)
             btn.bind('<Leave>', on_leave)
             self.tool_buttons[tool_id] = btn
@@ -3040,9 +3035,9 @@ class ShadowBridgeApp:
                         self.tool_buttons[t].configure(
                             text="Uninstall",
                             state='normal',
-                            bg=COLORS['error'],
+                            bg=COLORS['accent'],
                             fg='#ffffff',
-                            activebackground=COLORS['error']
+                            activebackground=COLORS['accent_hover']
                         )
                         self.tool_buttons[t].configure(
                             command=lambda tid=t, nm=n: self.uninstall_tool(tid, nm)
