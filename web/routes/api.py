@@ -1865,6 +1865,256 @@ def api_preferences_reset():
     return jsonify({"success": True})
 
 
+# ============ Agent Registry (AGI-Readiness Phase 3) ============
+
+# Lazy import for agent registry
+_agent_registry = None
+
+def get_agent_registry():
+    """Lazy load agent registry."""
+    global _agent_registry
+    if _agent_registry is None:
+        try:
+            from ..services import agent_registry
+            _agent_registry = agent_registry.get_registry()
+        except Exception as e:
+            logger.error(f"Failed to load agent registry: {e}")
+            _agent_registry = False
+    return _agent_registry if _agent_registry else None
+
+
+@api_bp.route('/registry/agents')
+def api_registry_agents():
+    """Get all registered agents with details."""
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    return jsonify({
+        "agents": registry.get_agent_details(),
+        "stats": registry.get_stats()
+    })
+
+
+@api_bp.route('/registry/agents/<agent_id>')
+def api_registry_agent(agent_id):
+    """Get a specific agent by ID."""
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+    agent = registry.get(AgentId(id=agent_id))
+
+    if not agent:
+        return jsonify({"error": "Agent not found"}), 404
+
+    state = registry.get_state(agent.id)
+    return jsonify({
+        **agent.to_dict(),
+        "state": state.to_dict() if state else None
+    })
+
+
+@api_bp.route('/registry/register', methods=['POST'])
+def api_registry_register():
+    """
+    Register a new agent.
+
+    JSON body:
+    - name: Agent name
+    - agent_type: Type (SENIOR_DEVELOPER, TESTER, etc.)
+    - backend: Optional backend identifier
+    """
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    if 'name' not in data or 'agent_type' not in data:
+        return jsonify({"error": "Missing required fields: name, agent_type"}), 400
+
+    from ..services.agent_protocol import create_standard_agent
+
+    try:
+        agent = create_standard_agent(
+            agent_type=data['agent_type'],
+            name=data['name'],
+            backend=data.get('backend')
+        )
+        agent_id = registry.register(agent)
+        return jsonify({
+            "success": True,
+            "agent_id": agent_id.to_dict(),
+            "agent": agent.to_dict()
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@api_bp.route('/registry/unregister/<agent_id>', methods=['POST'])
+def api_registry_unregister(agent_id):
+    """Unregister an agent."""
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+    success = registry.unregister(AgentId(id=agent_id))
+
+    return jsonify({"success": success})
+
+
+@api_bp.route('/registry/discover')
+def api_registry_discover():
+    """
+    Discover agents by capability.
+
+    Query params:
+    - capability: Required capability (code_generation, testing, etc.)
+    - min_confidence: Minimum confidence (0.0-1.0, default 0.5)
+    """
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    from ..services.agent_protocol import CapabilityCategory
+
+    capability_str = request.args.get('capability', '')
+    if not capability_str:
+        return jsonify({"error": "capability parameter required"}), 400
+
+    try:
+        capability = CapabilityCategory(capability_str.lower())
+    except ValueError:
+        valid = [c.value for c in CapabilityCategory]
+        return jsonify({"error": f"Invalid capability. Valid: {valid}"}), 400
+
+    try:
+        min_confidence = float(request.args.get('min_confidence', 0.5))
+    except ValueError:
+        min_confidence = 0.5
+
+    agents = registry.discover(capability, min_confidence)
+
+    return jsonify({
+        "capability": capability.value,
+        "agents": [a.to_dict() for a in agents],
+        "total": len(agents)
+    })
+
+
+@api_bp.route('/registry/best-for-task', methods=['POST'])
+def api_registry_best_for_task():
+    """
+    Find the best agent for a task.
+
+    JSON body:
+    - title: Task title
+    - description: Task description
+    - required_capabilities: List of capability names
+    """
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    from ..services.agent_protocol import Task, CapabilityCategory
+
+    try:
+        capabilities = [
+            CapabilityCategory(c.lower())
+            for c in data.get('required_capabilities', [])
+        ]
+    except ValueError as e:
+        return jsonify({"error": f"Invalid capability: {e}"}), 400
+
+    if not capabilities:
+        return jsonify({"error": "At least one capability required"}), 400
+
+    task = Task.create(
+        title=data.get('title', 'Untitled'),
+        description=data.get('description', ''),
+        required_capabilities=capabilities
+    )
+
+    best_agent = registry.find_best_for_task(task)
+
+    if not best_agent:
+        return jsonify({
+            "found": False,
+            "message": "No suitable agent found"
+        })
+
+    return jsonify({
+        "found": True,
+        "agent": best_agent.to_dict(),
+        "task": task.to_dict()
+    })
+
+
+@api_bp.route('/registry/heartbeat/<agent_id>', methods=['POST'])
+def api_registry_heartbeat(agent_id):
+    """Record a heartbeat from an agent."""
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+    registry.heartbeat(AgentId(id=agent_id))
+
+    return jsonify({"success": True})
+
+
+@api_bp.route('/registry/stats')
+def api_registry_stats():
+    """Get registry statistics."""
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    return jsonify(registry.get_stats())
+
+
+@api_bp.route('/registry/create-team', methods=['POST'])
+def api_registry_create_team():
+    """Create a standard team of agents."""
+    registry = get_agent_registry()
+    if not registry:
+        return jsonify({"error": "Agent registry not available"}), 503
+
+    agent_ids = registry.create_standard_team()
+
+    return jsonify({
+        "success": True,
+        "agents_created": len(agent_ids),
+        "agent_ids": [aid.to_dict() for aid in agent_ids]
+    })
+
+
+@api_bp.route('/registry/capabilities')
+def api_registry_capabilities():
+    """List all available capability categories."""
+    from ..services.agent_protocol import CapabilityCategory, STANDARD_AGENT_TYPES
+
+    return jsonify({
+        "capabilities": [c.value for c in CapabilityCategory],
+        "agent_types": {
+            k: {
+                "capabilities": [c.value for c in v["capabilities"]],
+                "description": v["description"]
+            }
+            for k, v in STANDARD_AGENT_TYPES.items()
+        }
+    })
+
+
 # ============ Favorites ============
 
 @api_bp.route('/favorites')
