@@ -2115,6 +2115,312 @@ def api_registry_capabilities():
     })
 
 
+# ============ Message Bus (AGI-Readiness Phase 3) ============
+
+# Lazy import for message bus
+_message_bus = None
+
+def get_message_bus():
+    """Lazy load message bus."""
+    global _message_bus
+    if _message_bus is None:
+        try:
+            from ..services import message_bus
+            _message_bus = message_bus.get_message_bus()
+        except Exception as e:
+            logger.error(f"Failed to load message bus: {e}")
+            _message_bus = False
+    return _message_bus if _message_bus else None
+
+
+@api_bp.route('/messages/send', methods=['POST'])
+def api_messages_send():
+    """
+    Send a message between agents.
+
+    JSON body:
+    - from_agent_id: Sender agent ID
+    - to_agent_id: Recipient agent ID
+    - message_type: Type of message
+    - payload: Message content
+    - priority: Optional priority (1-10, default 5)
+    """
+    bus = get_message_bus()
+    if not bus:
+        return jsonify({"error": "Message bus not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ['from_agent_id', 'to_agent_id', 'message_type', 'payload']
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    from ..services.agent_protocol import AgentId, AgentMessage, MessageType
+
+    try:
+        message_type = MessageType(data['message_type'])
+    except ValueError:
+        valid = [t.value for t in MessageType]
+        return jsonify({"error": f"Invalid message_type. Valid: {valid}"}), 400
+
+    message = AgentMessage.create(
+        message_type=message_type,
+        from_agent=AgentId(id=data['from_agent_id']),
+        to_agent=AgentId(id=data['to_agent_id']),
+        payload=data['payload'],
+        priority=data.get('priority', 5)
+    )
+
+    success = bus.send(message)
+
+    return jsonify({
+        "success": success,
+        "message_id": message.id
+    })
+
+
+@api_bp.route('/messages/broadcast', methods=['POST'])
+def api_messages_broadcast():
+    """
+    Broadcast a message to all agents.
+
+    JSON body:
+    - from_agent_id: Sender agent ID
+    - message_type: Type of message
+    - payload: Message content
+    """
+    bus = get_message_bus()
+    if not bus:
+        return jsonify({"error": "Message bus not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    from ..services.agent_protocol import AgentId, AgentMessage, MessageType
+
+    try:
+        message_type = MessageType(data['message_type'])
+    except ValueError:
+        return jsonify({"error": "Invalid message_type"}), 400
+
+    message = AgentMessage.create(
+        message_type=message_type,
+        from_agent=AgentId(id=data['from_agent_id']),
+        to_agent=None,
+        payload=data['payload']
+    )
+
+    count = bus.broadcast(message)
+
+    return jsonify({
+        "success": True,
+        "message_id": message.id,
+        "delivered_to": count
+    })
+
+
+@api_bp.route('/messages/receive/<agent_id>')
+def api_messages_receive(agent_id):
+    """Receive pending messages for an agent."""
+    bus = get_message_bus()
+    if not bus:
+        return jsonify({"error": "Message bus not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+
+    try:
+        limit = int(request.args.get('limit', 10))
+    except ValueError:
+        limit = 10
+
+    messages = bus.receive_all(AgentId(id=agent_id), max_messages=limit)
+
+    return jsonify({
+        "messages": [m.to_dict() for m in messages],
+        "count": len(messages)
+    })
+
+
+@api_bp.route('/messages/history')
+def api_messages_history():
+    """
+    Get message history.
+
+    Query params:
+    - agent_id: Optional filter by agent
+    - message_type: Optional filter by type
+    - limit: Max messages (default 100)
+    """
+    bus = get_message_bus()
+    if not bus:
+        return jsonify({"error": "Message bus not available"}), 503
+
+    from ..services.agent_protocol import AgentId, MessageType
+
+    agent_id = None
+    if request.args.get('agent_id'):
+        agent_id = AgentId(id=request.args.get('agent_id'))
+
+    message_type = None
+    if request.args.get('message_type'):
+        try:
+            message_type = MessageType(request.args.get('message_type'))
+        except ValueError:
+            pass
+
+    try:
+        limit = int(request.args.get('limit', 100))
+    except ValueError:
+        limit = 100
+
+    messages = bus.get_message_history(agent_id, message_type, limit)
+
+    return jsonify({
+        "messages": [m.to_dict() for m in messages],
+        "count": len(messages)
+    })
+
+
+@api_bp.route('/messages/stats')
+def api_messages_stats():
+    """Get message bus statistics."""
+    bus = get_message_bus()
+    if not bus:
+        return jsonify({"error": "Message bus not available"}), 503
+
+    return jsonify(bus.get_stats())
+
+
+@api_bp.route('/messages/dead-letters')
+def api_messages_dead_letters():
+    """Get failed/expired messages."""
+    bus = get_message_bus()
+    if not bus:
+        return jsonify({"error": "Message bus not available"}), 503
+
+    try:
+        limit = int(request.args.get('limit', 50))
+    except ValueError:
+        limit = 50
+
+    messages = bus.get_dead_letters(limit)
+
+    return jsonify({
+        "dead_letters": [m.to_dict() for m in messages],
+        "count": len(messages)
+    })
+
+
+# ============ Translation Layer (AGI-Readiness Phase 3) ============
+
+# Lazy import for translation layer
+_translation_layer = None
+
+def get_translation_layer():
+    """Lazy load translation layer."""
+    global _translation_layer
+    if _translation_layer is None:
+        try:
+            from ..services import translation_layer
+            _translation_layer = translation_layer.get_translation_layer()
+        except Exception as e:
+            logger.error(f"Failed to load translation layer: {e}")
+            _translation_layer = False
+    return _translation_layer if _translation_layer else None
+
+
+@api_bp.route('/translate/message', methods=['POST'])
+def api_translate_message():
+    """
+    Translate an agent message to human-readable format.
+
+    JSON body:
+    - message: AgentMessage dict
+    """
+    tl = get_translation_layer()
+    if not tl:
+        return jsonify({"error": "Translation layer not available"}), 503
+
+    data = request.get_json()
+    if not data or 'message' not in data:
+        return jsonify({"error": "Missing 'message' field"}), 400
+
+    from ..services.agent_protocol import AgentMessage
+
+    try:
+        message = AgentMessage.from_dict(data['message'])
+        translated = tl.translate(message)
+        return jsonify(translated.to_dict())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@api_bp.route('/translate/activity-summary', methods=['POST'])
+def api_translate_activity_summary():
+    """
+    Get a human-readable summary of recent agent activity.
+
+    JSON body:
+    - messages: List of AgentMessage dicts
+    - time_window_minutes: Optional time window (default 60)
+    """
+    tl = get_translation_layer()
+    if not tl:
+        return jsonify({"error": "Translation layer not available"}), 503
+
+    data = request.get_json()
+    if not data or 'messages' not in data:
+        return jsonify({"error": "Missing 'messages' field"}), 400
+
+    from ..services.agent_protocol import AgentMessage
+
+    try:
+        messages = [AgentMessage.from_dict(m) for m in data['messages']]
+        time_window = data.get('time_window_minutes', 60)
+        summary = tl.summarize_activity(messages, time_window)
+        return jsonify(summary.to_dict())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@api_bp.route('/translate/agent-name/<agent_type>')
+def api_translate_agent_name(agent_type):
+    """Get a friendly name for an agent type."""
+    tl = get_translation_layer()
+    if not tl:
+        return jsonify({"error": "Translation layer not available"}), 503
+
+    friendly_name = tl.get_friendly_agent_name(agent_type)
+    return jsonify({"agent_type": agent_type, "friendly_name": friendly_name})
+
+
+@api_bp.route('/translate/recent')
+def api_translate_recent():
+    """Get translated recent messages from the message bus."""
+    bus = get_message_bus()
+    tl = get_translation_layer()
+
+    if not bus or not tl:
+        return jsonify({"error": "Services not available"}), 503
+
+    try:
+        limit = int(request.args.get('limit', 20))
+    except ValueError:
+        limit = 20
+
+    messages = bus.get_message_history(limit=limit)
+    translated = [tl.translate(m).to_dict() for m in messages]
+
+    return jsonify({
+        "messages": translated,
+        "count": len(translated)
+    })
+
+
 # ============ Favorites ============
 
 @api_bp.route('/favorites')
