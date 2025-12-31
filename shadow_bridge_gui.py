@@ -134,7 +134,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.005"
+APP_VERSION = "1.006"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -2554,10 +2554,6 @@ class ShadowBridgeApp:
         # QR Code card - elevated with subtle border
         qr_card = tk.Frame(left_inner, bg=COLORS['bg_card'], padx=16, pady=12)
         qr_card.pack(fill=tk.X, pady=(0, 10))
-        # Add top highlight line for depth effect
-        qr_highlight = tk.Frame(qr_card, bg=COLORS['border_light'], height=1)
-        qr_highlight.pack(fill=tk.X, side=tk.TOP)
-
         # QR Label title
         qr_title = tk.Label(
             qr_card, text="QUICK CONNECT", bg=COLORS['bg_card'],
