@@ -1400,6 +1400,146 @@ def api_memory_recent():
     })
 
 
+# ============ Vector Store / Semantic Search ============
+
+# Lazy import to handle missing dependencies gracefully
+_vector_store = None
+
+def get_vector_store():
+    """Lazy load vector store module."""
+    global _vector_store
+    if _vector_store is None:
+        try:
+            from ..services import vector_store
+            _vector_store = vector_store
+        except ImportError:
+            _vector_store = False
+    return _vector_store if _vector_store else None
+
+
+@api_bp.route('/vector/status')
+def api_vector_status():
+    """Get vector store status and statistics."""
+    vs = get_vector_store()
+    if not vs:
+        return jsonify({
+            "available": False,
+            "error": "Vector store module not loaded. Install: pip install chromadb sentence-transformers"
+        })
+    return jsonify(vs.get_stats())
+
+
+@api_bp.route('/vector/search')
+def api_vector_search():
+    """
+    Perform semantic search using vector embeddings.
+
+    Query params:
+    - q: Search query (required)
+    - types: Comma-separated source types (optional: note,project,automation,agent)
+    - limit: Maximum results (optional, default: 10)
+
+    Returns semantically similar content ranked by relevance score.
+    """
+    vs = get_vector_store()
+    if not vs or not vs.is_available():
+        return jsonify({
+            "error": "Vector store not available",
+            "results": [],
+            "search_type": "unavailable"
+        })
+
+    query = request.args.get('q', '')
+    if not query:
+        return jsonify({"error": "Query parameter 'q' is required"}), 400
+
+    types_param = request.args.get('types', '')
+    source_types = [t.strip().lower() for t in types_param.split(',') if t.strip()] if types_param else None
+
+    try:
+        limit = min(int(request.args.get('limit', 10)), 50)
+    except ValueError:
+        limit = 10
+
+    results = vs.semantic_search(query, source_types, limit)
+
+    return jsonify({
+        "results": results,
+        "query": query,
+        "search_type": "semantic",
+        "total_found": len(results)
+    })
+
+
+@api_bp.route('/vector/index', methods=['POST'])
+def api_vector_index():
+    """
+    Index a single document.
+
+    JSON body:
+    - source_type: Type (note, project, automation, agent)
+    - source_id: Unique ID
+    - title: Document title
+    - content: Document content
+    - metadata: Optional additional metadata
+    """
+    vs = get_vector_store()
+    if not vs or not vs.is_available():
+        return jsonify({"error": "Vector store not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ["source_type", "source_id", "title", "content"]
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    success = vs.index_document(
+        source_type=data["source_type"],
+        source_id=data["source_id"],
+        title=data["title"],
+        content=data["content"],
+        metadata=data.get("metadata")
+    )
+
+    return jsonify({"success": success})
+
+
+@api_bp.route('/vector/reindex', methods=['POST'])
+def api_vector_reindex():
+    """
+    Reindex all content from data stores.
+
+    This will clear the existing index and rebuild it from
+    notes, projects, automations, and agents.
+    """
+    vs = get_vector_store()
+    if not vs or not vs.is_available():
+        return jsonify({"error": "Vector store not available"}), 503
+
+    # Import data_service for reindexing
+    from ..services import data_service
+
+    counts = vs.reindex_all(data_service)
+    return jsonify({
+        "success": "error" not in counts,
+        "indexed": counts
+    })
+
+
+@api_bp.route('/vector/clear', methods=['POST'])
+def api_vector_clear():
+    """Clear the entire vector index."""
+    vs = get_vector_store()
+    if not vs or not vs.is_available():
+        return jsonify({"error": "Vector store not available"}), 503
+
+    success = vs.clear_index()
+    return jsonify({"success": success})
+
+
 # ============ Favorites ============
 
 @api_bp.route('/favorites')
