@@ -199,6 +199,8 @@ async function openProject(id) {
         showToast('Error opening project: ' + result.error, 'error');
     } else {
         showToast('Opening project...', 'success');
+        // Track activity for context window (AGI-Readiness)
+        api.trackActivity('open', 'project', id, result.name || 'Project').catch(() => {});
     }
 }
 
@@ -231,6 +233,9 @@ async function openNote(id) {
         currentNoteContent = result.content || '';
         title.textContent = currentNoteTitle;
         renderNoteContent();
+
+        // Track activity for context window (AGI-Readiness)
+        api.trackActivity('view', 'note', id, currentNoteTitle).catch(() => {});
     }
 }
 
@@ -342,6 +347,9 @@ async function saveNote() {
             saveBtn.disabled = false;
             saveBtn.textContent = 'Save';
         }
+
+        // Track activity for context window (AGI-Readiness)
+        api.trackActivity('edit', 'note', currentNoteId, currentNoteTitle).catch(() => {});
     }
 }
 
@@ -529,6 +537,9 @@ async function performSearch(query) {
     }).join('');
 
     searchResultsVisible = true;
+
+    // Track search as a topic for context window (AGI-Readiness)
+    api.recordTopic(query).catch(() => {});
 }
 
 function getSearchIcon(type) {

@@ -1540,6 +1540,210 @@ def api_vector_clear():
     return jsonify({"success": success})
 
 
+# ============ Context Window (AGI-Readiness) ============
+
+# Lazy import for context window service
+_context_service = None
+
+def get_context_service():
+    """Lazy load context window service."""
+    global _context_service
+    if _context_service is None:
+        try:
+            from ..services import context_window, data_service
+            vs = get_vector_store()
+            _context_service = context_window.get_context_service(
+                data_service=data_service,
+                vector_store=vs
+            )
+        except Exception as e:
+            logger.error(f"Failed to load context service: {e}")
+            _context_service = False
+    return _context_service if _context_service else None
+
+
+@api_bp.route('/context/track', methods=['POST'])
+def api_context_track():
+    """
+    Track a user activity event for context building.
+
+    JSON body:
+    - event_type: Type of event (view, edit, search, create, delete)
+    - resource_type: Type of resource (project, note, automation, agent)
+    - resource_id: ID of the resource
+    - resource_title: Human-readable title
+    - metadata: Optional additional metadata
+    """
+    cs = get_context_service()
+    if not cs:
+        return jsonify({"error": "Context service not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ["event_type", "resource_type", "resource_id", "resource_title"]
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    cs.track_activity(
+        event_type=data["event_type"],
+        resource_type=data["resource_type"],
+        resource_id=data["resource_id"],
+        resource_title=data["resource_title"],
+        metadata=data.get("metadata")
+    )
+
+    return jsonify({"success": True})
+
+
+@api_bp.route('/context/window')
+def api_context_window():
+    """
+    Build a context window for AI queries.
+
+    Query params:
+    - q: Optional query for semantic relevance
+    - include_semantic: Whether to include semantic search results (default: true)
+    - max_tokens: Maximum token budget (default: 4000)
+
+    Returns a context window with:
+    - active_context: Currently focused item
+    - recent_items: Recently accessed items
+    - related_items: Semantically related items (if query provided)
+    - session_summary: Summary of current session
+    - user_preferences: User preference settings
+    """
+    cs = get_context_service()
+    if not cs:
+        return jsonify({"error": "Context service not available"}), 503
+
+    query = request.args.get('q', None)
+    include_semantic = request.args.get('include_semantic', 'true').lower() == 'true'
+
+    try:
+        max_tokens = min(int(request.args.get('max_tokens', 4000)), 16000)
+    except ValueError:
+        max_tokens = 4000
+
+    context = cs.build_context_window(
+        query=query,
+        include_semantic=include_semantic,
+        max_tokens=max_tokens
+    )
+
+    return jsonify(context.to_dict())
+
+
+@api_bp.route('/context/prompt')
+def api_context_prompt():
+    """
+    Get context formatted for AI prompt injection.
+
+    Query params:
+    - q: Optional query for semantic relevance
+
+    Returns a ready-to-use context string for AI prompts.
+    """
+    cs = get_context_service()
+    if not cs:
+        return jsonify({"error": "Context service not available"}), 503
+
+    query = request.args.get('q', None)
+    context = cs.build_context_window(query=query)
+
+    return jsonify({
+        "context": context.to_prompt_context(),
+        "token_estimate": context.token_estimate
+    })
+
+
+@api_bp.route('/context/recent')
+def api_context_recent():
+    """
+    Get recent activity events.
+
+    Query params:
+    - minutes: How far back to look (default: 30)
+    - event_types: Comma-separated event types filter
+    - resource_types: Comma-separated resource types filter
+    - limit: Maximum events (default: 10)
+    """
+    cs = get_context_service()
+    if not cs:
+        return jsonify({"error": "Context service not available"}), 503
+
+    try:
+        minutes = int(request.args.get('minutes', 30))
+    except ValueError:
+        minutes = 30
+
+    try:
+        limit = min(int(request.args.get('limit', 10)), 50)
+    except ValueError:
+        limit = 10
+
+    event_types_param = request.args.get('event_types', '')
+    event_types = [t.strip() for t in event_types_param.split(',') if t.strip()] if event_types_param else None
+
+    resource_types_param = request.args.get('resource_types', '')
+    resource_types = [t.strip() for t in resource_types_param.split(',') if t.strip()] if resource_types_param else None
+
+    events = cs.get_recent_activity(
+        minutes=minutes,
+        event_types=event_types,
+        resource_types=resource_types,
+        limit=limit
+    )
+
+    return jsonify({
+        "events": [e.to_dict() for e in events],
+        "total": len(events)
+    })
+
+
+@api_bp.route('/context/stats')
+def api_context_stats():
+    """Get context window service statistics."""
+    cs = get_context_service()
+    if not cs:
+        return jsonify({"error": "Context service not available"}), 503
+
+    return jsonify(cs.get_stats())
+
+
+@api_bp.route('/context/topic', methods=['POST'])
+def api_context_topic():
+    """
+    Record a topic discussed in this session.
+
+    JSON body:
+    - topic: Topic string to record
+    """
+    cs = get_context_service()
+    if not cs:
+        return jsonify({"error": "Context service not available"}), 503
+
+    data = request.get_json()
+    if not data or 'topic' not in data:
+        return jsonify({"error": "Missing 'topic' field"}), 400
+
+    cs.record_topic(data['topic'])
+    return jsonify({"success": True})
+
+
+@api_bp.route('/context/clear', methods=['POST'])
+def api_context_clear():
+    """Clear the context session state."""
+    cs = get_context_service()
+    if not cs:
+        return jsonify({"error": "Context service not available"}), 503
+
+    cs.clear_session()
+    return jsonify({"success": True})
+
+
 # ============ Favorites ============
 
 @api_bp.route('/favorites')

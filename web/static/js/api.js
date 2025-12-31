@@ -435,6 +435,50 @@ const api = {
         return semanticResults;
     },
 
+    // ============ Context Window (AGI-Readiness) ============
+    async trackActivity(eventType, resourceType, resourceId, resourceTitle, metadata = null) {
+        return this.fetch('/context/track', {
+            method: 'POST',
+            body: JSON.stringify({
+                event_type: eventType,
+                resource_type: resourceType,
+                resource_id: resourceId,
+                resource_title: resourceTitle,
+                metadata: metadata
+            })
+        });
+    },
+
+    async getContextWindow(query = null, includeSemantic = true, maxTokens = 4000) {
+        const params = new URLSearchParams({ include_semantic: includeSemantic, max_tokens: maxTokens });
+        if (query) params.set('q', query);
+        return this.fetch(`/context/window?${params}`, {}, false);
+    },
+
+    async getContextPrompt(query = null) {
+        const params = query ? `?q=${encodeURIComponent(query)}` : '';
+        return this.fetch(`/context/prompt${params}`, {}, false);
+    },
+
+    async getRecentActivity(minutes = 30, limit = 10) {
+        return this.fetch(`/context/recent?minutes=${minutes}&limit=${limit}`, {}, false);
+    },
+
+    async getContextStats() {
+        return this.fetch('/context/stats', {}, false);
+    },
+
+    async recordTopic(topic) {
+        return this.fetch('/context/topic', {
+            method: 'POST',
+            body: JSON.stringify({ topic })
+        });
+    },
+
+    async clearContextSession() {
+        return this.fetch('/context/clear', { method: 'POST' });
+    },
+
     // ============ Enhanced Analytics ============
     async getPrivacyScore() {
         return this.fetch('/analytics/privacy', {}, true);
