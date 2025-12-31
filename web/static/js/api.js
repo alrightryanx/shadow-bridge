@@ -369,6 +369,72 @@ const api = {
         return this.fetch(`/search?${params}`, {}, true);
     },
 
+    // ============ Semantic Search (Vector Store) ============
+    async semanticSearch(query, types = null, limit = 10) {
+        const params = new URLSearchParams({ q: query, limit: limit });
+        if (types && types.length > 0) {
+            params.set('types', types.join(','));
+        }
+        return this.fetch(`/vector/search?${params}`, {}, false);
+    },
+
+    async getVectorStatus() {
+        return this.fetch('/vector/status', {}, false);
+    },
+
+    async reindexVectorStore() {
+        return this.fetch('/vector/reindex', { method: 'POST' });
+    },
+
+    async clearVectorStore() {
+        return this.fetch('/vector/clear', { method: 'POST' });
+    },
+
+    // ============ Unified Memory ============
+    async getMemoryStats() {
+        return this.fetch('/memory/stats', {}, true);
+    },
+
+    async memorySearch(query, scopes = null, limit = 20) {
+        const params = new URLSearchParams({ q: query, limit: limit });
+        if (scopes && scopes.length > 0) {
+            params.set('scopes', scopes.join(','));
+        }
+        return this.fetch(`/memory/search?${params}`, {}, false);
+    },
+
+    async getRecentMemory(scopes = null, limit = 10) {
+        const params = new URLSearchParams({ limit: limit });
+        if (scopes && scopes.length > 0) {
+            params.set('scopes', scopes.join(','));
+        }
+        return this.fetch(`/memory/recent?${params}`, {}, false);
+    },
+
+    // ============ Hybrid Search (combines keyword + semantic) ============
+    async hybridSearch(query, types = null, limit = 10) {
+        // Try semantic search first, fallback to keyword
+        const semanticResults = await this.semanticSearch(query, types, limit);
+
+        if (semanticResults.error || !semanticResults.results || semanticResults.results.length === 0) {
+            // Fallback to keyword search
+            const keywordTypes = types || ['projects', 'notes', 'automations', 'agents'];
+            const keywordResults = await this.search(query, keywordTypes);
+            return {
+                results: (keywordResults.items || []).map(item => ({
+                    ...item,
+                    score: 1.0,
+                    source_type: item.type,
+                    source_id: item.id
+                })),
+                search_type: 'keyword',
+                query: query
+            };
+        }
+
+        return semanticResults;
+    },
+
     // ============ Enhanced Analytics ============
     async getPrivacyScore() {
         return this.fetch('/analytics/privacy', {}, true);

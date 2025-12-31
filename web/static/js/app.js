@@ -420,6 +420,7 @@ document.addEventListener('click', function(e) {
 
 let searchTimeout = null;
 let searchResultsVisible = false;
+let searchMode = 'hybrid'; // 'keyword', 'semantic', or 'hybrid'
 
 async function handleSearchKeyup(event) {
     const query = event.target.value.trim();
@@ -445,27 +446,88 @@ async function handleSearchKeyup(event) {
     }
 }
 
+function setSearchMode(mode) {
+    searchMode = mode;
+    // Update toggle buttons
+    document.querySelectorAll('.search-mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+    // Re-run search if there's a query
+    const query = document.getElementById('global-search')?.value?.trim();
+    if (query) performSearch(query);
+}
+
 async function performSearch(query) {
-    const results = await api.search(query);
     const container = document.getElementById('search-results');
 
-    if (results.error || !results.items || results.items.length === 0) {
-        container.innerHTML = '<div class="search-no-results">No results found</div>';
-        container.classList.remove('hidden');
+    // Show loading state
+    container.innerHTML = '<div class="search-loading"><span class="spinner"></span> Searching...</div>';
+    container.classList.remove('hidden');
+
+    let results;
+    let isSemanticResult = false;
+
+    try {
+        if (searchMode === 'semantic') {
+            results = await api.semanticSearch(query, null, 10);
+            isSemanticResult = true;
+        } else if (searchMode === 'hybrid') {
+            results = await api.hybridSearch(query, null, 10);
+            isSemanticResult = results.search_type === 'semantic';
+        } else {
+            results = await api.search(query);
+        }
+    } catch (e) {
+        console.error('Search error:', e);
+        results = { error: e.message };
+    }
+
+    // Handle semantic results format
+    const items = results.results || results.items || [];
+
+    if (results.error || items.length === 0) {
+        container.innerHTML = `
+            <div class="search-mode-header">
+                <div class="search-mode-toggle">
+                    <button class="search-mode-btn ${searchMode === 'keyword' ? 'active' : ''}" data-mode="keyword" onclick="setSearchMode('keyword')" title="Keyword search">ABC</button>
+                    <button class="search-mode-btn ${searchMode === 'hybrid' ? 'active' : ''}" data-mode="hybrid" onclick="setSearchMode('hybrid')" title="Hybrid search">&#x2726;</button>
+                    <button class="search-mode-btn ${searchMode === 'semantic' ? 'active' : ''}" data-mode="semantic" onclick="setSearchMode('semantic')" title="Semantic AI search">&#x1F9E0;</button>
+                </div>
+            </div>
+            <div class="search-no-results">No results found${results.error ? ' - ' + results.error : ''}</div>`;
         return;
     }
 
-    container.innerHTML = results.items.slice(0, 10).map(item => `
-        <div class="search-result-item" onclick="navigateToResult('${item.type}', '${item.id}')">
-            <span class="search-result-icon">${getSearchIcon(item.type)}</span>
-            <div class="search-result-content">
-                <div class="search-result-title">${escapeHtml(item.title || item.name)}</div>
-                <div class="search-result-meta">${item.type} ${item.preview ? '- ' + escapeHtml(item.preview.substring(0, 50)) : ''}</div>
+    // Build search mode header
+    const modeHeader = `
+        <div class="search-mode-header">
+            <div class="search-mode-toggle">
+                <button class="search-mode-btn ${searchMode === 'keyword' ? 'active' : ''}" data-mode="keyword" onclick="setSearchMode('keyword')" title="Keyword search">ABC</button>
+                <button class="search-mode-btn ${searchMode === 'hybrid' ? 'active' : ''}" data-mode="hybrid" onclick="setSearchMode('hybrid')" title="Hybrid search">&#x2726;</button>
+                <button class="search-mode-btn ${searchMode === 'semantic' ? 'active' : ''}" data-mode="semantic" onclick="setSearchMode('semantic')" title="Semantic AI search">&#x1F9E0;</button>
             </div>
-        </div>
-    `).join('');
+            ${isSemanticResult ? '<span class="search-type-badge">AI</span>' : '<span class="search-type-badge keyword">Keyword</span>'}
+        </div>`;
 
-    container.classList.remove('hidden');
+    container.innerHTML = modeHeader + items.slice(0, 10).map(item => {
+        // Handle both keyword and semantic result formats
+        const type = item.type || item.source_type || 'unknown';
+        const id = item.id || item.source_id || '';
+        const title = item.title || item.name || 'Untitled';
+        const preview = item.preview || (item.content ? item.content.substring(0, 80) : '');
+        const score = item.score;
+
+        return `
+        <div class="search-result-item" onclick="navigateToResult('${type}', '${id}')">
+            <span class="search-result-icon">${getSearchIcon(type)}</span>
+            <div class="search-result-content">
+                <div class="search-result-title">${escapeHtml(title)}</div>
+                <div class="search-result-meta">${type} ${preview ? '- ' + escapeHtml(preview.substring(0, 50)) : ''}</div>
+            </div>
+            ${score !== undefined ? `<span class="search-score" title="Relevance score">${Math.round(score * 100)}%</span>` : ''}
+        </div>`;
+    }).join('');
+
     searchResultsVisible = true;
 }
 
