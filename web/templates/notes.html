@@ -291,6 +291,7 @@ async function editNoteInModal(noteId, title, event) {
     currentNoteId = noteId;
     currentNoteContent = loadedNoteContents[noteId];
     currentNoteTitle = title;
+    isEditMode = true;
 
     document.getElementById('modal-title').textContent = title;
     document.getElementById('modal-content').innerHTML = '<textarea id="note-editor" class="note-editor">' + escapeHtml(currentNoteContent) + '</textarea>';

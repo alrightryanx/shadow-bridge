@@ -299,10 +299,16 @@ function cancelEdit() {
 }
 
 async function saveNote() {
-    if (!currentNoteId) return;
+    if (!currentNoteId) {
+        showToast('No note selected', 'error');
+        return;
+    }
 
     const editor = document.getElementById('note-editor');
-    if (!editor) return;
+    if (!editor) {
+        showToast('Editor not found', 'error');
+        return;
+    }
 
     const newContent = editor.value;
     const saveBtn = document.getElementById('save-note-btn');
