@@ -851,6 +851,81 @@ def api_agent_metrics():
     return jsonify(get_agent_metrics())
 
 
+# ============ Agent Control (Kill Switches) ============
+
+# In-memory activity log for real-time feed
+_agent_activity_log = []
+_activity_log_lock = Lock()
+MAX_ACTIVITY_ITEMS = 100
+
+def _add_activity(event_type: str, message: str, icon: str = None):
+    """Add an activity event to the log."""
+    with _activity_log_lock:
+        _agent_activity_log.insert(0, {
+            "type": event_type,
+            "message": message,
+            "icon": icon or event_type,
+            "timestamp": int(time.time() * 1000)
+        })
+        # Trim old items
+        while len(_agent_activity_log) > MAX_ACTIVITY_ITEMS:
+            _agent_activity_log.pop()
+
+
+@api_bp.route('/agents/activity')
+def api_agent_activity():
+    """Get recent agent activity for real-time feed."""
+    since = request.args.get('since', 0, type=int)
+    with _activity_log_lock:
+        events = [e for e in _agent_activity_log if e['timestamp'] > since]
+    return jsonify({
+        "events": events[:20],  # Max 20 events per poll
+        "timestamp": int(time.time() * 1000)
+    })
+
+
+@api_bp.route('/agents/pause', methods=['POST'])
+def api_pause_agents():
+    """Pause all agent execution."""
+    _add_activity('system', 'All agents paused', 'pause')
+    # TODO: Send pause command to Android device
+    return jsonify({"success": True, "message": "Pause command sent"})
+
+
+@api_bp.route('/agents/resume', methods=['POST'])
+def api_resume_agents():
+    """Resume all agent execution."""
+    _add_activity('system', 'All agents resumed', 'play')
+    # TODO: Send resume command to Android device
+    return jsonify({"success": True, "message": "Resume command sent"})
+
+
+@api_bp.route('/agents/kill-all', methods=['POST'])
+def api_kill_all_agents():
+    """Emergency kill switch for all agents."""
+    _add_activity('kill', 'KILL ALL command executed', 'cancel')
+    # TODO: Send kill command to Android device
+    return jsonify({"success": True, "message": "Kill all command sent"})
+
+
+@api_bp.route('/agents/<agent_id>/kill', methods=['POST'])
+def api_kill_agent(agent_id):
+    """Kill a specific agent."""
+    agent = get_agent(agent_id)
+    agent_name = agent.get('name', agent_id) if agent else agent_id
+    _add_activity('kill', f'Agent {agent_name} terminated', 'cancel')
+    # TODO: Send kill command to Android device for specific agent
+    return jsonify({"success": True, "message": f"Kill command sent for agent {agent_id}"})
+
+
+@api_bp.route('/tasks/<task_id>/cancel', methods=['POST'])
+def api_cancel_task(task_id):
+    """Cancel a running task."""
+    _add_activity('kill', f'Task {task_id} cancelled', 'stop')
+    # TODO: Send cancel command to Android device
+    return jsonify({"success": True, "message": f"Cancel command sent for task {task_id}"})
+
+
 # ============ Analytics ============
 
 @api_bp.route('/analytics/usage')

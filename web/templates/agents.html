@@ -32,6 +32,45 @@
     </div>
 </div>
 
+<!-- Emergency Controls -->
+<section class="section">
+    <div class="controls-header">
+        <h2>Control Center</h2>
+        <div class="emergency-controls">
+            <button class="btn btn-warning" id="pause-all-btn" onclick="pauseAllAgents()">
+                <span class="material-symbols-outlined">pause_circle</span>
+                Pause All
+            </button>
+            <button class="btn btn-danger" id="kill-all-btn" onclick="killAllAgents()">
+                <span class="material-symbols-outlined">cancel</span>
+                Kill All
+            </button>
+        </div>
+    </div>
+</section>
+
+<!-- Real-time Activity Feed -->
+<section class="section">
+    <div class="section-header">
+        <h2>Live Activity Feed</h2>
+        <div class="feed-controls">
+            <span class="live-indicator" id="live-indicator">
+                <span class="pulse"></span> LIVE
+            </span>
+            <button class="btn btn-small" onclick="clearActivityFeed()">Clear</button>
+        </div>
+    </div>
+    <div class="activity-feed" id="activity-feed">
+        <div class="feed-item system">
+            <span class="feed-time">--:--:--</span>
+            <span class="feed-icon">
+                <span class="material-symbols-outlined">info</span>
+            </span>
+            <span class="feed-message">Waiting for agent activity...</span>
+        </div>
+    </div>
+</section>
+
 <!-- Agent Cards -->
 <section class="section">
     <h2>Agent Roster</h2>
@@ -40,42 +79,293 @@
     </div>
 </section>
 
-<!-- Active Tasks -->
+<!-- Active Tasks with Kill Switches -->
 <section class="section">
-    <h2>Active Tasks</h2>
+    <div class="section-header">
+        <h2>Active Tasks</h2>
+        <span class="task-count" id="task-count">0</span>
+    </div>
     <div class="tasks-list" id="active-tasks">
         <div class="empty-state">No active tasks</div>
     </div>
 </section>
+
+<style>
+.controls-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.emergency-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-warning {
+    background: var(--warning);
+    color: #000;
+}
+
+.btn-warning:hover {
+    background: #e68a00;
+}
+
+.btn-danger {
+    background: var(--error);
+    color: #fff;
+}
+
+.btn-danger:hover {
+    background: #c62828;
+}
+
+.btn-small {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.feed-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.live-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #4CAF50;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.live-indicator .pulse {
+    width: 8px;
+    height: 8px;
+    background: #4CAF50;
+    border-radius: 50%;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.2); }
+}
+
+.live-indicator.paused {
+    color: var(--warning);
+}
+
+.live-indicator.paused .pulse {
+    background: var(--warning);
+    animation: none;
+}
+
+.activity-feed {
+    background: var(--surface);
+    border-radius: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 0.5rem;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.8rem;
+}
+
+.feed-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--outline);
+    animation: fadeIn 0.3s ease;
+}
+
+.feed-item:last-child {
+    border-bottom: none;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.feed-time {
+    color: var(--on-surface-variant);
+    font-size: 0.7rem;
+    min-width: 60px;
+}
+
+.feed-icon {
+    display: flex;
+    align-items: center;
+}
+
+.feed-icon .material-symbols-outlined {
+    font-size: 1rem;
+}
+
+.feed-item.agent-spawn .feed-icon { color: #4CAF50; }
+.feed-item.task-start .feed-icon { color: #2196F3; }
+.feed-item.task-complete .feed-icon { color: #4CAF50; }
+.feed-item.task-error .feed-icon { color: var(--error); }
+.feed-item.thinking .feed-icon { color: #9C27B0; }
+.feed-item.tool-call .feed-icon { color: #FF9800; }
+.feed-item.approval .feed-icon { color: var(--warning); }
+.feed-item.system .feed-icon { color: var(--on-surface-variant); }
+.feed-item.kill .feed-icon { color: var(--error); }
+
+.feed-message {
+    flex: 1;
+    word-break: break-word;
+}
+
+.feed-message .agent-name {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.feed-message .task-name {
+    color: var(--secondary);
+}
+
+.task-count {
+    background: var(--primary);
+    color: var(--on-primary);
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.task-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background: var(--surface);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+}
+
+.task-item .task-info {
+    flex: 1;
+}
+
+.task-item .task-agent {
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.task-item .task-name {
+    color: var(--on-surface);
+    margin-top: 0.25rem;
+}
+
+.task-item .task-duration {
+    font-size: 0.75rem;
+    color: var(--on-surface-variant);
+    margin-top: 0.25rem;
+}
+
+.task-item .task-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.task-item .btn-icon {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+}
+
+.task-item .btn-icon .material-symbols-outlined {
+    font-size: 1.1rem;
+}
+
+/* Agent card enhancements */
+.agent-card {
+    position: relative;
+}
+
+.agent-card .agent-kill-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.agent-card:hover .agent-kill-btn {
+    opacity: 1;
+}
+
+.agent-card.busy {
+    border-left: 3px solid var(--primary);
+}
+
+.agent-card.idle {
+    border-left: 3px solid var(--on-surface-variant);
+}
+
+.agent-card.error {
+    border-left: 3px solid var(--error);
+}
+</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
-// Refresh interval for auto-updates (30 seconds)
-const REFRESH_INTERVAL_MS = 30000;
+// Refresh interval for auto-updates (5 seconds for real-time feel)
+const REFRESH_INTERVAL_MS = 5000;
+// Activity feed polling (2 seconds)
+const ACTIVITY_POLL_MS = 2000;
 // Maximum retry attempts
 const MAX_RETRIES = 3;
 // Delay between retries (exponential backoff base)
 const RETRY_DELAY_MS = 1000;
+// Max feed items to keep
+const MAX_FEED_ITEMS = 50;
 
 let refreshTimer = null;
+let activityTimer = null;
 let isLoading = false;
+let isPaused = false;
+let lastActivityTimestamp = 0;
+
+// Activity feed state
+const activityFeed = [];
 
 document.addEventListener('DOMContentLoaded', function() {
     loadAll();
     // Start auto-refresh
     refreshTimer = setInterval(loadAll, REFRESH_INTERVAL_MS);
+    // Start activity polling
+    activityTimer = setInterval(pollActivity, ACTIVITY_POLL_MS);
+    // Add initial system message
+    addActivityItem('system', 'info', 'Agent dashboard initialized');
 });
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', function() {
-    if (refreshTimer) {
-        clearInterval(refreshTimer);
-    }
+    if (refreshTimer) clearInterval(refreshTimer);
+    if (activityTimer) clearInterval(activityTimer);
 });
 
 async function loadAll() {
-    if (isLoading) return; // Prevent concurrent loads
+    if (isLoading) return;
     isLoading = true;
 
     try {
@@ -97,7 +387,6 @@ async function fetchWithRetry(fetchFn, retries = MAX_RETRIES) {
             lastError = error;
             console.warn(`Attempt ${attempt + 1} failed:`, error.message);
             if (attempt < retries - 1) {
-                // Exponential backoff
                 await new Promise(resolve =>
                     setTimeout(resolve, RETRY_DELAY_MS * Math.pow(2, attempt))
                 );
@@ -106,6 +395,196 @@ async function fetchWithRetry(fetchFn, retries = MAX_RETRIES) {
     }
     throw lastError;
 }
+
+// ============ ACTIVITY FEED ============
+
+function getTimeString() {
+    const now = new Date();
+    return now.toTimeString().split(' ')[0];
+}
+
+function addActivityItem(type, icon, message) {
+    const feed = document.getElementById('activity-feed');
+    const iconMap = {
+        'agent-spawn': 'smart_toy',
+        'task-start': 'play_arrow',
+        'task-complete': 'check_circle',
+        'task-error': 'error',
+        'thinking': 'psychology',
+        'tool-call': 'build',
+        'approval': 'verified_user',
+        'system': 'info',
+        'kill': 'cancel'
+    };
+
+    const item = document.createElement('div');
+    item.className = `feed-item ${type}`;
+    item.innerHTML = `
+        <span class="feed-time">${getTimeString()}</span>
+        <span class="feed-icon">
+            <span class="material-symbols-outlined">${iconMap[type] || icon}</span>
+        </span>
+        <span class="feed-message">${message}</span>
+    `;
+
+    // Remove initial waiting message if present
+    const waiting = feed.querySelector('.feed-item.system');
+    if (waiting && waiting.textContent.includes('Waiting for')) {
+        waiting.remove();
+    }
+
+    // Add to top
+    feed.insertBefore(item, feed.firstChild);
+
+    // Trim old items
+    while (feed.children.length > MAX_FEED_ITEMS) {
+        feed.removeChild(feed.lastChild);
+    }
+
+    // Store in array for persistence
+    activityFeed.unshift({ type, message, time: Date.now() });
+    if (activityFeed.length > MAX_FEED_ITEMS) {
+        activityFeed.pop();
+    }
+}
+
+async function pollActivity() {
+    if (isPaused) return;
+
+    try {
+        const response = await fetch(`/api/agents/activity?since=${lastActivityTimestamp}`);
+        if (response.ok) {
+            const data = await response.json();
+            if (data.events && data.events.length > 0) {
+                data.events.forEach(event => {
+                    addActivityItem(event.type, event.icon, event.message);
+                });
+                lastActivityTimestamp = data.timestamp || Date.now();
+            }
+        }
+    } catch (error) {
+        // Silent fail for activity polling
+        console.debug('Activity poll failed:', error.message);
+    }
+}
+
+function clearActivityFeed() {
+    const feed = document.getElementById('activity-feed');
+    feed.innerHTML = `
+        <div class="feed-item system">
+            <span class="feed-time">${getTimeString()}</span>
+            <span class="feed-icon">
+                <span class="material-symbols-outlined">info</span>
+            </span>
+            <span class="feed-message">Activity feed cleared</span>
+        </div>
+    `;
+    activityFeed.length = 0;
+}
+
+// ============ CONTROL FUNCTIONS ============
+
+async function pauseAllAgents() {
+    const btn = document.getElementById('pause-all-btn');
+    const indicator = document.getElementById('live-indicator');
+
+    isPaused = !isPaused;
+
+    if (isPaused) {
+        btn.innerHTML = '<span class="material-symbols-outlined">play_circle</span> Resume All';
+        btn.classList.remove('btn-warning');
+        btn.classList.add('btn-success');
+        indicator.classList.add('paused');
+        indicator.innerHTML = '<span class="pulse"></span> PAUSED';
+        addActivityItem('system', 'pause', 'All agents paused by user');
+
+        // Send pause command to backend
+        try {
+            await fetch('/api/agents/pause', { method: 'POST' });
+        } catch (e) {
+            console.error('Failed to pause agents:', e);
+        }
+    } else {
+        btn.innerHTML = '<span class="material-symbols-outlined">pause_circle</span> Pause All';
+        btn.classList.remove('btn-success');
+        btn.classList.add('btn-warning');
+        indicator.classList.remove('paused');
+        indicator.innerHTML = '<span class="pulse"></span> LIVE';
+        addActivityItem('system', 'play', 'All agents resumed');
+
+        try {
+            await fetch('/api/agents/resume', { method: 'POST' });
+        } catch (e) {
+            console.error('Failed to resume agents:', e);
+        }
+    }
+}
+
+async function killAllAgents() {
+    if (!confirm('Are you sure you want to kill ALL running agents? This cannot be undone.')) {
+        return;
+    }
+
+    addActivityItem('kill', 'cancel', '<strong>KILL ALL</strong> command issued by user');
+
+    try {
+        const response = await fetch('/api/agents/kill-all', { method: 'POST' });
+        if (response.ok) {
+            addActivityItem('system', 'check', 'All agents terminated successfully');
+            showToast('All agents killed', 'success');
+            loadAll(); // Refresh
+        } else {
+            addActivityItem('task-error', 'error', 'Failed to kill all agents');
+            showToast('Failed to kill agents', 'error');
+        }
+    } catch (error) {
+        console.error('Kill all failed:', error);
+        addActivityItem('task-error', 'error', `Kill failed: ${error.message}`);
+        showToast('Kill command failed', 'error');
+    }
+}
+
+async function killAgent(agentId, agentName) {
+    if (!confirm(`Kill agent "${agentName}"?`)) {
+        return;
+    }
+
+    addActivityItem('kill', 'cancel', `Killing agent <span class="agent-name">${escapeHtml(agentName)}</span>`);
+
+    try {
+        const response = await fetch(`/api/agents/${agentId}/kill`, { method: 'POST' });
+        if (response.ok) {
+            addActivityItem('task-complete', 'check', `Agent <span class="agent-name">${escapeHtml(agentName)}</span> terminated`);
+            showToast(`Agent ${agentName} killed`, 'success');
+            loadAll();
+        } else {
+            addActivityItem('task-error', 'error', `Failed to kill ${escapeHtml(agentName)}`);
+            showToast('Failed to kill agent', 'error');
+        }
+    } catch (error) {
+        console.error('Kill agent failed:', error);
+        showToast('Kill command failed', 'error');
+    }
+}
+
+async function killTask(taskId, taskName) {
+    addActivityItem('kill', 'cancel', `Cancelling task <span class="task-name">${escapeHtml(taskName)}</span>`);
+
+    try {
+        const response = await fetch(`/api/tasks/${taskId}/cancel`, { method: 'POST' });
+        if (response.ok) {
+            addActivityItem('task-complete', 'check', `Task cancelled: ${escapeHtml(taskName)}`);
+            showToast('Task cancelled', 'success');
+            loadAll();
+        } else {
+            showToast('Failed to cancel task', 'error');
+        }
+    } catch (error) {
+        console.error('Cancel task failed:', error);
+    }
+}
+
+// ============ LOAD FUNCTIONS ============
 
 async function loadAgents() {
     const container = document.getElementById('agents-container');
@@ -119,34 +598,47 @@ async function loadAgents() {
             return;
         }
 
-        container.innerHTML = agents.map(a => `
-            <div class="agent-card" data-agent-id="${escapeHtml(a.id || '')}">
-                <div class="agent-header">
-                    <div class="agent-avatar">${(a.name || '?').charAt(0)}</div>
-                    <div class="agent-info">
-                        <div class="agent-name">${escapeHtml(a.name || 'Unknown')}</div>
-                        <span class="status-badge ${escapeHtml(a.status || 'unknown')}">${escapeHtml(a.status || 'unknown')}</span>
+        container.innerHTML = agents.map(a => {
+            const statusClass = a.status === 'busy' ? 'busy' :
+                               a.status === 'error' ? 'error' : 'idle';
+            return `
+                <div class="agent-card ${statusClass}" data-agent-id="${escapeHtml(a.id || '')}">
+                    ${a.status === 'busy' ? `
+                        <button class="btn btn-icon btn-danger agent-kill-btn"
+                                onclick="killAgent('${escapeHtml(a.id)}', '${escapeHtml(a.name)}')"
+                                title="Kill this agent">
+                            <span class="material-symbols-outlined">close</span>
+                        </button>
+                    ` : ''}
+                    <div class="agent-header">
+                        <div class="agent-avatar">${(a.name || '?').charAt(0)}</div>
+                        <div class="agent-info">
+                            <div class="agent-name">${escapeHtml(a.name || 'Unknown')}</div>
+                            <span class="status-badge ${escapeHtml(a.status || 'unknown')}">${escapeHtml(a.status || 'unknown')}</span>
+                        </div>
+                    </div>
+                    <div class="agent-specialty">${escapeHtml(a.specialty || 'General purpose')}</div>
+                    ${a.current_task ? `
+                        <div class="agent-task">
+                            <span class="task-label">Current:</span>
+                            <span class="task-name">${escapeHtml(a.current_task)}</span>
+                        </div>
+                    ` : ''}
+                    <div class="agent-stats">
+                        <span>${a.tasks_completed || 0} tasks completed</span>
                     </div>
                 </div>
-                <div class="agent-specialty">${escapeHtml(a.specialty || 'General purpose')}</div>
-                ${a.current_task ? `
-                    <div class="agent-task">
-                        <span class="task-label">Current:</span>
-                        <span class="task-name">${escapeHtml(a.current_task)}</span>
-                    </div>
-                ` : ''}
-                <div class="agent-stats">
-                    <span>${a.tasks_completed || 0} tasks completed</span>
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
 
         // Update active tasks
         const activeTasks = agents
             .filter(a => a.current_task)
             .map(a => ({
+                id: a.id,
                 agent: a.name,
-                task: a.current_task
+                task: a.current_task,
+                startTime: a.task_start_time || Date.now()
             }));
         updateActiveTasks(activeTasks);
 
@@ -162,15 +654,40 @@ async function loadAgents() {
     }
 }
 
+function formatDuration(startTime) {
+    const elapsed = Date.now() - startTime;
+    const seconds = Math.floor(elapsed / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+}
+
 function updateActiveTasks(activeTasks) {
     const tasksContainer = document.getElementById('active-tasks');
+    const taskCount = document.getElementById('task-count');
+
+    taskCount.textContent = activeTasks.length;
+
     if (!activeTasks || activeTasks.length === 0) {
         tasksContainer.innerHTML = '<div class="empty-state">No active tasks</div>';
     } else {
         tasksContainer.innerHTML = activeTasks.map(t => `
-            <div class="task-item">
-                <span class="task-agent">${escapeHtml(t.agent || 'Unknown')}</span>
-                <span class="task-name">${escapeHtml(t.task || 'Unknown task')}</span>
+            <div class="task-item" data-task-id="${escapeHtml(t.id || '')}">
+                <div class="task-info">
+                    <div class="task-agent">${escapeHtml(t.agent || 'Unknown')}</div>
+                    <div class="task-name">${escapeHtml(t.task || 'Unknown task')}</div>
+                    <div class="task-duration">Running for ${formatDuration(t.startTime)}</div>
+                </div>
+                <div class="task-actions">
+                    <button class="btn btn-icon btn-warning"
+                            onclick="killTask('${escapeHtml(t.id)}', '${escapeHtml(t.task)}')"
+                            title="Cancel this task">
+                        <span class="material-symbols-outlined">stop</span>
+                    </button>
+                </div>
             </div>
         `).join('');
     }
@@ -185,12 +702,22 @@ async function loadMetrics() {
         document.getElementById('tasks-completed').textContent = metrics.total_tasks_completed || 0;
     } catch (error) {
         console.error('Failed to load metrics:', error);
-        // Show error indicator but don't replace existing values
         document.getElementById('total-agents').textContent = '-';
         document.getElementById('active-agents').textContent = '-';
         document.getElementById('idle-agents').textContent = '-';
         document.getElementById('tasks-completed').textContent = '-';
     }
 }
+
+// Update task durations every second
+setInterval(() => {
+    document.querySelectorAll('.task-item').forEach(item => {
+        const durationEl = item.querySelector('.task-duration');
+        if (durationEl) {
+            const startTime = parseInt(item.dataset.startTime) || Date.now();
+            durationEl.textContent = `Running for ${formatDuration(startTime)}`;
+        }
+    });
+}, 1000);
 </script>
 {% endblock %}
