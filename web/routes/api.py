@@ -573,6 +573,17 @@ def api_update_note_content(note_id):
         if response.get("success"):
             # Invalidate cache so next fetch gets fresh content
             _invalidate_note_cache(note_id)
+
+            # Save to local cache for immediate access
+            save_note_content(note_id, new_title or note.get("title", "Untitled"), new_content, int(time.time() * 1000))
+
+            # Broadcast update to all connected web clients
+            try:
+                from .websocket import broadcast_notes_updated
+                broadcast_notes_updated(device_id or "web")
+            except Exception as e:
+                logger.warning(f"Failed to broadcast note update: {e}")
+
             return jsonify({
                 "success": True,
                 "id": note_id,

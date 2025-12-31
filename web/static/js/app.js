@@ -324,6 +324,12 @@ async function saveNote() {
     } else {
         currentNoteContent = newContent;
         isEditMode = false;
+
+        // Update the notes page cache if it exists
+        if (typeof loadedNoteContents !== 'undefined' && currentNoteId) {
+            loadedNoteContents[currentNoteId] = newContent;
+        }
+
         renderNoteContent();
         showToast('Note saved successfully', 'success');
         if (saveBtn) {

@@ -290,9 +290,10 @@ async function editNoteInModal(noteId, title, event) {
 
     currentNoteId = noteId;
     currentNoteContent = loadedNoteContents[noteId];
+    currentNoteTitle = title;
 
     document.getElementById('modal-title').textContent = title;
-    document.getElementById('modal-content').innerHTML = '<textarea id="note-edit-area" class="note-edit-area">' + escapeHtml(currentNoteContent) + '</textarea>';
+    document.getElementById('modal-content').innerHTML = '<textarea id="note-editor" class="note-editor">' + escapeHtml(currentNoteContent) + '</textarea>';
     document.getElementById('markdown-toolbar').classList.remove('hidden');
     document.getElementById('edit-note-btn').classList.add('hidden');
     document.getElementById('cancel-edit-btn').classList.remove('hidden');
@@ -589,19 +590,6 @@ async function removeShare(targetDevice) {
     transition: transform 0.2s;
 }
 
-.note-edit-area {
-    width: 100%;
-    min-height: 300px;
-    padding: 12px;
-    font-family: 'Consolas', 'Monaco', monospace;
-    font-size: 14px;
-    line-height: 1.6;
-    background: var(--bg-input);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    resize: vertical;
-}
 
 .note-info {
     flex: 1;
