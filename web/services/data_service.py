@@ -603,6 +603,138 @@ def get_automation_logs(automation_id: str) -> List[Dict]:
     return []
 
 
+def update_automation(automation_id: str, data: Dict, device_id: str = "web") -> Dict:
+    """Update an existing automation."""
+    file_data = _read_json_file(AUTOMATIONS_FILE) or {}
+
+    # Find the automation across all devices
+    found = False
+    for dev_id, device_data in file_data.items():
+        automations = device_data.get("automations", [])
+        for i, auto in enumerate(automations):
+            if auto.get("id") == automation_id:
+                # Update fields (preserve id and created_at)
+                updated = {
+                    "id": automation_id,
+                    "name": data.get("name", auto.get("name", "Unnamed")),
+                    "description": data.get("description", auto.get("description", "")),
+                    "enabled": data.get("enabled", auto.get("enabled", True)),
+                    "trigger_type": data.get("trigger_type", auto.get("trigger_type", "MANUAL")),
+                    "schedule_expression": data.get("schedule_expression", auto.get("schedule_expression")),
+                    "schedule_timezone": data.get("schedule_timezone", auto.get("schedule_timezone")),
+                    "voice_trigger_phrase": data.get("voice_trigger_phrase", auto.get("voice_trigger_phrase")),
+                    "ai_command": data.get("ai_command", auto.get("ai_command", "")),
+                    "ai_permission_level": data.get("ai_permission_level", auto.get("ai_permission_level", "FULL")),
+                    "use_note_as_context": data.get("use_note_as_context", auto.get("use_note_as_context", True)),
+                    "max_iterations": data.get("max_iterations", auto.get("max_iterations", 50)),
+                    "timeout_minutes": data.get("timeout_minutes", auto.get("timeout_minutes", 30)),
+                    "allow_autonomous_edits": data.get("allow_autonomous_edits", auto.get("allow_autonomous_edits", False)),
+                    "execution_mode": data.get("execution_mode", auto.get("execution_mode", "SINGLE_SHOT")),
+                    "team_type": data.get("team_type", auto.get("team_type")),
+                    "require_approval_for": data.get("require_approval_for", auto.get("require_approval_for", [])),
+                    "automation_type": data.get("automation_type", auto.get("automation_type", "TEXT")),
+                    "image_provider": data.get("image_provider", auto.get("image_provider")),
+                    "image_quality": data.get("image_quality", auto.get("image_quality")),
+                    "image_width": data.get("image_width", auto.get("image_width", 1024)),
+                    "image_height": data.get("image_height", auto.get("image_height", 1024)),
+                    "image_style": data.get("image_style", auto.get("image_style")),
+                    "n8n_workflow_id": data.get("n8n_workflow_id", auto.get("n8n_workflow_id")),
+                    "n8n_workflow_name": data.get("n8n_workflow_name", auto.get("n8n_workflow_name")),
+                    "project_id": data.get("project_id", auto.get("project_id")),
+                    "note_id": data.get("note_id", auto.get("note_id")),
+                    "output_destination": data.get("output_destination", auto.get("output_destination", "SHOW_DIALOG")),
+                    "output_note_title": data.get("output_note_title", auto.get("output_note_title")),
+                    "output_file_path": data.get("output_file_path", auto.get("output_file_path")),
+                    "file_operations": data.get("file_operations", auto.get("file_operations", [])),
+                    "icon_name": data.get("icon_name", auto.get("icon_name", "ic_automation")),
+                    "color": data.get("color", auto.get("color", "#FF9800")),
+                    "created_at": auto.get("created_at"),
+                    "last_run_at": auto.get("last_run_at"),
+                    "last_run_status": auto.get("last_run_status", "NEVER_RUN"),
+                    "last_run_result": auto.get("last_run_result"),
+                    "run_count": auto.get("run_count", 0),
+                    "source": auto.get("source", "web"),
+                    "pending_sync": True,
+                    "synced_at": None,
+                    "updated_at": int(datetime.now().timestamp() * 1000)
+                }
+                file_data[dev_id]["automations"][i] = updated
+                found = True
+                break
+        if found:
+            break
+
+    if not found:
+        return {"success": False, "error": "Automation not found"}
+
+    _write_json_file(AUTOMATIONS_FILE, file_data)
+    return {"success": True, "automation": updated}
+
+
+def delete_automation(automation_id: str) -> Dict:
+    """Delete an automation by ID."""
+    file_data = _read_json_file(AUTOMATIONS_FILE) or {}
+
+    found = False
+    deleted_name = None
+    for dev_id, device_data in file_data.items():
+        automations = device_data.get("automations", [])
+        for i, auto in enumerate(automations):
+            if auto.get("id") == automation_id:
+                deleted_name = auto.get("name", "Unnamed")
+                del file_data[dev_id]["automations"][i]
+                found = True
+                break
+        if found:
+            break
+
+    if not found:
+        return {"success": False, "error": "Automation not found"}
+
+    _write_json_file(AUTOMATIONS_FILE, file_data)
+    return {"success": True, "message": f"Deleted automation: {deleted_name}"}
+
+
+def toggle_automation_enabled(automation_id: str) -> Dict:
+    """Toggle the enabled status of an automation."""
+    file_data = _read_json_file(AUTOMATIONS_FILE) or {}
+
+    found = False
+    new_status = None
+    for dev_id, device_data in file_data.items():
+        automations = device_data.get("automations", [])
+        for auto in automations:
+            if auto.get("id") == automation_id:
+                auto["enabled"] = not auto.get("enabled", False)
+                auto["pending_sync"] = True
+                auto["synced_at"] = None
+                new_status = auto["enabled"]
+                found = True
+                break
+        if found:
+            break
+
+    if not found:
+        return {"success": False, "error": "Automation not found"}
+
+    _write_json_file(AUTOMATIONS_FILE, file_data)
+    return {"success": True, "enabled": new_status}
+
+
+def get_full_automation(automation_id: str) -> Optional[Dict]:
+    """Get full automation details including all fields."""
+    file_data = _read_json_file(AUTOMATIONS_FILE) or {}
+
+    for dev_id, device_data in file_data.items():
+        automations = device_data.get("automations", [])
+        for auto in automations:
+            if auto.get("id") == automation_id:
+                auto["device_id"] = dev_id
+                auto["last_run_formatted"] = _time_ago(auto.get("last_run_at", 0)) if auto.get("last_run_at") else "Never"
+                return auto
+    return None
+
+
 # ============ Agents ============
 
 def get_agents(device_id: Optional[str] = None) -> List[Dict]:
@@ -750,7 +882,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.009",
+        "version": "1.010",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }

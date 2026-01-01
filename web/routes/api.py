@@ -811,10 +811,44 @@ def api_create_automation():
 @api_bp.route('/automations/<automation_id>')
 def api_automation(automation_id):
     """Get automation details."""
-    auto = get_automation(automation_id)
+    from ..services.data_service import get_full_automation
+    auto = get_full_automation(automation_id)
     if auto:
         return jsonify(auto)
     return jsonify({"error": "Automation not found"}), 404
+
+
+@api_bp.route('/automations/<automation_id>', methods=['PUT'])
+def api_update_automation(automation_id):
+    """Update an existing automation."""
+    from ..services.data_service import update_automation
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    result = update_automation(automation_id, data)
+    if result.get("success"):
+        return jsonify(result)
+    return jsonify(result), 404
+
+
+@api_bp.route('/automations/<automation_id>', methods=['DELETE'])
+def api_delete_automation(automation_id):
+    """Delete an automation."""
+    from ..services.data_service import delete_automation
+    result = delete_automation(automation_id)
+    if result.get("success"):
+        return jsonify(result)
+    return jsonify(result), 404
+
+
+@api_bp.route('/automations/<automation_id>/toggle', methods=['POST'])
+def api_toggle_automation(automation_id):
+    """Toggle automation enabled status."""
+    from ..services.data_service import toggle_automation_enabled
+    result = toggle_automation_enabled(automation_id)
+    if result.get("success"):
+        return jsonify(result)
+    return jsonify(result), 404
 
 
 @api_bp.route('/automations/<automation_id>/logs')
