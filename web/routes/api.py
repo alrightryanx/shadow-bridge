@@ -2943,3 +2943,949 @@ def api_get_my_teams():
 
     teams = get_teams_for_email(email)
     return jsonify({"teams": teams})
+
+
+# ============ Human Override System (AGI-Readiness Phase 4) ============
+
+# Lazy import for human override system
+_override_system = None
+
+def get_override_system():
+    """Lazy load human override system."""
+    global _override_system
+    if _override_system is None:
+        try:
+            from ..services import human_override
+            _override_system = human_override.get_override_system()
+        except Exception as e:
+            logger.error(f"Failed to load override system: {e}")
+            _override_system = False
+    return _override_system if _override_system else None
+
+
+@api_bp.route('/override/status')
+def api_override_status():
+    """Get current override system status."""
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    return jsonify({
+        "stats": ov.get_stats(),
+        "kill_switch": ov.get_kill_switch_status(),
+        "active_pauses": [p.to_dict() for p in ov.get_active_pauses()]
+    })
+
+
+@api_bp.route('/override/pause', methods=['POST'])
+def api_override_pause():
+    """
+    Pause agent(s).
+
+    JSON body:
+    - scope: Scope of pause (single_agent, agent_type, team, all_agents, system)
+    - target: Optional target identifier (agent ID, type, team name)
+    - reason: Reason for pause
+    - paused_by: Who initiated (default: "user")
+    - duration_minutes: Optional auto-expire duration
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    from ..services.human_override import OverrideScope
+
+    scope_str = data.get('scope', 'all_agents')
+    try:
+        scope = OverrideScope(scope_str)
+    except ValueError:
+        valid = [s.value for s in OverrideScope]
+        return jsonify({"error": f"Invalid scope. Valid: {valid}"}), 400
+
+    token = ov.pause(
+        scope=scope,
+        target=data.get('target'),
+        reason=data.get('reason', ''),
+        paused_by=data.get('paused_by', 'user'),
+        duration_minutes=data.get('duration_minutes')
+    )
+
+    # Also add to activity log
+    _add_activity('pause', f'Pause issued: {scope.value}', 'pause')
+
+    return jsonify({
+        "success": True,
+        "pause_token": token.to_dict()
+    })
+
+
+@api_bp.route('/override/resume', methods=['POST'])
+def api_override_resume():
+    """
+    Resume from a pause.
+
+    JSON body:
+    - token_id: The pause token ID to cancel
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json()
+    if not data or 'token_id' not in data:
+        return jsonify({"error": "token_id is required"}), 400
+
+    success = ov.resume(data['token_id'])
+
+    if success:
+        _add_activity('play', 'Agents resumed', 'play')
+
+    return jsonify({"success": success})
+
+
+@api_bp.route('/override/is-paused')
+def api_override_is_paused():
+    """
+    Check if an agent or the system is paused.
+
+    Query params:
+    - agent_id: Optional specific agent to check
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    agent_id_str = request.args.get('agent_id')
+    agent_id = None
+
+    if agent_id_str:
+        from ..services.agent_protocol import AgentId
+        agent_id = AgentId(id=agent_id_str)
+
+    is_paused = ov.is_paused(agent_id)
+
+    return jsonify({
+        "paused": is_paused,
+        "agent_id": agent_id_str
+    })
+
+
+@api_bp.route('/override/kill-switch', methods=['POST'])
+def api_override_kill_switch():
+    """
+    Activate the emergency kill switch.
+
+    JSON body:
+    - reason: Reason for activating (default: "Emergency stop")
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json() or {}
+    reason = data.get('reason', 'Emergency stop')
+
+    success = ov.activate_kill_switch(reason)
+
+    if success:
+        _add_activity('kill', f'KILL SWITCH ACTIVATED: {reason}', 'cancel')
+
+    return jsonify({
+        "success": success,
+        "message": "Kill switch activated" if success else "Kill switch already active"
+    })
+
+
+@api_bp.route('/override/kill-switch/deactivate', methods=['POST'])
+def api_override_deactivate_kill_switch():
+    """
+    Deactivate the kill switch.
+
+    JSON body:
+    - confirmation: Must be "CONFIRM_DEACTIVATE" to proceed
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json()
+    if not data or 'confirmation' not in data:
+        return jsonify({
+            "error": "confirmation is required",
+            "hint": "Set confirmation to 'CONFIRM_DEACTIVATE' to proceed"
+        }), 400
+
+    success = ov.deactivate_kill_switch(data['confirmation'])
+
+    if success:
+        _add_activity('system', 'Kill switch deactivated', 'play')
+
+    return jsonify({
+        "success": success,
+        "message": "Kill switch deactivated" if success else "Invalid confirmation"
+    })
+
+
+@api_bp.route('/override/decision', methods=['POST'])
+def api_override_request_decision():
+    """
+    Request human approval for a decision.
+
+    JSON body:
+    - agent_id: Agent requesting approval
+    - decision_type: Type (file_access, network_access, code_execution, etc.)
+    - action: Description of the action
+    - context: Additional context dict
+    - risk_level: Risk level (low, medium, high, critical)
+    - timeout_minutes: How long before decision expires (default 30)
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ['agent_id', 'decision_type', 'action']
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    from ..services.agent_protocol import AgentId
+    from ..services.human_override import DecisionType
+
+    try:
+        decision_type = DecisionType(data['decision_type'])
+    except ValueError:
+        valid = [d.value for d in DecisionType]
+        return jsonify({"error": f"Invalid decision_type. Valid: {valid}"}), 400
+
+    decision = ov.request_decision(
+        agent_id=AgentId(id=data['agent_id']),
+        decision_type=decision_type,
+        action=data['action'],
+        context=data.get('context', {}),
+        risk_level=data.get('risk_level', 'medium'),
+        timeout_minutes=data.get('timeout_minutes', 30)
+    )
+
+    _add_activity('question', f'Decision requested: {data["action"][:50]}', 'help')
+
+    return jsonify({
+        "success": True,
+        "decision": decision.to_dict()
+    })
+
+
+@api_bp.route('/override/decisions')
+def api_override_pending_decisions():
+    """
+    Get pending decisions.
+
+    Query params:
+    - agent_id: Optional filter by agent
+    - decision_type: Optional filter by type
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+    from ..services.human_override import DecisionType
+
+    agent_id = None
+    if request.args.get('agent_id'):
+        agent_id = AgentId(id=request.args.get('agent_id'))
+
+    decision_type = None
+    if request.args.get('decision_type'):
+        try:
+            decision_type = DecisionType(request.args.get('decision_type'))
+        except ValueError:
+            pass
+
+    decisions = ov.get_pending_decisions(agent_id, decision_type)
+
+    return jsonify({
+        "decisions": [d.to_dict() for d in decisions],
+        "count": len(decisions)
+    })
+
+
+@api_bp.route('/override/decisions/<decision_id>')
+def api_override_decision_status(decision_id):
+    """Get the status of a specific decision."""
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    decision = ov.get_decision_status(decision_id)
+
+    if not decision:
+        return jsonify({"error": "Decision not found"}), 404
+
+    return jsonify(decision.to_dict())
+
+
+@api_bp.route('/override/decisions/<decision_id>/approve', methods=['POST'])
+def api_override_approve_decision(decision_id):
+    """
+    Approve a pending decision.
+
+    JSON body:
+    - approved_by: Who approved (default: "user")
+    - reason: Optional reason for approval
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json() or {}
+
+    success = ov.approve_decision(
+        decision_id=decision_id,
+        approved_by=data.get('approved_by', 'user'),
+        reason=data.get('reason')
+    )
+
+    if success:
+        _add_activity('check', f'Decision {decision_id} approved', 'check')
+
+    return jsonify({"success": success})
+
+
+@api_bp.route('/override/decisions/<decision_id>/deny', methods=['POST'])
+def api_override_deny_decision(decision_id):
+    """
+    Deny a pending decision.
+
+    JSON body:
+    - denied_by: Who denied (default: "user")
+    - reason: Optional reason for denial
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json() or {}
+
+    success = ov.deny_decision(
+        decision_id=decision_id,
+        denied_by=data.get('denied_by', 'user'),
+        reason=data.get('reason')
+    )
+
+    if success:
+        _add_activity('cancel', f'Decision {decision_id} denied', 'cancel')
+
+    return jsonify({"success": success})
+
+
+@api_bp.route('/override/inspect/<agent_id>')
+def api_override_inspect(agent_id):
+    """Get detailed inspection of an agent."""
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+
+    registry = get_agent_registry()
+    bus = get_message_bus()
+
+    inspection = ov.inspect(
+        agent_id=AgentId(id=agent_id),
+        registry=registry,
+        message_bus=bus
+    )
+
+    return jsonify(inspection.to_dict())
+
+
+@api_bp.route('/override/action', methods=['POST'])
+def api_override_record_action():
+    """
+    Record an agent action for inspection history.
+
+    JSON body:
+    - agent_id: Agent ID
+    - action: Action description
+    - details: Action details dict
+    """
+    ov = get_override_system()
+    if not ov:
+        return jsonify({"error": "Override system not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ['agent_id', 'action', 'details']
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    from ..services.agent_protocol import AgentId
+
+    ov.record_action(
+        agent_id=AgentId(id=data['agent_id']),
+        action=data['action'],
+        details=data['details']
+    )
+
+    return jsonify({"success": True})
+
+
+# ============ Permission Policy (AGI-Readiness Phase 4) ============
+
+# Lazy import for permission policy
+_permission_policy = None
+
+def get_permission_policy():
+    """Lazy load permission policy."""
+    global _permission_policy
+    if _permission_policy is None:
+        try:
+            from ..services import permission_policy
+            _permission_policy = permission_policy.get_permission_policy()
+        except Exception as e:
+            logger.error(f"Failed to load permission policy: {e}")
+            _permission_policy = False
+    return _permission_policy if _permission_policy else None
+
+
+@api_bp.route('/permissions/check', methods=['POST'])
+def api_permissions_check():
+    """
+    Check if an agent has permission to perform an action.
+
+    JSON body:
+    - agent_id: Agent ID
+    - action: Action category (read_file, write_file, execute_code, etc.)
+    - resource: Resource being accessed
+    - resource_type: Type of resource (file, api, database)
+    - context: Optional additional context
+    """
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    required = ['agent_id', 'action', 'resource']
+    for field in required:
+        if field not in data:
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+
+    from ..services.agent_protocol import AgentId
+    from ..services.permission_policy import ActionCategory
+
+    try:
+        action = ActionCategory(data['action'])
+    except ValueError:
+        valid = [a.value for a in ActionCategory]
+        return jsonify({"error": f"Invalid action. Valid: {valid}"}), 400
+
+    result = pp.check_permission(
+        agent_id=AgentId(id=data['agent_id']),
+        action=action,
+        resource=data['resource'],
+        resource_type=data.get('resource_type', 'file'),
+        context=data.get('context')
+    )
+
+    return jsonify(result.to_dict())
+
+
+@api_bp.route('/permissions/rules')
+def api_permissions_rules():
+    """List all permission rules."""
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    rules = pp.list_rules()
+    return jsonify({
+        "rules": [r.to_dict() for r in rules],
+        "count": len(rules)
+    })
+
+
+@api_bp.route('/permissions/rules/<rule_id>')
+def api_permissions_rule(rule_id):
+    """Get a specific permission rule."""
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    rule = pp.get_rule(rule_id)
+    if not rule:
+        return jsonify({"error": "Rule not found"}), 404
+
+    return jsonify(rule.to_dict())
+
+
+@api_bp.route('/permissions/rules/<rule_id>', methods=['DELETE'])
+def api_permissions_delete_rule(rule_id):
+    """Delete a permission rule."""
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    success = pp.remove_rule(rule_id)
+    return jsonify({"success": success})
+
+
+@api_bp.route('/permissions/trust', methods=['POST'])
+def api_permissions_set_trust():
+    """
+    Set trust level for an agent.
+
+    JSON body:
+    - agent_id: Agent ID
+    - trust_level: Trust level (0-5 or name: UNTRUSTED, LIMITED, STANDARD, ELEVATED, TRUSTED, SYSTEM)
+    """
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    if 'agent_id' not in data or 'trust_level' not in data:
+        return jsonify({"error": "agent_id and trust_level are required"}), 400
+
+    from ..services.agent_protocol import AgentId
+    from ..services.permission_policy import TrustLevel
+
+    trust_input = data['trust_level']
+    try:
+        if isinstance(trust_input, int):
+            trust_level = TrustLevel(trust_input)
+        else:
+            trust_level = TrustLevel[trust_input.upper()]
+    except (ValueError, KeyError):
+        valid = [f"{t.name} ({t.value})" for t in TrustLevel]
+        return jsonify({"error": f"Invalid trust_level. Valid: {valid}"}), 400
+
+    pp.set_trust_level(AgentId(id=data['agent_id']), trust_level)
+
+    return jsonify({
+        "success": True,
+        "agent_id": data['agent_id'],
+        "trust_level": trust_level.name
+    })
+
+
+@api_bp.route('/permissions/trust/<agent_id>')
+def api_permissions_get_trust(agent_id):
+    """Get trust level for an agent."""
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+
+    level = pp.get_trust_level(AgentId(id=agent_id))
+
+    return jsonify({
+        "agent_id": agent_id,
+        "trust_level": level.name,
+        "trust_value": level.value
+    })
+
+
+@api_bp.route('/permissions/history')
+def api_permissions_history():
+    """Get permission check history."""
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    try:
+        limit = int(request.args.get('limit', 100))
+    except ValueError:
+        limit = 100
+
+    history = pp.get_check_history(limit)
+
+    return jsonify({
+        "history": history,
+        "count": len(history)
+    })
+
+
+@api_bp.route('/permissions/stats')
+def api_permissions_stats():
+    """Get permission policy statistics."""
+    pp = get_permission_policy()
+    if not pp:
+        return jsonify({"error": "Permission policy not available"}), 503
+
+    return jsonify(pp.get_stats())
+
+
+@api_bp.route('/permissions/action-categories')
+def api_permissions_action_categories():
+    """List all available action categories."""
+    from ..services.permission_policy import ActionCategory, TrustLevel
+
+    return jsonify({
+        "action_categories": [a.value for a in ActionCategory],
+        "trust_levels": [
+            {"name": t.name, "value": t.value}
+            for t in TrustLevel
+        ]
+    })
+
+
+# ============ Rate Limiter (AGI-Readiness Phase 4) ============
+
+# Lazy import for rate limiter
+_rate_limiter = None
+
+def get_rate_limiter():
+    """Lazy load rate limiter."""
+    global _rate_limiter
+    if _rate_limiter is None:
+        try:
+            from ..services import rate_limiter
+            _rate_limiter = rate_limiter.get_rate_limiter()
+        except Exception as e:
+            logger.error(f"Failed to load rate limiter: {e}")
+            _rate_limiter = False
+    return _rate_limiter if _rate_limiter else None
+
+
+@api_bp.route('/ratelimit/check', methods=['POST'])
+def api_ratelimit_check():
+    """
+    Check if a request is within rate limits.
+
+    JSON body:
+    - agent_id: Agent ID
+    - action: Action being performed
+    - dry_run: If true, don't record the request (optional, default false)
+    """
+    rl = get_rate_limiter()
+    if not rl:
+        return jsonify({"error": "Rate limiter not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    if 'agent_id' not in data or 'action' not in data:
+        return jsonify({"error": "agent_id and action are required"}), 400
+
+    from ..services.agent_protocol import AgentId
+
+    status = rl.check_rate_limit(
+        agent_id=AgentId(id=data['agent_id']),
+        action=data['action'],
+        record=not data.get('dry_run', False)
+    )
+
+    return jsonify(status.to_dict())
+
+
+@api_bp.route('/ratelimit/configs')
+def api_ratelimit_configs():
+    """List all rate limit configurations."""
+    rl = get_rate_limiter()
+    if not rl:
+        return jsonify({"error": "Rate limiter not available"}), 503
+
+    configs = rl.list_configs()
+    return jsonify({
+        "configs": [c.to_dict() for c in configs],
+        "count": len(configs)
+    })
+
+
+@api_bp.route('/ratelimit/configs/<config_id>')
+def api_ratelimit_config(config_id):
+    """Get a specific rate limit config."""
+    rl = get_rate_limiter()
+    if not rl:
+        return jsonify({"error": "Rate limiter not available"}), 503
+
+    config = rl.get_config(config_id)
+    if not config:
+        return jsonify({"error": "Config not found"}), 404
+
+    return jsonify(config.to_dict())
+
+
+@api_bp.route('/ratelimit/configs/<config_id>', methods=['DELETE'])
+def api_ratelimit_delete_config(config_id):
+    """Delete a rate limit config."""
+    rl = get_rate_limiter()
+    if not rl:
+        return jsonify({"error": "Rate limiter not available"}), 503
+
+    success = rl.remove_config(config_id)
+    return jsonify({"success": success})
+
+
+@api_bp.route('/ratelimit/usage/<agent_id>')
+def api_ratelimit_usage(agent_id):
+    """Get usage statistics for an agent."""
+    rl = get_rate_limiter()
+    if not rl:
+        return jsonify({"error": "Rate limiter not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+
+    usage = rl.get_usage(AgentId(id=agent_id))
+    return jsonify(usage)
+
+
+@api_bp.route('/ratelimit/reset/<agent_id>', methods=['POST'])
+def api_ratelimit_reset(agent_id):
+    """Reset rate limits for an agent."""
+    rl = get_rate_limiter()
+    if not rl:
+        return jsonify({"error": "Rate limiter not available"}), 503
+
+    from ..services.agent_protocol import AgentId
+
+    rl.reset_agent_limits(AgentId(id=agent_id))
+    return jsonify({"success": True})
+
+
+@api_bp.route('/ratelimit/stats')
+def api_ratelimit_stats():
+    """Get rate limiter statistics."""
+    rl = get_rate_limiter()
+    if not rl:
+        return jsonify({"error": "Rate limiter not available"}), 503
+
+    return jsonify(rl.get_stats())
+
+
+# ============ Safety Audit (AGI-Readiness Phase 4) ============
+
+# Lazy import for safety audit
+_safety_audit = None
+
+def get_safety_audit():
+    """Lazy load safety audit."""
+    global _safety_audit
+    if _safety_audit is None:
+        try:
+            from ..services import safety_audit
+            _safety_audit = safety_audit.get_safety_audit()
+        except Exception as e:
+            logger.error(f"Failed to load safety audit: {e}")
+            _safety_audit = False
+    return _safety_audit if _safety_audit else None
+
+
+@api_bp.route('/safety/events')
+def api_safety_events():
+    """
+    Get safety events.
+
+    Query params:
+    - event_type: Optional filter by event type
+    - risk_level: Optional filter by risk level
+    - agent_id: Optional filter by agent
+    - hours: Look back period in hours (default 24)
+    - limit: Maximum events (default 100)
+    """
+    sa = get_safety_audit()
+    if not sa:
+        return jsonify({"error": "Safety audit not available"}), 503
+
+    from ..services.safety_audit import SafetyEventType, RiskLevel
+
+    event_types = None
+    if request.args.get('event_type'):
+        try:
+            event_types = [SafetyEventType(request.args.get('event_type'))]
+        except ValueError:
+            pass
+
+    risk_levels = None
+    if request.args.get('risk_level'):
+        try:
+            risk_levels = [RiskLevel[request.args.get('risk_level').upper()]]
+        except KeyError:
+            pass
+
+    agent_id = request.args.get('agent_id')
+
+    try:
+        hours = int(request.args.get('hours', 24))
+    except ValueError:
+        hours = 24
+
+    try:
+        limit = int(request.args.get('limit', 100))
+    except ValueError:
+        limit = 100
+
+    since = datetime.now() - timedelta(hours=hours)
+
+    events = sa.get_events(
+        event_types=event_types,
+        risk_levels=risk_levels,
+        agent_id=agent_id,
+        since=since,
+        limit=limit
+    )
+
+    return jsonify({
+        "events": [e.to_dict() for e in events],
+        "count": len(events)
+    })
+
+
+@api_bp.route('/safety/event', methods=['POST'])
+def api_safety_log_event():
+    """
+    Log a safety event.
+
+    JSON body:
+    - event_type: Type of event
+    - risk_level: Risk level (MINIMAL, LOW, MEDIUM, HIGH, CRITICAL)
+    - agent_id: Optional agent ID
+    - action: Optional action description
+    - resource: Optional resource
+    - decision: Optional decision
+    - details: Optional additional details dict
+    - success: Whether operation succeeded (default true)
+    - error_message: Error message if failed
+    """
+    sa = get_safety_audit()
+    if not sa:
+        return jsonify({"error": "Safety audit not available"}), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    if 'event_type' not in data:
+        return jsonify({"error": "event_type is required"}), 400
+
+    from ..services.safety_audit import SafetyEventType, RiskLevel
+
+    try:
+        event_type = SafetyEventType(data['event_type'])
+    except ValueError:
+        valid = [e.value for e in SafetyEventType]
+        return jsonify({"error": f"Invalid event_type. Valid: {valid}"}), 400
+
+    risk_level = RiskLevel.LOW
+    if data.get('risk_level'):
+        try:
+            risk_level = RiskLevel[data['risk_level'].upper()]
+        except KeyError:
+            valid = [r.name for r in RiskLevel]
+            return jsonify({"error": f"Invalid risk_level. Valid: {valid}"}), 400
+
+    event = sa.log_event(
+        event_type=event_type,
+        risk_level=risk_level,
+        agent_id=data.get('agent_id'),
+        action=data.get('action'),
+        resource=data.get('resource'),
+        decision=data.get('decision'),
+        details=data.get('details'),
+        success=data.get('success', True),
+        error_message=data.get('error_message')
+    )
+
+    return jsonify({
+        "success": True,
+        "event": event.to_dict()
+    })
+
+
+@api_bp.route('/safety/risk-scores')
+def api_safety_risk_scores():
+    """Get all agent risk scores."""
+    sa = get_safety_audit()
+    if not sa:
+        return jsonify({"error": "Safety audit not available"}), 503
+
+    scores = sa.get_all_risk_scores()
+
+    return jsonify({
+        "scores": [s.to_dict() for s in scores],
+        "count": len(scores)
+    })
+
+
+@api_bp.route('/safety/risk-scores/<agent_id>')
+def api_safety_risk_score(agent_id):
+    """Get risk score for a specific agent."""
+    sa = get_safety_audit()
+    if not sa:
+        return jsonify({"error": "Safety audit not available"}), 503
+
+    score = sa.get_risk_score(agent_id)
+
+    if not score:
+        return jsonify({
+            "agent_id": agent_id,
+            "current_score": 0.0,
+            "message": "No data for this agent"
+        })
+
+    return jsonify(score.to_dict())
+
+
+@api_bp.route('/safety/report')
+def api_safety_report():
+    """
+    Generate a safety report.
+
+    Query params:
+    - hours: Report period in hours (default 24)
+    """
+    sa = get_safety_audit()
+    if not sa:
+        return jsonify({"error": "Safety audit not available"}), 503
+
+    try:
+        hours = int(request.args.get('hours', 24))
+    except ValueError:
+        hours = 24
+
+    report = sa.generate_report(hours=hours)
+
+    return jsonify(report.to_dict())
+
+
+@api_bp.route('/safety/stats')
+def api_safety_stats():
+    """Get safety audit statistics."""
+    sa = get_safety_audit()
+    if not sa:
+        return jsonify({"error": "Safety audit not available"}), 503
+
+    return jsonify(sa.get_stats())
+
+
+@api_bp.route('/safety/event-types')
+def api_safety_event_types():
+    """List all available event types and risk levels."""
+    from ..services.safety_audit import SafetyEventType, RiskLevel
+
+    return jsonify({
+        "event_types": [e.value for e in SafetyEventType],
+        "risk_levels": [
+            {"name": r.name, "value": r.value}
+            for r in RiskLevel
+        ]
+    })
