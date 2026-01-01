@@ -1,12 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sv_ttk
+import os
 
+# Get sv_ttk theme files path
+sv_ttk_path = os.path.dirname(sv_ttk.__file__)
 
 a = Analysis(
     ['shadow_bridge_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('web', 'web')],  # Bundle web templates, static files, and routes
-    hiddenimports=[],
+    datas=[
+        ('web', 'web'),  # Bundle web templates, static files, and routes
+        (sv_ttk_path, 'sv_ttk'),  # Bundle sv_ttk theme files for Windows 11 look
+    ],
+    hiddenimports=['sv_ttk'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
