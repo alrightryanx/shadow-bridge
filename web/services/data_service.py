@@ -306,7 +306,12 @@ def get_device(device_id: str) -> Optional[Dict]:
 # ============ Projects ============
 
 def get_projects(device_id: Optional[str] = None) -> List[Dict]:
-    """Get all projects, optionally filtered by device."""
+    """Get all projects, optionally filtered by device.
+
+    Projects are deduplicated by ID - if the same project exists on multiple device entries
+    (e.g., com.shadowai.release and com.shadowai.release.debug on the same phone),
+    we keep the most recently updated version.
+    """
     data = _read_json_file(PROJECTS_FILE)
     if not data:
         return []
@@ -314,24 +319,39 @@ def get_projects(device_id: Optional[str] = None) -> List[Dict]:
     # Projects are stored under "devices" key
     devices_data = data.get("devices", {})
 
-    projects = []
+    # Track best project per ID (deduplicate across device entries)
+    projects_by_id = {}
+
     for proj_device_id, device_info in devices_data.items():
         if device_id and proj_device_id != device_id:
             continue
 
+        synced_at = device_info.get("synced_at", 0)
+
         for project in device_info.get("projects", []):
-            projects.append({
-                "id": project.get("id", project.get("path", "")),
+            project_id = project.get("id", project.get("path", ""))
+            updated_at = project.get("updated_at", 0)
+
+            # Check if we already have this project from another device entry
+            if project_id in projects_by_id:
+                existing = projects_by_id[project_id]
+                # Keep the more recently updated or synced version
+                if updated_at <= existing.get("updated_at", 0):
+                    continue
+
+            projects_by_id[project_id] = {
+                "id": project_id,
                 "name": project.get("name", os.path.basename(project.get("path", "Unknown"))),
                 "path": project.get("path", ""),
                 "device_id": proj_device_id,
                 "device_name": device_info.get("name", proj_device_id),
-                "updated_at": project.get("updated_at", 0),
-                "updated_at_formatted": _format_timestamp(project.get("updated_at", 0)),
-                "time_ago": _time_ago(project.get("updated_at", 0))
-            })
+                "updated_at": updated_at,
+                "updated_at_formatted": _format_timestamp(updated_at),
+                "time_ago": _time_ago(updated_at)
+            }
 
-    # Sort by updated_at descending
+    # Convert to list and sort by updated_at descending
+    projects = list(projects_by_id.values())
     projects.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
     return projects
 
@@ -882,7 +902,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.010",
+        "version": "1.012",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }

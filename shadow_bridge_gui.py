@@ -134,7 +134,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.011"
+APP_VERSION = "1.012"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -1565,6 +1565,13 @@ class DataReceiver(threading.Thread):
 
                 save_projects_state({'devices': devices})
                 log.info(f"Saved {len(cleaned)} projects for {device_name} ({device_id})")
+
+                # Broadcast update to web dashboard
+                try:
+                    from web.routes.websocket import broadcast_projects_updated
+                    broadcast_projects_updated(device_id)
+                except Exception:
+                    pass  # Web server may not be running
         except Exception:
             log.exception("Failed to save projects")
 
@@ -1648,6 +1655,13 @@ class DataReceiver(threading.Thread):
 
                 save_notes_state({'devices': devices})
                 log.info(f"Saved {len(cleaned)} notes for {device_name} ({device_id})")
+
+                # Broadcast update to web dashboard
+                try:
+                    from web.routes.websocket import broadcast_notes_updated
+                    broadcast_notes_updated(device_id)
+                except Exception:
+                    pass  # Web server may not be running
         except Exception:
             log.exception("Failed to save notes")
 
