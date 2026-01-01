@@ -1,6 +1,22 @@
 # ShadowBridge
 
+<p align="center">
+  <img src="images/shadow-bridge.png" alt="ShadowBridge" width="400"/>
+</p>
+
 Secure bridge between your Android device and PC for ShadowAI Android app - enables clipboard sync, SSH key exchange, and Claude Code companion relay.
+
+---
+
+## Shadow Web Dashboard
+
+<p align="center">
+  <img src="images/shadow-web.png" alt="Shadow Web Dashboard" width="600"/>
+</p>
+
+ShadowBridge includes a web dashboard at `http://localhost:6767` for managing projects, notes, and team collaboration.
+
+---
 
 ## Features
 
