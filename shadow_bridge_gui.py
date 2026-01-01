@@ -2602,7 +2602,7 @@ class ShadowBridgeApp:
         self.root.after(100, self.update_qr_code)
         self.root.after(200, self.update_status)
         self.root.after(500, self.auto_start_broadcast)
-        self.root.after(1000, self.auto_start_web_dashboard)
+        # Web dashboard is NOT auto-started - user must explicitly open it
         self.root.after(2000, self.check_for_updates_on_startup)
 
     def setup_styles(self):
