@@ -96,7 +96,9 @@ def create_app():
 
     # Register blueprints
     from .routes.api import api_bp
+    from .routes.self_improve import self_improve_bp
     app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(self_improve_bp)  # Self-improvement endpoints (handles /api/self-improve/*)
 
     # Main routes
     @app.route('/')
@@ -138,5 +140,9 @@ def create_app():
     @app.route('/settings')
     def settings():
         return render_template('settings.html')
+
+    @app.route('/self-improve')
+    def self_improve():
+        return render_template('self_improve.html')
 
     return app
