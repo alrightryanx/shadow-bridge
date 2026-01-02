@@ -5,9 +5,14 @@ import json
 import os
 import base64
 import hashlib
+import tempfile
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+
+# SECURITY: Thread lock for file I/O operations to prevent race conditions
+_file_lock = threading.Lock()
 
 # Shadow data directory
 SHADOWAI_DIR = Path.home() / ".shadowai"
@@ -158,12 +163,13 @@ def set_sync_key_for_device(device_id: str, password: str) -> bool:
 
 
 def _read_json_file(filepath: Path) -> Optional[Dict]:
-    """Read and parse a JSON file."""
+    """Read and parse a JSON file with thread safety."""
     if not filepath.exists():
         return None
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        with _file_lock:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return json.load(f)
     except (json.JSONDecodeError, IOError) as e:
         print(f"Error reading {filepath}: {e}")
         return None
@@ -902,7 +908,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.015",
+        "version": "1.016",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }
@@ -919,11 +925,32 @@ FAVORITES_FILE = SHADOWAI_DIR / "web_favorites.json"
 
 
 def _write_json_file(filepath: Path, data: Dict) -> bool:
-    """Write data to a JSON file."""
+    """Write data to a JSON file atomically with thread safety.
+
+    Uses atomic write (temp file + replace) to prevent corruption from
+    concurrent writes or crashes mid-write.
+    """
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+        with _file_lock:
+            # Write to temp file first, then atomically replace
+            fd, tmp_path = tempfile.mkstemp(
+                suffix='.tmp',
+                prefix=filepath.stem + '_',
+                dir=filepath.parent
+            )
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2)
+                # Atomic replace (works on Windows and POSIX)
+                os.replace(tmp_path, filepath)
+            except Exception:
+                # Clean up temp file on error
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         return True
     except Exception as e:
         print(f"Error writing {filepath}: {e}")
