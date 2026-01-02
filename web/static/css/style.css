@@ -463,10 +463,12 @@ body {
 
 .theme-toggle .sun-icon {
     display: none;
+    color: #1a1714;
 }
 
 .theme-toggle .moon-icon {
     display: block;
+    color: #ffffff;
 }
 
 [data-theme="light"] .theme-toggle .sun-icon {

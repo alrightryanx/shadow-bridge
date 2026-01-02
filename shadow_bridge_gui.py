@@ -134,7 +134,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.013"
+APP_VERSION = "1.014"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -339,8 +339,7 @@ def get_tailscale_ip():
     # Try tailscale CLI
     try:
         result = subprocess.run(
-            "tailscale ip -4",
-            shell=True,
+            ["tailscale", "ip", "-4"],
             capture_output=True, text=True, timeout=5,
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
         )
@@ -369,8 +368,7 @@ def get_zerotier_ip():
     # Check for zerotier-cli
     try:
         result = subprocess.run(
-            "zerotier-cli listnetworks",
-            shell=True,
+            ["zerotier-cli", "listnetworks"],
             capture_output=True, text=True, timeout=5,
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
         )
@@ -498,8 +496,7 @@ def check_npm_installed():
     """Check if npm is installed."""
     try:
         result = subprocess.run(
-            "npm --version",
-            shell=True,
+            ["npm", "--version"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -582,8 +579,7 @@ def check_winget_installed():
         return False
     try:
         result = subprocess.run(
-            "winget --version",
-            shell=True,
+            ["winget", "--version"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -596,16 +592,16 @@ def check_winget_installed():
 
 def check_python_pip_installed():
     """Check if pip is available via either the Windows 'py' launcher or 'python'."""
+    # Use array form for each candidate to avoid shell=True
     candidates = [
-        "py -m pip --version",
-        "python -m pip --version",
+        ["py", "-m", "pip", "--version"],
+        ["python", "-m", "pip", "--version"],
     ]
     flags = subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0
     for cmd in candidates:
         try:
             result = subprocess.run(
                 cmd,
-                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -653,28 +649,16 @@ def check_tool_installed(tool_name):
                 if os.path.isfile(exe_path):
                     return True
 
-    # Try 'where' command on Windows
+    # Use shutil.which instead of shell 'where' command (safer)
+    import shutil
     for cmd in commands_to_try:
-        if IS_WINDOWS:
-            try:
-                result = subprocess.run(
-                    f'where {cmd}',
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    return True
-            except Exception:
-                pass
+        if shutil.which(cmd):
+            return True
 
-        # Try running with --version
+        # Try running with --version (array form, no shell=True)
         try:
             result = subprocess.run(
-                f'{cmd} --version',
-                shell=True,
+                [cmd, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,

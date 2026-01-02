@@ -1223,16 +1223,18 @@ def api_launch_cli(project_id):
     if not path:
         return jsonify({"error": "No path for project"}), 400
 
-    # Validate path exists
+    # SECURITY: Validate and normalize path
     import os
+    path = os.path.normpath(os.path.abspath(path))
     if not os.path.exists(path):
         return jsonify({"error": f"Path does not exist: {path}"}), 400
+    if not os.path.isdir(path):
+        return jsonify({"error": "Path must be a directory"}), 400
 
     try:
-        # Launch Windows Terminal with Claude Code in project directory
+        # SECURITY: Use array form without shell=True to prevent command injection
         subprocess.Popen(
             ['wt', '-d', path, 'claude'],
-            shell=True,
             creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
         )
         return jsonify({
@@ -1241,11 +1243,12 @@ def api_launch_cli(project_id):
             "command": "claude"
         })
     except FileNotFoundError:
-        # Fallback: try cmd with claude
+        # Fallback: try cmd with claude (use array form for safety)
         try:
+            # SECURITY: Use array form - no shell=True with user input
             subprocess.Popen(
-                f'start cmd /k "cd /d {path} && claude"',
-                shell=True
+                ['cmd', '/c', 'start', 'cmd', '/k', f'cd /d "{path}" && claude'],
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             return jsonify({
                 "success": True,
@@ -3923,3 +3926,36 @@ def api_safety_event_types():
             for r in RiskLevel
         ]
     })
+
+
+# ============ Data Cleanup ============
+
+@api_bp.route('/cleanup/stale', methods=['POST'])
+def api_cleanup_stale():
+    """
+    Remove stale projects, notes, and automations.
+    Keeps data from devices active in last 30 days.
+    """
+    from ..services.data_service import cleanup_stale_data
+
+    try:
+        result = cleanup_stale_data()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Cleanup stale data error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/cleanup/devices', methods=['POST'])
+def api_cleanup_devices():
+    """
+    Reset device history, keeping only the most recent device.
+    """
+    from ..services.data_service import reset_device_history
+
+    try:
+        result = reset_device_history()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Reset device history error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500

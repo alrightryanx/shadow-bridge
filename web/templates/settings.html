@@ -63,18 +63,6 @@
     <div class="settings-form">
         <div class="setting-item">
             <div class="setting-info">
-                <span class="setting-label">Theme</span>
-                <span class="setting-description">Switch between dark and light mode</span>
-            </div>
-            <div class="setting-control">
-                <button class="btn btn-small" id="theme-mode-btn" onclick="cycleTheme()">
-                    <span id="theme-mode-text">Dark</span>
-                </button>
-            </div>
-        </div>
-
-        <div class="setting-item">
-            <div class="setting-info">
                 <span class="setting-label">Auto-refresh Interval</span>
                 <span class="setting-description">How often to refresh data from devices</span>
             </div>
@@ -330,6 +318,17 @@
             <span class="material-symbols-outlined">download</span> Export All Data
         </button>
     </div>
+
+    <h3 style="margin-top: var(--spacing-xl); margin-bottom: var(--spacing-md);">Data Cleanup</h3>
+    <p class="section-description" style="margin-bottom: var(--spacing-md);">Remove stale data while preserving your most recent device.</p>
+    <div class="data-actions">
+        <button class="btn btn-secondary" onclick="cleanupStaleData()">
+            <span class="material-symbols-outlined">cleaning_services</span> Clean Stale Data
+        </button>
+        <button class="btn btn-secondary" onclick="resetDeviceHistory()">
+            <span class="material-symbols-outlined">devices</span> Reset Device History
+        </button>
+    </div>
 </section>
 
 <!-- Network Configuration -->
@@ -394,7 +393,6 @@ document.addEventListener('DOMContentLoaded', function() {
     loadQRCode();
     loadDataStats();
     loadPreferences();
-    updateThemeButton();
     loadEmailVerificationStatus();
     loadTeamManagement();
 });
@@ -1181,15 +1179,58 @@ function saveDataRetention() {
     showToast('Data retention setting saved', 'success');
 }
 
-function cycleTheme() {
-    toggleTheme();
-    updateThemeButton();
+async function cleanupStaleData() {
+    if (!confirm('Remove stale projects, notes, and automations? This will clear data from devices not seen in the last 30 days, keeping only the most recent device data.')) {
+        return;
+    }
+
+    showToast('Cleaning stale data...', 'info');
+
+    try {
+        const response = await fetch('/api/cleanup/stale', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(`Cleaned up: ${result.removed_projects || 0} projects, ${result.removed_notes || 0} notes, ${result.removed_automations || 0} automations`, 'success');
+            loadDataStats();
+        } else {
+            showToast(result.error || 'Cleanup failed', 'error');
+        }
+    } catch (e) {
+        console.error('Cleanup error:', e);
+        showToast('Failed to clean stale data', 'error');
+    }
 }
 
-function updateThemeButton() {
-    const isDark = document.documentElement.classList.contains('dark-theme') ||
-                   !document.documentElement.classList.contains('light-theme');
-    document.getElementById('theme-mode-text').textContent = isDark ? 'Dark' : 'Light';
+async function resetDeviceHistory() {
+    if (!confirm('Reset device history? This will keep only your most recently active device and remove all others.')) {
+        return;
+    }
+
+    showToast('Resetting device history...', 'info');
+
+    try {
+        const response = await fetch('/api/cleanup/devices', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(`Device history reset. Kept: ${result.kept_device || 'none'}. Removed ${result.removed_count || 0} devices.`, 'success');
+            loadStatus();
+        } else {
+            showToast(result.error || 'Reset failed', 'error');
+        }
+    } catch (e) {
+        console.error('Device reset error:', e);
+        showToast('Failed to reset device history', 'error');
+    }
 }
 
 async function clearCache() {

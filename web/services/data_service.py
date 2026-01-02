@@ -902,7 +902,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.012",
+        "version": "1.014",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }
@@ -2998,4 +2998,159 @@ def get_memory_search_results(query: str, scopes: List[str] = None, limit: int =
         "query": query,
         "scopes_searched": scopes,
         "search_type": "keyword"  # Will become "semantic" when vector store is added
+    }
+
+
+# ============ Data Cleanup ============
+
+def cleanup_stale_data(days_threshold: int = 30) -> Dict:
+    """
+    Remove stale projects, notes, and automations.
+    Keeps data from devices active in last N days.
+
+    Args:
+        days_threshold: Number of days - devices not seen within this period are stale
+
+    Returns:
+        Dict with success status and counts of removed items
+    """
+    threshold_ts = datetime.now().timestamp() - (days_threshold * 24 * 60 * 60)
+
+    # Read projects data to find stale devices
+    projects_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
+    devices_data = projects_data.get("devices", {})
+
+    # Find stale device IDs (not seen in last N days)
+    stale_devices = set()
+    most_recent_device = None
+    most_recent_ts = 0
+
+    for device_id, device_info in devices_data.items():
+        last_seen = device_info.get("last_seen", 0)
+        if last_seen > most_recent_ts:
+            most_recent_ts = last_seen
+            most_recent_device = device_id
+        if last_seen < threshold_ts:
+            stale_devices.add(device_id)
+
+    # Never remove the most recent device
+    if most_recent_device and most_recent_device in stale_devices:
+        stale_devices.remove(most_recent_device)
+
+    if not stale_devices:
+        return {
+            "success": True,
+            "removed_projects": 0,
+            "removed_notes": 0,
+            "removed_automations": 0,
+            "message": "No stale data found"
+        }
+
+    removed_projects = 0
+    removed_notes = 0
+    removed_automations = 0
+
+    # Clean projects
+    for device_id in stale_devices:
+        if device_id in projects_data.get("devices", {}):
+            device_projects = projects_data["devices"].get(device_id, {}).get("projects", [])
+            removed_projects += len(device_projects)
+            del projects_data["devices"][device_id]
+
+    _write_json_file(PROJECTS_FILE, projects_data)
+
+    # Clean notes
+    notes_data = _read_json_file(NOTES_FILE) or {"devices": {}}
+    for device_id in stale_devices:
+        if device_id in notes_data.get("devices", {}):
+            device_notes = notes_data["devices"].get(device_id, {}).get("notes", [])
+            removed_notes += len(device_notes)
+            del notes_data["devices"][device_id]
+
+    _write_json_file(NOTES_FILE, notes_data)
+
+    # Clean automations
+    auto_data = _read_json_file(AUTOMATIONS_FILE) or {}
+    for device_id in stale_devices:
+        if device_id in auto_data:
+            device_autos = auto_data.get(device_id, {}).get("automations", [])
+            removed_automations += len(device_autos)
+            del auto_data[device_id]
+
+    _write_json_file(AUTOMATIONS_FILE, auto_data)
+
+    return {
+        "success": True,
+        "removed_projects": removed_projects,
+        "removed_notes": removed_notes,
+        "removed_automations": removed_automations,
+        "stale_devices_cleaned": len(stale_devices)
+    }
+
+
+def reset_device_history() -> Dict:
+    """
+    Reset device history, keeping only the most recently active device.
+
+    Returns:
+        Dict with success status and info about kept/removed devices
+    """
+    # Read projects data to find devices
+    projects_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
+    devices_data = projects_data.get("devices", {})
+
+    if not devices_data:
+        return {
+            "success": True,
+            "kept_device": None,
+            "removed_count": 0,
+            "message": "No devices to clean"
+        }
+
+    # Find the most recent device
+    most_recent_device = None
+    most_recent_ts = 0
+    most_recent_name = None
+
+    for device_id, device_info in devices_data.items():
+        last_seen = device_info.get("last_seen", 0)
+        if last_seen > most_recent_ts:
+            most_recent_ts = last_seen
+            most_recent_device = device_id
+            most_recent_name = device_info.get("name", device_id)
+
+    if not most_recent_device:
+        # Just pick the first one if no timestamps
+        most_recent_device = list(devices_data.keys())[0]
+        most_recent_name = devices_data[most_recent_device].get("name", most_recent_device)
+
+    # Get list of devices to remove (all except most recent)
+    devices_to_remove = [d for d in devices_data.keys() if d != most_recent_device]
+    removed_count = len(devices_to_remove)
+
+    # Clean projects data
+    new_devices_data = {most_recent_device: devices_data[most_recent_device]}
+    projects_data["devices"] = new_devices_data
+    _write_json_file(PROJECTS_FILE, projects_data)
+
+    # Clean notes
+    notes_data = _read_json_file(NOTES_FILE) or {"devices": {}}
+    if most_recent_device in notes_data.get("devices", {}):
+        notes_data["devices"] = {most_recent_device: notes_data["devices"][most_recent_device]}
+    else:
+        notes_data["devices"] = {}
+    _write_json_file(NOTES_FILE, notes_data)
+
+    # Clean automations
+    auto_data = _read_json_file(AUTOMATIONS_FILE) or {}
+    if most_recent_device in auto_data:
+        auto_data = {most_recent_device: auto_data[most_recent_device]}
+    else:
+        auto_data = {}
+    _write_json_file(AUTOMATIONS_FILE, auto_data)
+
+    return {
+        "success": True,
+        "kept_device": most_recent_name,
+        "removed_count": removed_count
     }
