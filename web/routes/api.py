@@ -3959,3 +3959,158 @@ def api_cleanup_devices():
     except Exception as e:
         logger.error(f"Reset device history error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============ Image Generation Service ============
+
+@api_bp.route('/image/status')
+def api_image_status():
+    """Get status of image generation services."""
+    try:
+        from ..services.image_service import get_image_service_status
+        return jsonify(get_image_service_status())
+    except Exception as e:
+        logger.error(f"Image service status error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route('/image/generate', methods=['POST'])
+@rate_limit
+def api_image_generate():
+    """
+    Generate an image from a text prompt.
+
+    Request body:
+    {
+        "prompt": "A beautiful sunset over mountains",
+        "negative_prompt": "blurry, bad quality",  // optional
+        "width": 1024,  // optional, default 1024
+        "height": 1024,  // optional, default 1024
+        "steps": 20,  // optional, default 20
+        "guidance_scale": 7.5,  // optional
+        "seed": 12345,  // optional, for reproducibility
+        "model": "sd-xl-turbo"  // optional: sd-1.5, sd-xl, sd-xl-turbo
+    }
+
+    Returns:
+    {
+        "success": true,
+        "image": "<base64 PNG>",
+        "seed": 12345,
+        "generation_time_ms": 2500,
+        "width": 1024,
+        "height": 1024,
+        "model": "sd-xl-turbo"
+    }
+    """
+    try:
+        from ..services.image_service import get_image_generation_service
+
+        data = request.get_json()
+        if not data or 'prompt' not in data:
+            return jsonify({"success": False, "error": "prompt is required"}), 400
+
+        service = get_image_generation_service()
+        result = service.generate_image(
+            prompt=data['prompt'],
+            negative_prompt=data.get('negative_prompt'),
+            width=data.get('width', 1024),
+            height=data.get('height', 1024),
+            steps=data.get('steps', 20),
+            guidance_scale=data.get('guidance_scale', 7.5),
+            seed=data.get('seed'),
+            model=data.get('model')
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Image generation error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/inpaint', methods=['POST'])
+@rate_limit
+def api_image_inpaint():
+    """
+    Inpaint (regenerate) part of an image using a mask.
+
+    Request body:
+    {
+        "image": "<base64 original image>",
+        "mask": "<base64 mask - white = area to regenerate>",
+        "prompt": "A red rose",
+        "negative_prompt": "blurry",  // optional
+        "steps": 20,  // optional
+        "guidance_scale": 7.5  // optional
+    }
+
+    Returns:
+    {
+        "success": true,
+        "image": "<base64 PNG>",
+        "generation_time_ms": 3000
+    }
+    """
+    try:
+        from ..services.image_service import get_image_generation_service
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Request body required"}), 400
+
+        required = ['image', 'mask', 'prompt']
+        for field in required:
+            if field not in data:
+                return jsonify({"success": False, "error": f"{field} is required"}), 400
+
+        service = get_image_generation_service()
+        result = service.inpaint_image(
+            image_base64=data['image'],
+            mask_base64=data['mask'],
+            prompt=data['prompt'],
+            negative_prompt=data.get('negative_prompt'),
+            steps=data.get('steps', 20),
+            guidance_scale=data.get('guidance_scale', 7.5)
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Inpainting error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/remove-background', methods=['POST'])
+@rate_limit
+def api_image_remove_background():
+    """
+    Remove background from an image.
+
+    Request body:
+    {
+        "image": "<base64 image>"
+    }
+
+    Returns:
+    {
+        "success": true,
+        "image": "<base64 PNG with transparent background>",
+        "processing_time_ms": 1500
+    }
+    """
+    try:
+        from ..services.image_service import get_bg_removal_service
+
+        data = request.get_json()
+        if not data or 'image' not in data:
+            return jsonify({"success": False, "error": "image is required"}), 400
+
+        service = get_bg_removal_service()
+        result = service.remove_background(data['image'])
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Background removal error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500

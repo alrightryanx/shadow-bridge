@@ -908,7 +908,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.017",
+        "version": "1.018",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }

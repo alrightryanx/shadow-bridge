@@ -1,3 +1,15 @@
 pystray>=0.19.0
 Pillow>=9.0.0
 sv_ttk>=2.0
+
+# Image Generation (optional - install separately for GPU support)
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# diffusers>=0.25.0
+# transformers>=4.36.0
+# accelerate>=0.25.0
+
+# Background Removal
+rembg>=2.0.50
+
+# Flask for web dashboard
+flask>=2.0.0
