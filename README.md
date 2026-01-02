@@ -64,9 +64,9 @@ ShadowBridge includes a relay server for the [claude-shadow](https://github.com/
 
 ## Privacy
 
-- All communication stays on your local network
+- All communication is direct between your devices (local network or via [Tailscale](https://tailscale.com))
 - No data is sent to external servers
-- Direct connection between PC and phone
+- Works across any network with Tailscale VPN
 
 ## License
 

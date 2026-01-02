@@ -4029,6 +4029,30 @@ def api_image_generate():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@api_bp.route('/image/setup', methods=['POST'])
+def api_image_setup():
+    """Ensure image generation dependencies and models are installed."""
+    try:
+        from ..services.image_service import start_image_setup
+        data = request.get_json(silent=True) or {}
+        model_id = data.get('model')
+        return jsonify(start_image_setup(model_id))
+    except Exception as e:
+        logger.error(f"Image setup error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route('/image/setup/status')
+def api_image_setup_status():
+    """Get status of image generation setup."""
+    try:
+        from ..services.image_service import get_image_setup_status
+        return jsonify(get_image_setup_status())
+    except Exception as e:
+        logger.error(f"Image setup status error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @api_bp.route('/image/inpaint', methods=['POST'])
 @rate_limit
 def api_image_inpaint():

@@ -16,6 +16,9 @@ import base64
 import io
 import logging
 import os
+import subprocess
+import sys
+import threading
 import time
 from typing import Optional, Dict, Any, Tuple
 from PIL import Image
@@ -28,6 +31,16 @@ _rembg_available = False
 _torch_available = False
 _pipeline = None
 _inpaint_pipeline = None
+_setup_thread = None
+_setup_lock = threading.Lock()
+_setup_status = {
+    "state": "idle",  # idle, running, ready, error
+    "stage": None,    # checking, installing, downloading, ready, error
+    "progress": 0,
+    "message": "Idle",
+    "error": None,
+    "updated_at": int(time.time() * 1000)
+}
 
 def _check_dependencies():
     """Check which optional dependencies are available."""
@@ -56,6 +69,75 @@ def _check_dependencies():
 
 # Check on module load
 _check_dependencies()
+
+def _set_setup_status(state: str, stage: str, progress: int, message: str, error: Optional[str] = None):
+    with _setup_lock:
+        _setup_status.update({
+            "state": state,
+            "stage": stage,
+            "progress": progress,
+            "message": message,
+            "error": error,
+            "updated_at": int(time.time() * 1000)
+        })
+
+def _install_python_packages(packages):
+    if not packages:
+        return
+
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + packages
+    logger.info(f"Installing image dependencies: {' '.join(packages)}")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise RuntimeError("pip not available. Install Python and run: pip install torch diffusers transformers accelerate") from e
+
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout or "pip install failed").strip()
+        raise RuntimeError(output)
+
+def _run_image_setup(model_id: Optional[str] = None):
+    try:
+        _set_setup_status("running", "checking", 5, "Checking image dependencies")
+        _check_dependencies()
+
+        missing = []
+        if not _torch_available:
+            missing.append("torch")
+        if not _diffusers_available:
+            missing.extend(["diffusers", "transformers", "accelerate"])
+
+        if missing:
+            _set_setup_status("running", "installing", 15, "Installing image dependencies")
+            _install_python_packages(missing)
+            _set_setup_status("running", "installing", 35, "Verifying installation")
+            _check_dependencies()
+
+        if not _torch_available or not _diffusers_available:
+            raise RuntimeError("Image dependencies not available after install.")
+
+        _set_setup_status("running", "downloading", 60, "Downloading Stable Diffusion model")
+        service = get_image_generation_service()
+        service.warmup_model(model_id)
+
+        _set_setup_status("ready", "ready", 100, "Image generation ready")
+    except Exception as e:
+        logger.error(f"Image setup failed: {e}")
+        _set_setup_status("error", "error", 100, "Image setup failed", error=str(e))
+
+def start_image_setup(model_id: Optional[str] = None) -> Dict[str, Any]:
+    global _setup_thread
+    with _setup_lock:
+        if _setup_thread is not None and _setup_thread.is_alive():
+            return dict(_setup_status)
+
+        _setup_thread = threading.Thread(target=_run_image_setup, args=(model_id,), daemon=True)
+        _setup_thread.start()
+        return dict(_setup_status)
+
+def get_image_setup_status() -> Dict[str, Any]:
+    with _setup_lock:
+        return dict(_setup_status)
 
 
 class ImageGenerationService:
@@ -130,6 +212,11 @@ class ImageGenerationService:
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+
+    def warmup_model(self, model_id: str = None) -> str:
+        """Ensure the requested model is downloaded and ready."""
+        self._initialize(model_id)
+        return self.current_model
 
     def generate_image(
         self,
