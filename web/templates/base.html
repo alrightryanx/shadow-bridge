@@ -18,7 +18,7 @@
             </div>
             <ul class="nav-links">
                 <li><a href="/" class="{% if request.path == '/' %}active{% endif %}">
-                    <span class="material-symbols-outlined nav-icon">dashboard</span> <span class="nav-label">Dashboard</span>
+                    <span class="material-symbols-outlined nav-icon">forum</span> <span class="nav-label">Sessions</span>
                 </a></li>
                 <li><a href="/projects" class="{% if request.path == '/projects' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">folder</span> <span class="nav-label">Projects</span>
@@ -28,11 +28,14 @@
                     <span class="material-symbols-outlined nav-icon">description</span> <span class="nav-label">Notes</span>
                     <span class="nav-count" id="sidebar-notes-count"></span>
                 </a></li>
+                <li><a href="/images" class="{% if request.path == '/images' %}active{% endif %}">
+                    <span class="material-symbols-outlined nav-icon">image</span> <span class="nav-label">Images</span>
+                </a></li>
                 <li><a href="/automations" class="{% if request.path == '/automations' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">auto_awesome</span> <span class="nav-label">Automations</span>
                 </a></li>
                 <li><a href="/teams" class="{% if request.path == '/teams' %}active{% endif %}">
-                    <span class="material-symbols-outlined nav-icon">group</span> <span class="nav-label">Teams</span>
+                    <span class="material-symbols-outlined nav-icon">group</span> <span class="nav-label">AI Teams</span>
                 </a></li>
                 <li><a href="/audits" class="{% if request.path == '/audits' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">fact_check</span> <span class="nav-label">Audits</span>
