@@ -176,7 +176,7 @@ def _format_timestamp(ts: int) -> str:
     try:
         dt = datetime.fromtimestamp(ts / 1000)  # Convert from milliseconds
         return dt.strftime("%Y-%m-%d %H:%M")
-    except:
+    except (ValueError, OSError, OverflowError):
         return "Unknown"
 
 
@@ -199,7 +199,7 @@ def _time_ago(ts: int) -> str:
             return f"{diff.seconds // 60} minutes ago"
         else:
             return "Just now"
-    except:
+    except (ValueError, OSError, OverflowError):
         return "Unknown"
 
 def _is_private_ip(ip: str) -> bool:
@@ -892,7 +892,7 @@ def get_status() -> Dict:
     try:
         hostname = socket.gethostname()
         local_ip = socket.gethostbyname(hostname)
-    except:
+    except (socket.gaierror, socket.herror, OSError):
         local_ip = "127.0.0.1"
 
     return {

@@ -50,7 +50,7 @@ def is_admin():
         return True  # Non-Windows doesn't need this check
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+    except (AttributeError, OSError):
         return False
 
 
@@ -102,8 +102,8 @@ if platform.system() == 'Windows' and not is_admin() and not WEB_SERVER_MODE:
                 "Administrator Required",
                 0x10 | 0x40000  # MB_ICONERROR | MB_TOPMOST
             )
-        except:
-            print("WARNING: Could not elevate. Please restart as Administrator.")
+        except (AttributeError, OSError) as e:
+            print(f"WARNING: Could not elevate ({e}). Please restart as Administrator.")
         sys.exit(1)
 
 
@@ -134,7 +134,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.012"
+APP_VERSION = "1.013"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -1192,13 +1192,14 @@ class DataReceiver(threading.Thread):
                 if now - ts < self.RATE_LIMIT_WINDOW
             ]
 
-            # Check if over limit
-            if len(self._rate_limit_tracker[ip]) >= self.RATE_LIMIT_MAX:
+            # Record this attempt BEFORE checking (fixes off-by-one bug)
+            self._rate_limit_tracker[ip].append(now)
+
+            # Check if over limit (now correctly enforces RATE_LIMIT_MAX)
+            if len(self._rate_limit_tracker[ip]) > self.RATE_LIMIT_MAX:
                 log.warning(f"Rate limit exceeded for {ip}")
                 return False
 
-            # Record this attempt
-            self._rate_limit_tracker[ip].append(now)
             return True
 
     def run(self):
@@ -1385,8 +1386,8 @@ class DataReceiver(threading.Thread):
         except Exception as e:
             try:
                 self._send_response(conn, {'success': False, 'message': str(e)})
-            except:
-                pass
+            except (socket.error, BrokenPipeError, ConnectionResetError):
+                log.debug(f"Could not send error response: connection closed")
         finally:
             conn.close()
 
@@ -1396,14 +1397,53 @@ class DataReceiver(threading.Thread):
             data = json.dumps(response).encode('utf-8')
             conn.send(len(data).to_bytes(4, 'big'))
             conn.send(data)
-        except:
-            pass
+        except (socket.error, BrokenPipeError, ConnectionResetError, OSError):
+            log.debug("Failed to send response: connection closed")
+
+    def _validate_ssh_key(self, public_key):
+        """Validate SSH public key format and structure.
+
+        Checks:
+        - Key starts with valid type (ssh-rsa, ssh-ed25519, etc.)
+        - Has at least 2 parts (type + base64 data)
+        - Base64 data is valid
+        """
+        if not public_key:
+            return False, "Empty key"
+
+        # Valid SSH key types
+        valid_types = ('ssh-rsa', 'ssh-ed25519', 'ssh-dss', 'ecdsa-sha2-nistp256',
+                       'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'sk-ssh-ed25519@openssh.com',
+                       'sk-ecdsa-sha2-nistp256@openssh.com')
+
+        parts = public_key.strip().split()
+        if len(parts) < 2:
+            return False, "Key must have at least type and data parts"
+
+        key_type = parts[0]
+        key_data = parts[1]
+
+        if key_type not in valid_types:
+            return False, f"Unknown key type: {key_type}. Expected one of: {', '.join(valid_types[:3])}..."
+
+        # Validate base64 encoding
+        try:
+            decoded = base64.b64decode(key_data)
+            if len(decoded) < 32:  # Minimum reasonable key size
+                return False, "Key data too short"
+        except Exception as e:
+            return False, f"Invalid base64 encoding: {e}"
+
+        return True, "Valid"
 
     def _install_ssh_key(self, public_key, device_name):
         """Install SSH public key to authorized_keys (both user and admin on Windows)."""
         try:
-            if not public_key or not public_key.startswith('ssh-'):
-                return {'success': False, 'message': 'Invalid public key format'}
+            # Validate key format and structure
+            is_valid, error_msg = self._validate_ssh_key(public_key)
+            if not is_valid:
+                log.warning(f"SSH key validation failed: {error_msg}")
+                return {'success': False, 'message': f'Invalid SSH key: {error_msg}'}
 
             # List of authorized_keys files to update
             auth_keys_files = []
@@ -1467,8 +1507,8 @@ class DataReceiver(threading.Thread):
                     if platform.system() != 'Windows':
                         try:
                             os.chmod(auth_keys_file, 0o600)
-                        except:
-                            pass
+                        except OSError as e:
+                            log.warning(f"Could not set permissions on {auth_keys_file}: {e}")
 
                 except Exception as e:
                     log.warning(f"Failed to update {auth_keys_file}: {e}")
@@ -1906,13 +1946,13 @@ class CompanionRelayServer(threading.Thread):
             if self._plugin_conn:
                 try:
                     self._plugin_conn.close()
-                except:
-                    pass
+                except (socket.error, OSError):
+                    pass  # Connection already closed
             for conn in self._device_conns.values():
                 try:
                     conn.close()
-                except:
-                    pass
+                except (socket.error, OSError):
+                    pass  # Connection already closed
 
     def _handle_connection(self, conn, addr):
         """Handle incoming connection (either plugin or device)."""
@@ -2052,8 +2092,8 @@ class CompanionRelayServer(threading.Thread):
                     log.info(f"Device disconnected: {device_id}")
             try:
                 conn.close()
-            except:
-                pass
+            except (socket.error, OSError):
+                pass  # Connection already closed
 
     def _relay_to_plugin(self, message):
         """Relay message to the connected plugin."""
@@ -2077,8 +2117,8 @@ class CompanionRelayServer(threading.Thread):
                         self._send_to_conn(conn, message)
                         log.info(f"Relayed to device: {did}")
                         return True
-                    except:
-                        pass
+                    except (socket.error, BrokenPipeError, ConnectionResetError, OSError):
+                        log.debug(f"Failed to relay to device {did}: connection closed")
 
             # Send to specific device
             conn = self._device_conns.get(device_id)
@@ -2109,7 +2149,8 @@ class CompanionRelayServer(threading.Thread):
         for msg in messages:
             try:
                 self._send_to_conn(conn, msg)
-            except:
+            except (socket.error, BrokenPipeError, ConnectionResetError, OSError):
+                log.debug(f"Failed to send pending message to {device_id}: connection closed")
                 break
 
     def _send_to_conn(self, conn, message):
@@ -2551,15 +2592,15 @@ class ShadowBridgeApp:
                 icon_img = icon_img.resize((64, 64), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
                 self.app_icon = ImageTk.PhotoImage(icon_img)
                 self.root.iconphoto(True, self.app_icon)
-            except:
-                pass
+            except (FileNotFoundError, IOError, OSError) as e:
+                log.debug(f"Could not load app icon: {e}")
 
         # Window sizing - fixed compact size, bottom-right position
         self.root.update_idletasks()
         try:
             dpi = self.root.winfo_fpixels('1i')
             scale = dpi / 96.0  # 96 is standard DPI
-        except:
+        except (tk.TclError, ValueError):
             scale = 1.0
 
         # Fixed compact size for quick connect utility
@@ -3379,8 +3420,8 @@ class ShadowBridgeApp:
             urllib.request.urlopen("http://127.0.0.1:6767", timeout=1)
             # Already running
             return
-        except:
-            pass
+        except (urllib.error.URLError, OSError, TimeoutError):
+            pass  # Server not running, we'll start it
 
         # Start the server silently
         try:
@@ -3433,8 +3474,8 @@ class ShadowBridgeApp:
             # Server is running, just open browser
             webbrowser.open(web_url)
             return
-        except:
-            pass
+        except (urllib.error.URLError, OSError, TimeoutError):
+            pass  # Server not running, we'll start it
 
         # Start the web server
         try:
@@ -3498,7 +3539,7 @@ class ShadowBridgeApp:
                     try:
                         urllib.request.urlopen("http://127.0.0.1:6767", timeout=3)
                         webbrowser.open(web_url)
-                    except:
+                    except (urllib.error.URLError, OSError, TimeoutError):
                         log.error("Web dashboard failed to start")
                         self.root.after(0, lambda: messagebox.showerror(
                             "Web Dashboard Error",
@@ -4093,24 +4134,24 @@ Or run in PowerShell (Admin):
         if self.data_receiver:
             try:
                 self.data_receiver.stop()
-            except:
-                pass
+            except (RuntimeError, OSError):
+                pass  # Already stopped or thread error
         if self.companion_relay:
             try:
                 self.companion_relay.stop()
-            except:
-                pass
+            except (RuntimeError, OSError):
+                pass  # Already stopped or thread error
         if self.web_process:
             try:
                 self.web_process.terminate()
                 log.info("Web dashboard process terminated")
-            except:
-                pass
+            except (OSError, ProcessLookupError):
+                pass  # Process already terminated
         if self.tray_icon:
             try:
                 self.tray_icon.stop()
-            except:
-                pass
+            except (RuntimeError, OSError):
+                pass  # Tray already stopped
         self.root.quit()
         self.root.destroy()
 
@@ -4120,23 +4161,23 @@ Or run in PowerShell (Admin):
         if self.data_receiver:
             try:
                 self.data_receiver.stop()
-            except:
-                pass
+            except (RuntimeError, OSError):
+                pass  # Already stopped
         if self.companion_relay:
             try:
                 self.companion_relay.stop()
-            except:
-                pass
+            except (RuntimeError, OSError):
+                pass  # Already stopped
         if self.web_process:
             try:
                 self.web_process.terminate()
-            except:
-                pass
+            except (OSError, ProcessLookupError):
+                pass  # Process already terminated
         if self.tray_icon:
             try:
                 self.tray_icon.stop()
-            except:
-                pass
+            except (RuntimeError, OSError):
+                pass  # Tray already stopped
         self.root.destroy()
         os._exit(0)  # Force exit
 

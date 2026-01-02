@@ -19,8 +19,8 @@ def _debug_log(msg, base_path=None):
         log_path = os.path.join(base_path or os.path.dirname(sys.executable), 'web_debug.log')
         with open(log_path, 'a') as f:
             f.write(f"{msg}\n")
-    except:
-        pass
+    except (IOError, OSError):
+        pass  # Logging is best-effort
 
 def create_app():
     """Create and configure the Flask application."""
