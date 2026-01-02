@@ -30,6 +30,7 @@ import webbrowser
 import logging
 import tempfile
 import ctypes
+from concurrent.futures import ThreadPoolExecutor
 
 from pathlib import Path
 from io import BytesIO
@@ -134,7 +135,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.016"
+APP_VERSION = "1.017"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -945,6 +946,9 @@ class DataReceiver(threading.Thread):
     RATE_LIMIT_WINDOW = 60  # seconds
     RATE_LIMIT_MAX = 5  # max attempts per window
 
+    # SECURITY: Limit concurrent connections to prevent resource exhaustion
+    MAX_WORKERS = 10
+
     def __init__(self, on_data_received, on_device_connected, on_notes_received=None, on_key_approval_needed=None):
         super().__init__(daemon=True)
         self.on_data_received = on_data_received
@@ -957,6 +961,8 @@ class DataReceiver(threading.Thread):
         self.ip_to_device_id = {}  # ip -> device_id
         self._devices_lock = threading.Lock()
         self._storage_lock = threading.Lock()
+        # SECURITY: Use thread pool instead of unbounded daemon threads
+        self._executor = ThreadPoolExecutor(max_workers=self.MAX_WORKERS, thread_name_prefix="DataReceiver")
 
         # Security: Rate limiting
         self._rate_limit_tracker = {}  # ip -> [timestamps]
@@ -1196,12 +1202,14 @@ class DataReceiver(threading.Thread):
             while self.running:
                 try:
                     conn, addr = self.sock.accept()
-                    threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True).start()
+                    # SECURITY: Use thread pool with bounded size instead of unbounded threads
+                    self._executor.submit(self._handle_client, conn, addr)
                 except socket.timeout:
                     continue
                 except Exception:
                     pass
         finally:
+            self._executor.shutdown(wait=False)
             if self.sock:
                 self.sock.close()
 
@@ -1877,6 +1885,9 @@ class CompanionRelayServer(threading.Thread):
     - Session handoff: Android can request PC session context
     """
 
+    # SECURITY: Limit concurrent connections to prevent resource exhaustion
+    MAX_WORKERS = 10
+
     def __init__(self, on_status_change=None):
         super().__init__(daemon=True)
         self.running = True
@@ -1897,6 +1908,9 @@ class CompanionRelayServer(threading.Thread):
         self._pc_session_lock = threading.Lock()
         self._session_history = []  # Recent interactions for context (max 20)
 
+        # SECURITY: Use thread pool instead of unbounded daemon threads
+        self._executor = ThreadPoolExecutor(max_workers=self.MAX_WORKERS, thread_name_prefix="CompanionRelay")
+
     def run(self):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1912,7 +1926,8 @@ class CompanionRelayServer(threading.Thread):
             while self.running:
                 try:
                     conn, addr = self.sock.accept()
-                    threading.Thread(target=self._handle_connection, args=(conn, addr), daemon=True).start()
+                    # SECURITY: Use thread pool with bounded size instead of unbounded threads
+                    self._executor.submit(self._handle_connection, conn, addr)
                 except socket.timeout:
                     continue
                 except Exception as e:
@@ -1921,6 +1936,7 @@ class CompanionRelayServer(threading.Thread):
         except Exception as e:
             log.error(f"Companion server error: {e}")
         finally:
+            self._executor.shutdown(wait=False)
             if self.sock:
                 self.sock.close()
 
