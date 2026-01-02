@@ -134,7 +134,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.014"
+APP_VERSION = "1.015"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -3674,9 +3674,9 @@ class ShadowBridgeApp:
         try:
             if IS_WINDOWS:
                 try:
+                    # SECURITY: Use array form instead of shell=True
                     subprocess.run(
-                        f"taskkill /PID {proc.pid} /T /F",
-                        shell=True,
+                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                         capture_output=True,
                         text=True,
                         timeout=10,
