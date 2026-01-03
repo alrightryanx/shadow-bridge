@@ -1,0 +1,769 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Video Generation{% endblock %}
+{% block page_title %}Video Generation{% endblock %}
+
+{% block content %}
+<!-- Mode Selection -->
+<div class="mode-selector">
+  <button class="mode-btn active" data-mode="free" onclick="setMode('free')">
+    <span class="material-symbols-outlined">local_fire_department</span>
+    Free (Local)
+  </button>
+  <button class="mode-btn disabled" data-mode="quality" onclick="setMode('quality')" title="Coming soon">
+    <span class="material-symbols-outlined">auto_awesome</span>
+    Best Quality
+    <span class="coming-soon-badge">Coming Soon</span>
+  </button>
+</div>
+
+<!-- Input Form -->
+<div class="video-form">
+  <div class="form-group">
+    <label for="prompt-input">Describe your video</label>
+    <textarea id="prompt-input" rows="4" placeholder="A cat dancing in the rain..."></textarea>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Model</label>
+      <select id="model-select">
+        <!-- Populated based on mode -->
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Duration (seconds)</label>
+      <select id="duration-select">
+        <option value="5">5 seconds</option>
+        <option value="10" selected>10 seconds</option>
+        <option value="15">15 seconds</option>
+        <option value="20">20 seconds</option>
+        <option value="30">30 seconds</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Aspect Ratio</label>
+      <select id="aspect-ratio">
+        <option value="16:9" selected>16:9 (Landscape)</option>
+        <option value="9:16">9:16 (Portrait)</option>
+        <option value="1:1">1:1 (Square)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="negative-prompt">Negative Prompt (optional)</label>
+      <input type="text" id="negative-prompt" placeholder="What to avoid (e.g., blurry, watermark)">
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label for="seed-input">Seed (optional)</label>
+    <input type="text" id="seed-input" placeholder="Random (leave empty for random)">
+    <div class="form-hint">Same seed = same result</div>
+  </div>
+
+  <!-- Generate Button -->
+  <button class="btn btn-primary btn-large" id="generate-btn" onclick="generateVideo()">
+    <span class="material-symbols-outlined">movie_creation</span>
+    Generate Video
+  </button>
+
+  <!-- Cost Info -->
+  <div id="cost-info" class="cost-info">
+    <span class="cost-badge">Free</span>
+    <span class="cost-note">Runs locally on your machine</span>
+  </div>
+</div>
+
+<!-- Progress Section -->
+<div id="progress-section" class="progress-section hidden">
+  <div class="progress-card">
+    <div class="progress-header">
+      <h3><span class="material-symbols-outlined">downloading</span> Generating Video</h3>
+      <div class="progress-status" id="progress-status">Initializing...</div>
+    </div>
+
+    <div class="progress-bar-container">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+      </div>
+      <div class="progress-percent" id="progress-percent">0%</div>
+    </div>
+
+    <div class="progress-details">
+      <div class="progress-detail">
+        <span class="material-symbols-outlined">model_training</span>
+        <span>Model:</span>
+        <strong id="progress-model">-</strong>
+      </div>
+      <div class="progress-detail">
+        <span class="material-symbols-outlined">schedule</span>
+        <span>Status:</span>
+        <strong id="progress-status-text">-</strong>
+      </div>
+    </div>
+
+    <button class="btn btn-secondary btn-small" id="cancel-btn" onclick="cancelGeneration()">
+      Cancel
+    </button>
+  </div>
+</div>
+
+<!-- Result Section -->
+<div id="result-section" class="result-section hidden">
+  <div class="result-card">
+    <div class="result-header">
+      <h3><span class="material-symbols-outlined">check_circle</span> Video Generated!</h3>
+      <div class="result-actions">
+        <button class="btn btn-primary" onclick="downloadVideo()">
+          <span class="material-symbols-outlined">download</span> Download
+        </button>
+        <button class="btn btn-secondary" onclick="regenerate()">
+          <span class="material-symbols-outlined">refresh</span> Regenerate
+        </button>
+      </div>
+    </div>
+
+    <div class="video-container">
+      <video id="result-video" controls loop playsinline>
+        Your browser does not support video.
+      </video>
+    </div>
+
+    <div class="result-meta">
+      <div class="meta-item">
+        <span class="material-symbols-outlined">model_training</span>
+        <span>Model:</span>
+        <strong id="result-model">-</strong>
+      </div>
+      <div class="meta-item">
+        <span class="material-symbols-outlined">schedule</span>
+        <span>Duration:</span>
+        <strong id="result-duration">-</strong>
+      </div>
+      <div class="meta-item">
+        <span class="material-symbols-outlined">timer</span>
+        <span>Time:</span>
+        <strong id="result-time">-</strong>
+      </div>
+      <div class="meta-item">
+        <span class="material-symbols-outlined">payments</span>
+        <span>Cost:</span>
+        <strong id="result-cost">$0.00</strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent Generations History -->
+<section class="history-section">
+  <div class="section-header">
+    <h2><span class="material-symbols-outlined">history</span> Recent Generations</h2>
+    <button class="btn btn-small btn-secondary" onclick="clearHistory()">
+      <span class="material-symbols-outlined">delete</span> Clear History
+    </button>
+  </div>
+
+  <div id="history-grid" class="history-grid">
+    <div class="loading">Loading history...</div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentMode = 'free';
+let selectedModel = 'hunyuan-15';
+let currentGenerationId = null;
+let pollInterval = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+  loadAvailableModels();
+  loadHistory();
+  initModeToggle();
+});
+
+function initModeToggle() {
+  const savedMode = localStorage.getItem('video-gen-mode') || 'free';
+  setMode(savedMode);
+}
+
+function setMode(mode) {
+  if (mode === 'quality') {
+    showToast('Best Quality mode coming soon! Free mode selected.', 'info');
+    setMode('free');
+    return;
+  }
+  
+  currentMode = mode;
+  localStorage.setItem('video-gen-mode', mode);
+  
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  
+  loadModelsForMode(mode);
+}
+
+async function loadAvailableModels() {
+  const response = await api.getVideoModels();
+  if (response.data) {
+    window.videoModels = response.data;
+  }
+}
+
+function loadModelsForMode(mode) {
+  const select = document.getElementById('model-select');
+  select.innerHTML = '';
+  
+  const models = window.videoModels[mode] || [];
+  models.forEach(model => {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = model.name;
+    select.appendChild(option);
+  });
+  
+  selectedModel = models[0]?.id;
+}
+
+function updateCostInfo() {
+  const costInfo = document.getElementById('cost-info');
+  if (currentMode === 'free') {
+    costInfo.innerHTML = `
+      <span class="cost-badge free">Free</span>
+      <span class="cost-note">Runs locally on your machine</span>
+    `;
+  } else {
+    costInfo.innerHTML = `
+      <span class="cost-badge paid">~$2.50/video</span>
+      <span class="cost-note">Kling 2.6, Veo 3.1, Sora 2</span>
+    `;
+  }
+}
+
+async function generateVideo() {
+  const prompt = document.getElementById('prompt-input').value.trim();
+  if (!prompt) {
+    showToast('Please enter a prompt', 'warning');
+    return;
+  }
+  
+  const data = {
+    prompt: prompt,
+    mode: currentMode,
+    model: selectedModel,
+    input_type: 'text',
+    duration: parseInt(document.getElementById('duration-select').value),
+    aspect_ratio: document.getElementById('aspect-ratio').value,
+    negative_prompt: document.getElementById('negative-prompt').value,
+    seed: document.getElementById('seed-input').value || null
+  };
+  
+  showProgress();
+  
+  try {
+    const response = await api.generateVideo(data);
+    
+    if (response.error) {
+      hideProgress();
+      showToast(response.error, 'error');
+      return;
+    }
+    
+    currentGenerationId = response.generation_id;
+    
+    if (response.status === 'completed') {
+      showResult(response);
+    } else {
+      startPolling(response.generation_id);
+    }
+    
+  } catch (error) {
+    hideProgress();
+    showToast('Failed to start generation: ' + error.message, 'error');
+  }
+}
+
+function showProgress() {
+  document.getElementById('progress-section').classList.remove('hidden');
+  document.getElementById('result-section').classList.add('hidden');
+  document.getElementById('generate-btn').disabled = true;
+  document.getElementById('progress-status').textContent = 'Starting...';
+  document.getElementById('progress-fill').style.width = '0%';
+  document.getElementById('progress-percent').textContent = '0%';
+}
+
+function hideProgress() {
+  document.getElementById('progress-section').classList.add('hidden');
+  document.getElementById('generate-btn').disabled = false;
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+}
+
+function showResult(result) {
+  hideProgress();
+  document.getElementById('result-section').classList.remove('hidden');
+  
+  if (result.video_url) {
+    document.getElementById('result-video').src = result.video_url;
+  }
+  
+  document.getElementById('result-model').textContent = result.model;
+  document.getElementById('result-duration').textContent = result.duration_seconds + 's';
+  document.getElementById('result-cost').textContent = result.cost ? '$' + result.cost.toFixed(2) : 'Free';
+  document.getElementById('result-time').textContent = new Date().toLocaleTimeString();
+  
+  addToHistory(result);
+}
+
+function startPolling(generationId) {
+  if (pollInterval) clearInterval(pollInterval);
+  
+  pollInterval = setInterval(async () => {
+    try {
+      const status = await api.getGenerationStatus(generationId);
+      
+      updateProgressUI(status);
+      
+      if (status.status === 'completed') {
+        clearInterval(pollInterval);
+        pollInterval = null;
+        const result = await api.getGenerationResult(generationId);
+        showResult(result);
+        showToast('Video generated successfully!', 'success');
+      } else if (status.status === 'failed') {
+        clearInterval(pollInterval);
+        pollInterval = null;
+        hideProgress();
+        showToast('Generation failed', 'error');
+      }
+      
+    } catch (error) {
+      console.error('Polling error:', error);
+    }
+  }, 2000);
+}
+
+function updateProgressUI(status) {
+  document.getElementById('progress-status').textContent = status.message || 'Processing...';
+  document.getElementById('progress-model').textContent = status.model || '-';
+  document.getElementById('progress-status-text').textContent = status.status || '-';
+  document.getElementById('progress-fill').style.width = (status.progress || 0) + '%';
+  document.getElementById('progress-percent').textContent = (status.progress || 0) + '%';
+}
+
+function cancelGeneration() {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+  
+  if (currentGenerationId) {
+    api.cancelGeneration(currentGenerationId).then(() => {
+      hideProgress();
+      showToast('Generation cancelled', 'info');
+    }).catch(error => {
+      showToast('Failed to cancel: ' + error.message, 'error');
+    });
+  }
+}
+
+async function downloadVideo() {
+  const video = document.getElementById('result-video');
+  if (!video.src) return;
+  
+  try {
+    const response = await fetch(video.src);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `video-${Date.now()}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    showToast('Video downloaded', 'success');
+  } catch (error) {
+    showToast('Download failed', 'error');
+  }
+}
+
+function regenerate() {
+  document.querySelector('.video-form').scrollIntoView({ behavior: 'smooth' });
+  document.getElementById('result-section').classList.add('hidden');
+}
+
+async function loadHistory() {
+  const response = await api.getVideoHistory();
+  
+  if (response.data) {
+    renderHistory(response.data);
+  }
+}
+
+function renderHistory(history) {
+  const container = document.getElementById('history-grid');
+  
+  if (!history || history.length === 0) {
+    container.innerHTML = '<div class="empty-state">No generations yet</div>';
+    return;
+  }
+  
+  container.innerHTML = history.map(item => `
+    <div class="history-card" onclick="viewGeneration('${item.id}')">
+      <div class="history-thumbnail">
+        <div class="thumbnail-placeholder">
+          <span class="material-symbols-outlined">play_circle</span>
+        </div>
+      </div>
+      <div class="history-info">
+        <div class="history-prompt">${escapeHtml(item.prompt.substring(0, 60))}...</div>
+        <div class="history-meta">
+          <span>${item.model}</span>
+          <span>${item.status}</span>
+          <span>${item.time_ago}</span>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function addToHistory(result) {
+  localStorage.setItem('last-video-generation', JSON.stringify(result));
+  loadHistory();
+}
+
+function clearHistory() {
+  if (!confirm('Clear all generation history?')) return;
+  
+  localStorage.removeItem('last-video-generation');
+  showToast('History cleared', 'success');
+  loadHistory();
+}
+
+function viewGeneration(generationId) {
+  const saved = localStorage.getItem('last-video-generation');
+  if (saved) {
+    const item = JSON.parse(saved);
+    if (item.id === generationId) {
+      showResult(item);
+    }
+  }
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+</script>
+
+<style>
+.mode-selector {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+  justify-content: center;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 16px 24px;
+  border-radius: 12px;
+  border: 2px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  position: relative;
+}
+
+.mode-btn:hover:not(.disabled) {
+  background: var(--md-sys-color-surface-variant);
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.mode-btn.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.coming-soon-badge {
+  font-size: 10px;
+  background: rgba(var(--warning-rgb), 0.3);
+  color: var(--warning);
+  padding: 2px 8px;
+  border-radius: 4px;
+  position: absolute;
+  top: -8px;
+  right: 8px;
+}
+
+.video-form {
+  background: var(--md-sys-color-surface-variant);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.cost-info {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cost-badge {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.cost-badge.free {
+  background: rgba(var(--success-rgb), 0.2);
+  color: var(--success);
+}
+
+.cost-badge.paid {
+  background: rgba(var(--warning-rgb), 0.2);
+  color: var(--warning);
+}
+
+.cost-note {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.btn-large {
+  width: 100%;
+  padding: 16px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.progress-section {
+  margin: 24px 0;
+}
+
+.progress-card {
+  background: var(--md-sys-color-surface-variant);
+  border-radius: 12px;
+  padding: 24px;
+  border: 2px solid var(--accent);
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.progress-bar-container {
+  height: 8px;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.progress-bar {
+  height: 100%;
+  position: relative;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-percent {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 8px;
+  color: var(--text-dim);
+}
+
+.progress-details {
+  display: flex;
+  gap: 24px;
+  margin-top: 16px;
+}
+
+.progress-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.result-section {
+  margin: 24px 0;
+}
+
+.result-card {
+  background: var(--md-sys-color-surface-variant);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.video-container {
+  background: black;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.video-container video {
+  width: 100%;
+  display: block;
+  max-height: 500px;
+}
+
+.result-meta {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border-radius: 8px;
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.history-section {
+  margin-top: 32px;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.history-card {
+  background: var(--md-sys-color-surface);
+  border-radius: 10px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.history-card:hover {
+  background: var(--md-sys-color-surface-variant);
+  border-color: var(--md-sys-color-outline);
+}
+
+.history-thumbnail {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: black;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumbnail-placeholder {
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
+.thumbnail-placeholder .material-symbols-outlined {
+  font-size: 48px;
+}
+
+.history-info {
+  min-height: 0;
+}
+
+.history-prompt {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.history-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 768px) {
+  .mode-selector {
+    flex-direction: column;
+  }
+  
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .result-meta {
+    grid-template-columns: 1fr;
+  }
+  
+  .progress-details {
+    flex-direction: column;
+    gap: 12px;
+  }
+}
+</style>
+{% endblock %}

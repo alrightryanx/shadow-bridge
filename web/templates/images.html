@@ -1,0 +1,729 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Images{% endblock %}
+{% block page_title %}Images{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+    <button class="btn btn-primary" onclick="showGenerateModal()">
+        <span class="material-symbols-outlined">add_photo_alternate</span> Generate Batch
+    </button>
+</div>
+
+<!-- Active Batch Progress -->
+<div id="active-batch-panel" class="batch-progress-panel hidden">
+    <div class="batch-progress-header">
+        <span class="material-symbols-outlined">autorenew</span>
+        <span id="active-batch-prompt" class="batch-prompt-text">Generating...</span>
+        <span id="active-batch-count" class="batch-count">(0/0)</span>
+    </div>
+    <div class="batch-progress-bar-container">
+        <div id="active-batch-progress" class="batch-progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="batch-progress-footer">
+        <span id="active-batch-percent">0%</span>
+        <span id="active-batch-eta">ETA: calculating...</span>
+        <button class="btn btn-small btn-danger" onclick="cancelActiveBatch()">
+            <span class="material-symbols-outlined">cancel</span> Cancel
+        </button>
+    </div>
+</div>
+
+<!-- Image Gallery -->
+<div class="images-gallery" id="images-container">
+    <div class="empty-state">
+        <span class="material-symbols-outlined" style="font-size: 48px; margin-bottom: 16px;">image</span>
+        <p>No images generated yet</p>
+        <p class="text-muted">Click "Generate Batch" to create images</p>
+    </div>
+</div>
+
+<!-- Batch Jobs History -->
+<div class="batch-history-section">
+    <h3>Recent Batches</h3>
+    <div id="batch-history" class="batch-history-list">
+        <div class="loading">Loading batch history...</div>
+    </div>
+</div>
+
+<!-- Generate Batch Modal -->
+<div id="generate-modal" class="modal hidden">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">auto_awesome</span> Generate Batch</h2>
+            <button class="modal-close" onclick="closeGenerateModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="gen-prompt">Prompt *</label>
+                <textarea id="gen-prompt" class="form-input" rows="3" placeholder="A beautiful sunset over mountains, golden hour, dramatic clouds..."></textarea>
+            </div>
+            <div class="form-group">
+                <label for="gen-negative">Negative Prompt</label>
+                <input type="text" id="gen-negative" class="form-input" placeholder="blurry, bad quality, distorted" value="blurry, bad quality, distorted">
+            </div>
+
+            <!-- Quick Presets -->
+            <div class="form-group">
+                <label>Quick Presets</label>
+                <div class="preset-buttons">
+                    <button class="btn btn-outline preset-btn" onclick="applyPreset(20, 0.3)">
+                        <span class="material-symbols-outlined">tune</span> 20 Slight Variations
+                    </button>
+                    <button class="btn btn-outline preset-btn" onclick="applyPreset(50, 0.7)">
+                        <span class="material-symbols-outlined">shuffle</span> 50 Heavy Variations
+                    </button>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group form-half">
+                    <label for="gen-count">Count: <span id="count-display">10</span></label>
+                    <input type="range" id="gen-count" class="form-range" min="1" max="100" value="10" oninput="updateEstimates()">
+                </div>
+                <div class="form-group form-half">
+                    <label for="gen-variation">Variation: <span id="variation-display">0.3 (slight)</span></label>
+                    <input type="range" id="gen-variation" class="form-range" min="0" max="100" value="30" oninput="updateVariationLabel()">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group form-half">
+                    <label for="gen-model">Model</label>
+                    <select id="gen-model" class="form-input" onchange="updateEstimates()">
+                        <option value="sd-xl-turbo" selected>SDXL-Turbo (Fast)</option>
+                        <option value="sd-xl">SDXL (Quality)</option>
+                        <option value="sd-1.5">SD 1.5 (Lightweight)</option>
+                    </select>
+                </div>
+                <div class="form-group form-half">
+                    <label for="gen-size">Size</label>
+                    <select id="gen-size" class="form-input">
+                        <option value="512">512 x 512</option>
+                        <option value="768">768 x 768</option>
+                        <option value="1024" selected>1024 x 1024</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Estimates -->
+            <div class="estimate-panel">
+                <div class="estimate-item">
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>Time: <strong id="estimate-time">~35 sec</strong></span>
+                </div>
+                <div class="estimate-item">
+                    <span class="material-symbols-outlined">payments</span>
+                    <span>Cost: <strong id="estimate-cost">$0 (local GPU)</strong></span>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeGenerateModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="startBatchGeneration()">
+                <span class="material-symbols-outlined">play_arrow</span> Start Generation
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Image Lightbox -->
+<div id="image-lightbox" class="lightbox hidden" onclick="closeLightbox(event)">
+    <div class="lightbox-content">
+        <button class="lightbox-close" onclick="closeLightbox(event)">&times;</button>
+        <img id="lightbox-image" src="" alt="Generated image">
+        <div class="lightbox-info">
+            <span id="lightbox-seed">Seed: </span>
+            <button class="btn btn-small" onclick="downloadLightboxImage()">
+                <span class="material-symbols-outlined">download</span> Download
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let activeBatchId = null;
+let pollInterval = null;
+let allImages = [];
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadBatchHistory();
+    updateEstimates();
+});
+
+function showGenerateModal() {
+    document.getElementById('generate-modal').classList.remove('hidden');
+}
+
+function closeGenerateModal() {
+    document.getElementById('generate-modal').classList.add('hidden');
+}
+
+function applyPreset(count, variation) {
+    document.getElementById('gen-count').value = count;
+    document.getElementById('gen-variation').value = variation * 100;
+    updateEstimates();
+    updateVariationLabel();
+}
+
+function updateVariationLabel() {
+    const val = document.getElementById('gen-variation').value / 100;
+    let label = 'same';
+    if (val >= 0.7) label = 'heavy';
+    else if (val >= 0.4) label = 'moderate';
+    else if (val >= 0.1) label = 'slight';
+    document.getElementById('variation-display').textContent = `${val.toFixed(1)} (${label})`;
+}
+
+async function updateEstimates() {
+    const count = parseInt(document.getElementById('gen-count').value);
+    const model = document.getElementById('gen-model').value;
+
+    document.getElementById('count-display').textContent = count;
+
+    try {
+        const response = await fetch(`/api/image/estimate?count=${count}&model=${model}`);
+        const data = await response.json();
+
+        if (data.success) {
+            const seconds = data.estimated_seconds;
+            if (seconds >= 60) {
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.round(seconds % 60);
+                document.getElementById('estimate-time').textContent = `~${mins}m ${secs}s`;
+            } else {
+                document.getElementById('estimate-time').textContent = `~${Math.round(seconds)} sec`;
+            }
+        }
+    } catch (err) {
+        console.error('Estimate error:', err);
+    }
+}
+
+async function startBatchGeneration() {
+    const prompt = document.getElementById('gen-prompt').value.trim();
+    if (!prompt) {
+        showToast('Please enter a prompt', 'error');
+        return;
+    }
+
+    const count = parseInt(document.getElementById('gen-count').value);
+    const variation = document.getElementById('gen-variation').value / 100;
+    const model = document.getElementById('gen-model').value;
+    const size = parseInt(document.getElementById('gen-size').value);
+    const negative = document.getElementById('gen-negative').value.trim();
+
+    try {
+        const response = await fetch('/api/image/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: prompt,
+                count: count,
+                variation_strength: variation,
+                negative_prompt: negative || null,
+                model: model,
+                width: size,
+                height: size
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            activeBatchId = data.job.id;
+            closeGenerateModal();
+            showActiveBatch(data.job);
+            startPolling();
+            showToast(`Started batch generation: ${count} images`, 'success');
+        } else {
+            showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+function showActiveBatch(job) {
+    const panel = document.getElementById('active-batch-panel');
+    panel.classList.remove('hidden');
+
+    const shortPrompt = job.prompt.length > 40 ? job.prompt.substring(0, 40) + '...' : job.prompt;
+    document.getElementById('active-batch-prompt').textContent = shortPrompt;
+    updateBatchProgress(job);
+}
+
+function updateBatchProgress(job) {
+    const percent = job.progress_percent || 0;
+    const completed = job.completed_count + job.failed_count;
+
+    document.getElementById('active-batch-count').textContent = `(${completed}/${job.count})`;
+    document.getElementById('active-batch-progress').style.width = `${percent}%`;
+    document.getElementById('active-batch-percent').textContent = `${percent}%`;
+
+    if (job.eta_seconds) {
+        const mins = Math.floor(job.eta_seconds / 60);
+        const secs = Math.round(job.eta_seconds % 60);
+        document.getElementById('active-batch-eta').textContent = `ETA: ${mins}:${secs.toString().padStart(2, '0')}`;
+    } else {
+        document.getElementById('active-batch-eta').textContent = 'ETA: calculating...';
+    }
+}
+
+function startPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(pollBatchStatus, 2000);
+}
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+}
+
+async function pollBatchStatus() {
+    if (!activeBatchId) {
+        stopPolling();
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/image/batch/${activeBatchId}`);
+        const data = await response.json();
+
+        if (data.success) {
+            const job = data.job;
+            updateBatchProgress(job);
+
+            if (job.state === 'completed' || job.state === 'failed' || job.state === 'cancelled') {
+                stopPolling();
+                document.getElementById('active-batch-panel').classList.add('hidden');
+
+                if (job.state === 'completed') {
+                    showToast(`Batch completed: ${job.completed_count} images generated`, 'success');
+                    loadBatchResults(activeBatchId);
+                } else if (job.state === 'cancelled') {
+                    showToast('Batch cancelled', 'info');
+                } else {
+                    showToast('Batch failed: ' + (job.error || 'Unknown error'), 'error');
+                }
+
+                activeBatchId = null;
+                loadBatchHistory();
+            }
+        }
+    } catch (err) {
+        console.error('Poll error:', err);
+    }
+}
+
+async function cancelActiveBatch() {
+    if (!activeBatchId) return;
+
+    try {
+        const response = await fetch(`/api/image/batch/${activeBatchId}`, { method: 'DELETE' });
+        const data = await response.json();
+
+        if (data.success) {
+            showToast('Cancellation requested', 'info');
+        } else {
+            showToast('Cancel failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+async function loadBatchHistory() {
+    try {
+        const response = await fetch('/api/image/batch/list?limit=10');
+        const data = await response.json();
+
+        const container = document.getElementById('batch-history');
+
+        if (!data.success || !data.jobs || data.jobs.length === 0) {
+            container.innerHTML = '<div class="empty-state">No batch jobs yet</div>';
+            return;
+        }
+
+        container.innerHTML = data.jobs.map(job => {
+            const stateClass = job.state === 'completed' ? 'success' :
+                               job.state === 'failed' ? 'error' :
+                               job.state === 'cancelled' ? 'warning' : 'info';
+            const shortPrompt = job.prompt.length > 50 ? job.prompt.substring(0, 50) + '...' : job.prompt;
+            const timeAgo = formatTimeAgo(job.created_at);
+
+            return `
+                <div class="batch-history-item" onclick="loadBatchResults('${job.id}')">
+                    <div class="batch-info">
+                        <span class="batch-state ${stateClass}">${job.state}</span>
+                        <span class="batch-prompt">${escapeHtml(shortPrompt)}</span>
+                    </div>
+                    <div class="batch-meta">
+                        <span>${job.completed_count}/${job.count} images</span>
+                        <span class="separator">|</span>
+                        <span>${timeAgo}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+    } catch (err) {
+        console.error('Load history error:', err);
+        document.getElementById('batch-history').innerHTML = '<div class="error-message">Failed to load history</div>';
+    }
+}
+
+async function loadBatchResults(jobId) {
+    try {
+        const response = await fetch(`/api/image/batch/${jobId}/results`);
+        const data = await response.json();
+
+        if (!data.success) {
+            showToast('Failed to load results', 'error');
+            return;
+        }
+
+        const results = data.results || [];
+        const successResults = results.filter(r => r.image);
+
+        if (successResults.length === 0) {
+            showToast('No images in this batch', 'info');
+            return;
+        }
+
+        allImages = successResults;
+        renderGallery(successResults);
+
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+function renderGallery(images) {
+    const container = document.getElementById('images-container');
+
+    if (!images || images.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined" style="font-size: 48px; margin-bottom: 16px;">image</span>
+                <p>No images generated yet</p>
+                <p class="text-muted">Click "Generate Batch" to create images</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = images.map((img, idx) => `
+        <div class="image-card" onclick="openLightbox(${idx})">
+            <img src="data:image/png;base64,${img.image}" alt="Generated image ${idx + 1}" loading="lazy">
+            <div class="image-overlay">
+                <span class="image-seed">Seed: ${img.seed}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function openLightbox(index) {
+    const img = allImages[index];
+    if (!img) return;
+
+    document.getElementById('lightbox-image').src = `data:image/png;base64,${img.image}`;
+    document.getElementById('lightbox-seed').textContent = `Seed: ${img.seed}`;
+    document.getElementById('image-lightbox').classList.remove('hidden');
+    document.getElementById('image-lightbox').dataset.currentIndex = index;
+}
+
+function closeLightbox(event) {
+    if (event && event.target.id !== 'image-lightbox' && event.target.className !== 'lightbox-close') {
+        return;
+    }
+    document.getElementById('image-lightbox').classList.add('hidden');
+}
+
+function downloadLightboxImage() {
+    const img = document.getElementById('lightbox-image');
+    const index = document.getElementById('image-lightbox').dataset.currentIndex;
+    const seed = allImages[index]?.seed || 'unknown';
+
+    const a = document.createElement('a');
+    a.href = img.src;
+    a.download = `shadow-image-${seed}.png`;
+    a.click();
+}
+
+function formatTimeAgo(timestamp) {
+    const now = Date.now();
+    const diff = now - timestamp;
+
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return 'just now';
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+
+<style>
+/* Images page specific styles */
+.batch-progress-panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 24px;
+}
+
+.batch-progress-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.batch-progress-header .material-symbols-outlined {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.batch-prompt-text {
+    flex: 1;
+    font-weight: 500;
+}
+
+.batch-count {
+    color: var(--text-muted);
+}
+
+.batch-progress-bar-container {
+    height: 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.batch-progress-bar {
+    height: 100%;
+    background: var(--primary-color);
+    transition: width 0.3s ease;
+}
+
+.batch-progress-footer {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 0.9em;
+    color: var(--text-muted);
+}
+
+.batch-progress-footer .btn {
+    margin-left: auto;
+}
+
+/* Gallery */
+.images-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+}
+
+.image-card {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.image-card:hover {
+    transform: scale(1.02);
+}
+
+.image-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.image-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 8px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    color: white;
+    font-size: 0.8em;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.image-card:hover .image-overlay {
+    opacity: 1;
+}
+
+/* Batch History */
+.batch-history-section {
+    margin-top: 32px;
+}
+
+.batch-history-section h3 {
+    margin-bottom: 16px;
+    color: var(--text-secondary);
+}
+
+.batch-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.batch-history-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.batch-history-item:hover {
+    background: var(--bg-hover);
+}
+
+.batch-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.batch-state {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75em;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.batch-state.success { background: var(--success-bg); color: var(--success-color); }
+.batch-state.error { background: var(--error-bg); color: var(--error-color); }
+.batch-state.warning { background: var(--warning-bg); color: var(--warning-color); }
+.batch-state.info { background: var(--info-bg); color: var(--info-color); }
+
+.batch-prompt {
+    color: var(--text-primary);
+}
+
+.batch-meta {
+    color: var(--text-muted);
+    font-size: 0.9em;
+}
+
+.batch-meta .separator {
+    margin: 0 8px;
+}
+
+/* Generate Modal */
+.preset-buttons {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.preset-btn {
+    flex: 1;
+    min-width: 150px;
+}
+
+.form-range {
+    width: 100%;
+    margin-top: 8px;
+}
+
+.estimate-panel {
+    display: flex;
+    gap: 24px;
+    padding: 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    margin-top: 16px;
+}
+
+.estimate-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.estimate-item .material-symbols-outlined {
+    color: var(--primary-color);
+}
+
+/* Lightbox */
+.lightbox {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.9);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.lightbox-content {
+    position: relative;
+    max-width: 90vw;
+    max-height: 90vh;
+}
+
+.lightbox-content img {
+    max-width: 100%;
+    max-height: 80vh;
+    border-radius: 8px;
+}
+
+.lightbox-close {
+    position: absolute;
+    top: -40px;
+    right: 0;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 32px;
+    cursor: pointer;
+}
+
+.lightbox-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 0;
+    color: white;
+}
+</style>
+{% endblock %}

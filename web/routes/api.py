@@ -4236,3 +4236,163 @@ def api_image_remove_background():
     except Exception as e:
         logger.error(f"Background removal error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============ Batch Image Generation Endpoints ============
+
+@api_bp.route('/image/batch', methods=['POST'])
+@rate_limit
+def api_batch_generate():
+    """
+    Start a batch image generation job.
+
+    Request body:
+    {
+        "prompt": "A beautiful sunset over mountains",
+        "count": 20,
+        "variation_strength": 0.3,  // 0.0-1.0: 0=same, 0.3=slight, 0.7=heavy
+        "negative_prompt": "blurry",  // optional
+        "model": "sd-xl-turbo",  // optional
+        "width": 1024,  // optional
+        "height": 1024,  // optional
+        "steps": 4,  // optional
+        "guidance_scale": 7.5,  // optional
+        "base_seed": 12345  // optional
+    }
+
+    Returns:
+    {
+        "success": true,
+        "job": { ... job info ... },
+        "estimated_time_seconds": 70.5
+    }
+    """
+    try:
+        from ..services.image_service import start_batch_generation
+
+        data = request.get_json()
+        if not data or 'prompt' not in data:
+            return jsonify({"success": False, "error": "prompt is required"}), 400
+
+        result = start_batch_generation(
+            prompt=data['prompt'],
+            count=data.get('count', 1),
+            variation_strength=data.get('variation_strength', 0.3),
+            negative_prompt=data.get('negative_prompt'),
+            model=data.get('model', 'sd-xl-turbo'),
+            width=data.get('width', 1024),
+            height=data.get('height', 1024),
+            steps=data.get('steps'),
+            guidance_scale=data.get('guidance_scale', 7.5),
+            base_seed=data.get('base_seed'),
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Batch generation error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/batch/<job_id>')
+def api_batch_status(job_id):
+    """Get status of a batch job."""
+    try:
+        from ..services.image_service import get_batch_status
+
+        status = get_batch_status(job_id)
+        if status is None:
+            return jsonify({"success": False, "error": "Job not found"}), 404
+
+        return jsonify({"success": True, "job": status})
+
+    except Exception as e:
+        logger.error(f"Batch status error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/batch/<job_id>/results')
+def api_batch_results(job_id):
+    """
+    Get results of a batch job.
+
+    Query params:
+        include_images: true/false (default true) - include base64 image data
+    """
+    try:
+        from ..services.image_service import get_batch_results
+
+        include_images = request.args.get('include_images', 'true').lower() == 'true'
+        results = get_batch_results(job_id, include_images=include_images)
+
+        if results is None:
+            return jsonify({"success": False, "error": "Job not found"}), 404
+
+        return jsonify({"success": True, **results})
+
+    except Exception as e:
+        logger.error(f"Batch results error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/batch/<job_id>', methods=['DELETE'])
+def api_batch_cancel(job_id):
+    """Cancel a running batch job."""
+    try:
+        from ..services.image_service import cancel_batch
+
+        result = cancel_batch(job_id)
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+
+    except Exception as e:
+        logger.error(f"Batch cancel error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/batch/list')
+def api_batch_list():
+    """List recent batch jobs."""
+    try:
+        from ..services.image_service import list_batch_jobs
+
+        limit = request.args.get('limit', 20, type=int)
+        jobs = list_batch_jobs(limit=limit)
+
+        return jsonify({"success": True, "jobs": jobs})
+
+    except Exception as e:
+        logger.error(f"Batch list error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/estimate')
+def api_image_estimate():
+    """
+    Get time estimate for batch generation.
+
+    Query params:
+        count: Number of images (default 1)
+        model: Model ID (default sd-xl-turbo)
+        steps: Inference steps (optional)
+    """
+    try:
+        from ..services.image_service import estimate_batch_time
+
+        count = request.args.get('count', 1, type=int)
+        model = request.args.get('model', 'sd-xl-turbo')
+        steps = request.args.get('steps', type=int)
+
+        estimated_seconds = estimate_batch_time(count, model, steps)
+
+        return jsonify({
+            "success": True,
+            "count": count,
+            "model": model,
+            "estimated_seconds": round(estimated_seconds, 1),
+            "estimated_minutes": round(estimated_seconds / 60, 2),
+        })
+
+    except Exception as e:
+        logger.error(f"Estimate error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
