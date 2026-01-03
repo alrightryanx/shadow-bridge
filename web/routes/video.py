@@ -450,7 +450,7 @@ def api_get_result(generation_id):
                     'video_url': gen.get('video_url'),
                     'duration_seconds': gen.get('duration'),
                     'cost': gen.get('cost', 0),
-                    'created_at': gen['created_at'),
+                    'created_at': gen['created_at'],
                     'completed_at': gen.get('completed_at'),
                     'time_ago': get_time_ago(gen.get('completed_at'))
                 })

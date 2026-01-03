@@ -48,7 +48,219 @@ try:
 except ImportError:
     SYNC_SERVICE_AVAILABLE = False
 
+# Check for image command mode (ShadowBridge.exe image generate "prompt")
+IMAGE_MODE = len(sys.argv) > 1 and sys.argv[1] == "image"
 WEB_SERVER_MODE = "--web-server" in sys.argv
+
+
+def run_image_command():
+    """Handle image generation commands via CLI.
+
+    Usage:
+        ShadowBridge.exe image generate "A sunset over mountains"
+        ShadowBridge.exe image generate --prompt_b64 <base64>
+        ShadowBridge.exe image status
+        ShadowBridge.exe image inpaint --stdin
+        ShadowBridge.exe image remove-background --stdin
+    """
+    import argparse
+
+    def print_json(data):
+        """Print JSON with strict markers to avoid parsing issues."""
+        print("<<<JSON_START>>>")
+        print(json.dumps(data))
+        print("<<<JSON_END>>>")
+
+    # Remove "image" from argv for argparse
+    argv = sys.argv[2:]  # Skip program name and "image"
+
+    parser = argparse.ArgumentParser(
+        description="Generate images using local Stable Diffusion"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Generate command
+    gen_parser = subparsers.add_parser("generate", help="Generate an image")
+    gen_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Text prompt for image generation",
+    )
+    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
+    gen_parser.add_argument(
+        "--model",
+        default="sd-xl-turbo",
+        choices=["sd-1.5", "sd-xl", "sd-xl-turbo"],
+        help="Model to use (default: sd-xl-turbo)",
+    )
+    gen_parser.add_argument(
+        "--steps",
+        type=int,
+        default=4,
+        help="Number of inference steps",
+    )
+    gen_parser.add_argument(
+        "--width", type=int, default=1024, help="Image width"
+    )
+    gen_parser.add_argument(
+        "--height", type=int, default=1024, help="Image height"
+    )
+    gen_parser.add_argument(
+        "--seed", type=int, default=None, help="Seed for reproducibility"
+    )
+    gen_parser.add_argument(
+        "--guidance",
+        type=float,
+        default=0.0,
+        help="Guidance scale",
+    )
+    gen_parser.add_argument(
+        "--negative", type=str, default=None, help="Negative prompt"
+    )
+
+    # Inpaint command
+    inpaint_parser = subparsers.add_parser("inpaint", help="Inpaint an image")
+    inpaint_parser.add_argument("--image_b64", help="Base64 encoded source image")
+    inpaint_parser.add_argument("--mask_b64", help="Base64 encoded mask image")
+    inpaint_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
+    inpaint_parser.add_argument("--negative_b64", help="Base64 encoded negative prompt")
+    inpaint_parser.add_argument("--stdin", action="store_true", help="Read JSON from stdin")
+
+    # Remove Background command
+    rembg_parser = subparsers.add_parser("remove-background", help="Remove background")
+    rembg_parser.add_argument("--image_b64", help="Base64 encoded source image")
+    rembg_parser.add_argument("--stdin", action="store_true", help="Read JSON from stdin")
+
+    # Status command
+    subparsers.add_parser("status", help="Check image service status")
+
+    # Setup command
+    setup_parser = subparsers.add_parser("setup", help="Ensure model is ready")
+    setup_parser.add_argument("--model", default="sd-xl-turbo", help="Model to prepare")
+
+    args = parser.parse_args(argv)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        if args.command == "generate":
+            # Handle prompt input
+            prompt = args.prompt
+            if args.prompt_b64:
+                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
+
+            if not prompt:
+                print_json({"success": False, "error": "No prompt provided"})
+                sys.exit(1)
+
+            # Adjust defaults based on model
+            steps = args.steps
+            guidance = args.guidance
+
+            if args.model == "sd-xl-turbo":
+                if steps == 4:
+                    steps = 4
+                if guidance == 0.0:
+                    guidance = 0.0
+            else:
+                if steps == 4:
+                    steps = 20
+                if guidance == 0.0:
+                    guidance = 7.5
+
+            from web.services.image_service import get_image_generation_service
+            service = get_image_generation_service()
+            result = service.generate_image(
+                prompt=prompt,
+                negative_prompt=args.negative,
+                model=args.model,
+                width=args.width,
+                height=args.height,
+                steps=steps,
+                guidance_scale=guidance,
+                seed=args.seed,
+            )
+            print_json(result)
+
+        elif args.command == "inpaint":
+            from web.services.image_service import get_image_generation_service
+            service = get_image_generation_service()
+
+            if args.stdin:
+                input_data = json.load(sys.stdin)
+                image_b64 = input_data.get("image_b64")
+                mask_b64 = input_data.get("mask_b64")
+                prompt_b64 = input_data.get("prompt_b64")
+                negative_b64 = input_data.get("negative_b64")
+
+                if not all([image_b64, mask_b64, prompt_b64]):
+                    raise ValueError("Missing required fields in stdin JSON")
+
+                prompt = base64.b64decode(prompt_b64).decode("utf-8")
+                negative = base64.b64decode(negative_b64).decode("utf-8") if negative_b64 else None
+            else:
+                if not all([args.image_b64, args.mask_b64, args.prompt_b64]):
+                    print_json({"success": False, "error": "Missing required arguments"})
+                    sys.exit(1)
+
+                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
+                negative = base64.b64decode(args.negative_b64).decode("utf-8") if args.negative_b64 else None
+                image_b64 = args.image_b64
+                mask_b64 = args.mask_b64
+
+            result = service.inpaint_image(
+                image_base64=image_b64,
+                mask_base64=mask_b64,
+                prompt=prompt,
+                negative_prompt=negative or "",
+            )
+            print_json(result)
+
+        elif args.command == "remove-background":
+            from web.services.image_service import get_bg_removal_service
+            service = get_bg_removal_service()
+
+            if args.stdin:
+                input_data = json.load(sys.stdin)
+                image_b64 = input_data.get("image_b64")
+                if not image_b64:
+                    raise ValueError("Missing 'image_b64' in stdin JSON")
+            else:
+                if not args.image_b64:
+                    print_json({"success": False, "error": "Missing --image_b64"})
+                    sys.exit(1)
+                image_b64 = args.image_b64
+
+            result = service.remove_background(image_base64=image_b64)
+            print_json(result)
+
+        elif args.command == "status":
+            from web.services.image_service import (
+                get_image_service_status,
+                get_image_setup_status,
+            )
+            status = get_image_service_status()
+            setup = get_image_setup_status()
+            print_json({"service": status, "setup": setup})
+
+        elif args.command == "setup":
+            from web.services.image_service import get_image_generation_service
+            service = get_image_generation_service()
+            try:
+                model = service.warmup_model(args.model)
+                print_json({
+                    "success": True,
+                    "model": model,
+                    "message": f"Model {model} is ready",
+                })
+            except Exception as e:
+                print_json({"success": False, "error": str(e)})
+
+    except Exception as e:
+        print_json({"success": False, "error": str(e)})
+        sys.exit(1)
 
 
 def is_admin():
@@ -141,7 +353,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.025"
+APP_VERSION = "1.026"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -5384,6 +5596,11 @@ def run_web_dashboard_server(open_browser: bool):
 
 def main():
     """Main entry point."""
+    # Handle image command mode (no GUI, just CLI)
+    if IMAGE_MODE:
+        run_image_command()
+        return
+
     if WEB_SERVER_MODE:
         open_browser = "--no-browser" not in sys.argv
         run_web_dashboard_server(open_browser=open_browser)

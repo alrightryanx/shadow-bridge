@@ -604,5 +604,34 @@ const api = {
         return this.fetch(`/projects/${projectId}/launch-cli`, {
             method: 'POST'
         });
+    },
+
+    // ============ Video Generation ============
+    async generateVideo(data) {
+        return this.fetch('/v1/video/generate', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    async getVideoModels() {
+        return this.fetch('/v1/video/models');
+    },
+
+    async getGenerationStatus(generationId) {
+        return this.fetch(`/v1/video/status/${generationId}`);
+    },
+
+    async getGenerationResult(generationId) {
+        return this.fetch(`/v1/video/result/${generationId}`);
+    },
+
+    async cancelGeneration(generationId) {
+        return this.fetch(`/v1/video/cancel/${generationId}`, { method: 'DELETE' });
+    },
+
+    async getVideoHistory(deviceId) {
+        const params = deviceId ? `?device_id=${deviceId}` : '';
+        return this.fetch(`/v1/video/history${params}`);
     }
 };
