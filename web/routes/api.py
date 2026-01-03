@@ -20,6 +20,7 @@ from ..services.data_service import (
     get_devices, get_device,
     get_projects, get_project, update_project,
     get_notes, get_note,
+    get_sessions, get_session, upsert_session, append_session_message,
     get_automations, get_automation, get_automation_logs,
     get_agents, get_agent, get_agent_metrics, add_agent, update_agent, delete_agent,
     get_teams, get_team, create_team, update_team, delete_team, get_team_metrics,
@@ -783,6 +784,103 @@ def api_notes_sync():
         broadcast_notes_updated(device_id)
 
         return jsonify({"success": True, "message": "Notes sync broadcasted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============ Sessions ============
+
+@api_bp.route('/sessions')
+def api_sessions():
+    """List sessions with metadata."""
+    device_id = request.args.get('device_id')
+    project_id = request.args.get('project_id')
+    limit_raw = request.args.get('limit')
+    limit = None
+    if limit_raw:
+        try:
+            limit = int(limit_raw)
+        except ValueError:
+            limit = None
+    return jsonify(get_sessions(device_id=device_id, project_id=project_id, limit=limit))
+
+
+@api_bp.route('/sessions', methods=['POST'])
+def api_upsert_session():
+    """Create or update a session."""
+    data = request.get_json() or {}
+    session = upsert_session(data)
+    try:
+        from .websocket import broadcast_sessions_updated
+        broadcast_sessions_updated(session.get("device_id") or "web")
+    except Exception:
+        pass
+    return jsonify(session)
+
+
+@api_bp.route('/sessions/<session_id>')
+def api_session(session_id):
+    """Get full session with messages."""
+    session = get_session(session_id)
+    if session:
+        return jsonify(session)
+    return jsonify({"error": "Session not found"}), 404
+
+
+@api_bp.route('/sessions/<session_id>/messages', methods=['POST'])
+def api_session_message(session_id):
+    """Append or update a session message (supports streaming)."""
+    data = request.get_json() or {}
+    message = data.get("message") or data.get("payload") or data
+    delta = data.get("delta")
+    is_final = bool(data.get("is_final", False))
+    session_meta = data.get("session_meta")
+
+    result = append_session_message(
+        session_id=session_id,
+        message=message if isinstance(message, dict) else {},
+        delta=delta if isinstance(delta, str) else None,
+        is_final=is_final,
+        session_meta=session_meta if isinstance(session_meta, dict) else None
+    )
+
+    try:
+        from .websocket import broadcast_session_message, broadcast_sessions_updated
+        is_update = bool(data.get("is_update")) or bool(delta)
+        broadcast_session_message(session_id, result.get("message"), is_update=is_update)
+        device_id = result.get("session", {}).get("device_id") or "web"
+        broadcast_sessions_updated(device_id)
+    except Exception:
+        pass
+
+    return jsonify({"success": True, "session": result.get("session"), "message": result.get("message")})
+
+
+@api_bp.route('/sessions/message', methods=['POST'])
+def api_session_message_shortcut():
+    """Append a session message with session_id in payload."""
+    data = request.get_json() or {}
+    session_id = data.get("session_id") or data.get("sessionId")
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+    return api_session_message(session_id)
+
+
+@api_bp.route('/sessions/sync', methods=['POST'])
+def api_sessions_sync():
+    """
+    Receive sessions sync notification and broadcast to WebSocket clients.
+    Called by ShadowBridge after syncing sessions from Android app.
+    """
+    try:
+        from .websocket import broadcast_sessions_updated
+
+        data = request.get_json() or {}
+        device_id = data.get('device_id', 'unknown')
+
+        broadcast_sessions_updated(device_id)
+
+        return jsonify({"success": True, "message": "Sessions sync broadcasted"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -44,7 +44,7 @@
             <h2><span class="material-symbols-outlined">folder</span> Recent Projects</h2>
             <a href="/projects" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
         </div>
-        <div class="projects-list" id="recent-projects">
+        <div class="mini-grid" id="recent-projects">
             <div class="loading">Loading projects...</div>
         </div>
     </section>
@@ -55,11 +55,45 @@
             <h2><span class="material-symbols-outlined">description</span> Recent Notes</h2>
             <a href="/notes" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
         </div>
-        <div class="notes-list" id="recent-notes">
+        <div class="mini-grid" id="recent-notes">
             <div class="loading">Loading notes...</div>
         </div>
     </section>
 </div>
+
+<!-- Last Sessions -->
+<section class="section dashboard-card">
+    <div class="section-header">
+        <h2><span class="material-symbols-outlined">timer</span> Last Sessions</h2>
+    </div>
+    <div class="sessions-grid" id="recent-sessions">
+        <div class="loading">Loading sessions...</div>
+    </div>
+</section>
+
+<!-- Session Console -->
+<section class="section dashboard-card session-console">
+    <div class="section-header">
+        <h2><span class="material-symbols-outlined">forum</span> Session Chats</h2>
+        <div class="session-title-editor">
+            <input type="text" id="session-title-input" placeholder="Select a session to rename" />
+            <button class="btn btn-small btn-primary" type="button" onclick="saveSessionTitle()">Save</button>
+        </div>
+    </div>
+    <div class="session-console-grid">
+        <div class="session-list" id="session-list">
+            <div class="loading">Loading sessions...</div>
+        </div>
+        <div class="session-chat">
+            <div class="session-meta" id="session-meta">Select a session to view messages.</div>
+            <div class="session-messages" id="session-messages"></div>
+            <form class="session-compose" id="session-compose">
+                <textarea id="session-input" rows="2" placeholder="Send a message to this session..."></textarea>
+                <button class="btn btn-primary" type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+</section>
 
 <!-- Activity Feed -->
 <section class="section dashboard-card">
@@ -76,7 +110,17 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     loadDashboard();
+    const composeForm = document.getElementById('session-compose');
+    if (composeForm) {
+        composeForm.addEventListener('submit', onSessionComposeSubmit);
+    }
 });
+
+let dashboardSessions = [];
+let selectedSessionId = null;
+let currentSessionDetail = null;
+let sessionMessageMap = new Map();
+let sessionsRefreshTimer = null;
 
 async function loadDashboard() {
     const deviceId = getDeviceIdParam();
@@ -89,6 +133,12 @@ async function loadDashboard() {
 
     // Load recent notes
     loadRecentNotes(deviceId);
+
+    // Load recent sessions
+    loadRecentSessions(deviceId);
+
+    // Load session console
+    loadSessionsPanel(deviceId);
 
     // Load activity feed
     loadActivityFeed(deviceId);
@@ -131,18 +181,17 @@ async function loadRecentProjects(deviceId) {
         return;
     }
 
-    container.innerHTML = projects.slice(0, 5).map(p => `
-        <div class="project-item" onclick="openProject('${p.id}')">
-            <div class="project-icon"><span class="material-symbols-outlined">folder</span></div>
-            <div class="project-details">
-                <div class="project-name">${escapeHtml(p.name)}</div>
-                <div class="project-meta">
-                    <span class="material-symbols-outlined">smartphone</span> ${escapeHtml(p.device_name)}
-                    <span class="meta-separator">|</span>
-                    <span class="material-symbols-outlined">schedule</span> ${p.time_ago}
-                </div>
+    container.innerHTML = projects.slice(0, 4).map(p => `
+        <div class="mini-card project-mini" onclick="openProject('${p.id}')">
+            <div class="mini-header">
+                <span class="material-symbols-outlined">folder</span>
+                <span>${escapeHtml(p.device_name)}</span>
             </div>
-            <span class="material-symbols-outlined project-arrow">chevron_right</span>
+            <div class="mini-title">${escapeHtml(p.name)}</div>
+            <div class="mini-meta">
+                <span class="material-symbols-outlined">schedule</span>
+                <span>${p.time_ago}</span>
+            </div>
         </div>
     `).join('');
 }
@@ -161,20 +210,372 @@ async function loadRecentNotes(deviceId) {
         return;
     }
 
-    container.innerHTML = notes.slice(0, 5).map(n => `
-        <div class="note-item" onclick="openNoteModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}')">
-            <div class="note-icon"><span class="material-symbols-outlined">description</span></div>
-            <div class="note-details">
-                <div class="note-title">${escapeHtml(n.title)}</div>
-                <div class="note-meta">
-                    <span class="material-symbols-outlined">smartphone</span> ${escapeHtml(n.device_name)}
-                    <span class="meta-separator">|</span>
-                    <span class="material-symbols-outlined">schedule</span> ${n.time_ago}
-                </div>
+    container.innerHTML = notes.slice(0, 4).map(n => `
+        <div class="mini-card note-mini" onclick="openNoteModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}')">
+            <div class="mini-header">
+                <span class="material-symbols-outlined">description</span>
+                <span>${escapeHtml(n.device_name)}</span>
             </div>
-            <span class="material-symbols-outlined note-arrow">chevron_right</span>
+            <div class="mini-title">${escapeHtml(n.title)}</div>
+            <div class="mini-meta">
+                <span class="material-symbols-outlined">schedule</span>
+                <span>${n.time_ago}</span>
+            </div>
         </div>
     `).join('');
+}
+
+async function loadRecentSessions(deviceId) {
+    const sessions = await api.getSessions(deviceId, null, 4);
+    const container = document.getElementById('recent-sessions');
+    if (!container) return;
+
+    if (!sessions || sessions.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">forum</span>
+                <p>No recent sessions</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = sessions.map(s => {
+        const status = s.is_running ? 'Running' : 'Idle';
+        const backend = formatBackendLabel(s);
+        const model = formatModelLabel(s);
+        const subtitle = [backend, model].filter(Boolean).join(' / ');
+        return `
+            <div class="mini-card session-mini ${s.is_running ? 'running' : ''}" onclick="selectSessionFromCard('${s.id}')">
+                <div class="mini-header">
+                    <span class="material-symbols-outlined">chat</span>
+                    <span>${escapeHtml(s.device_name || s.device_id || 'Unknown device')}</span>
+                </div>
+                <div class="mini-title">${escapeHtml(s.title || 'New Session')}</div>
+                <div class="mini-meta">
+                    <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
+                    <span>${escapeHtml(subtitle || 'Unknown backend')}</span>
+                </div>
+                <div class="mini-foot">${escapeHtml(s.time_ago || '')}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function loadSessionsPanel(deviceId, preserveSelection = false) {
+    const sessions = await api.getSessions(deviceId, null, 50);
+    dashboardSessions = Array.isArray(sessions) ? sessions : [];
+    renderSessionList(dashboardSessions, preserveSelection);
+}
+
+function renderSessionList(sessions, preserveSelection) {
+    const container = document.getElementById('session-list');
+    if (!container) return;
+
+    if (!sessions || sessions.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">forum</span>
+                <p>No sessions synced yet</p>
+            </div>
+        `;
+        selectedSessionId = null;
+        currentSessionDetail = null;
+        renderSessionMessages([]);
+        updateSessionMeta(null);
+        return;
+    }
+
+    let nextSessionId = selectedSessionId;
+    if (!preserveSelection || !sessions.some(s => s.id === selectedSessionId)) {
+        nextSessionId = sessions[0].id;
+    }
+
+    container.innerHTML = sessions.map(s => {
+        const backend = formatBackendLabel(s);
+        const model = formatModelLabel(s);
+        const status = s.is_running ? 'Running' : 'Idle';
+        return `
+            <div class="session-list-item ${s.id === selectedSessionId ? 'active' : ''}" data-session-id="${s.id}" onclick="selectSession('${s.id}')">
+                <div class="session-list-title">${escapeHtml(s.title || 'New Session')}</div>
+                <div class="session-list-meta">
+                    <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
+                    <span>${escapeHtml(backend || 'Unknown')}</span>
+                    ${model ? `<span>${escapeHtml(model)}</span>` : ''}
+                </div>
+                <div class="session-list-sub">${escapeHtml(s.time_ago || '')} | ${s.message_count || 0} msgs</div>
+            </div>
+        `;
+    }).join('');
+
+    if (nextSessionId) {
+        selectedSessionId = nextSessionId;
+        if (!currentSessionDetail || currentSessionDetail.id !== nextSessionId || !preserveSelection) {
+            selectSession(nextSessionId);
+        } else {
+            const items = document.querySelectorAll('.session-list-item');
+            items.forEach(item => {
+                item.classList.toggle('active', item.getAttribute('data-session-id') === nextSessionId);
+            });
+        }
+    }
+}
+
+function selectSessionFromCard(sessionId) {
+    selectSession(sessionId);
+    const consoleEl = document.querySelector('.session-console');
+    if (consoleEl && typeof consoleEl.scrollIntoView === 'function') {
+        consoleEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+async function selectSession(sessionId) {
+    selectedSessionId = sessionId;
+    const items = document.querySelectorAll('.session-list-item');
+    items.forEach(item => {
+        item.classList.toggle('active', item.getAttribute('data-session-id') === sessionId);
+    });
+    await loadSessionDetails(sessionId);
+}
+
+async function loadSessionDetails(sessionId) {
+    if (!sessionId) return;
+    const session = await api.getSession(sessionId);
+    if (!session || session.error) {
+        showToast('Failed to load session', 'error');
+        return;
+    }
+    currentSessionDetail = session;
+    const titleInput = document.getElementById('session-title-input');
+    if (titleInput) {
+        titleInput.value = session.title || '';
+    }
+    updateSessionMeta(session);
+    renderSessionMessages(session.messages || []);
+}
+
+function renderSessionMessages(messages) {
+    const container = document.getElementById('session-messages');
+    if (!container) return;
+    sessionMessageMap = new Map();
+
+    if (!messages || messages.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state compact">
+                <p>No messages yet</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = messages.map(msg => {
+        const id = msg.id || msg.messageId || `msg_${msg.timestamp || Date.now()}`;
+        sessionMessageMap.set(id, true);
+        return renderSessionMessage(msg);
+    }).join('');
+
+    scrollSessionMessages();
+}
+
+function renderSessionMessage(message) {
+    const role = String(message.role || 'assistant').toLowerCase();
+    const id = message.id || message.messageId || `msg_${message.timestamp || Date.now()}`;
+    const content = message.content || '';
+    const timeLabel = formatTimeShort(message.timestamp);
+    const safeContent = escapeHtml(content).replace(/\n/g, '<br>');
+    return `
+        <div class="session-msg ${role}" data-message-id="${id}">
+            <div class="session-msg-role">${escapeHtml(role)}</div>
+            <div class="session-msg-content">${safeContent}</div>
+            <div class="session-msg-meta">${timeLabel}</div>
+        </div>
+    `;
+}
+
+function updateSessionMeta(session) {
+    const meta = document.getElementById('session-meta');
+    if (!meta) return;
+    if (!session) {
+        meta.textContent = 'Select a session to view messages.';
+        return;
+    }
+    const backend = formatBackendLabel(session) || 'Unknown backend';
+    const model = formatModelLabel(session);
+    const device = session.device_name || session.device_id || 'Unknown device';
+    const status = session.is_running ? 'Running' : 'Idle';
+    const timeAgo = session.time_ago || '';
+
+    meta.innerHTML = `
+        <span class="meta-pill">${escapeHtml(device)}</span>
+        <span class="meta-pill">${escapeHtml(backend)}</span>
+        ${model ? `<span class="meta-pill">${escapeHtml(model)}</span>` : ''}
+        <span class="meta-pill ${session.is_running ? 'running' : 'idle'}">${status}</span>
+        ${timeAgo ? `<span class="meta-pill">${escapeHtml(timeAgo)}</span>` : ''}
+    `;
+}
+
+function formatBackendLabel(session) {
+    const rawType = String(session.backend_type || session.backendType || '').toLowerCase();
+    const provider = String(session.provider || '').trim();
+
+    if (rawType.includes('ssh')) return provider ? `SSH - ${provider}` : 'SSH';
+    if (rawType.includes('api')) return provider || 'API';
+    if (rawType.includes('local')) return 'On-phone LLM';
+    if (!rawType && provider) return provider;
+    if (rawType) return rawType.toUpperCase();
+    return '';
+}
+
+function formatModelLabel(session) {
+    const model = String(session.model || '').trim();
+    return model;
+}
+
+function formatTimeShort(timestamp) {
+    if (!timestamp) return '';
+    try {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+        return '';
+    }
+}
+
+function scrollSessionMessages() {
+    const container = document.getElementById('session-messages');
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+}
+
+function scheduleSessionsRefresh() {
+    if (sessionsRefreshTimer) {
+        clearTimeout(sessionsRefreshTimer);
+    }
+    sessionsRefreshTimer = setTimeout(() => {
+        const deviceId = getDeviceIdParam();
+        loadRecentSessions(deviceId);
+        loadSessionsPanel(deviceId, true);
+    }, 600);
+}
+
+function handleSessionMessage(data) {
+    const sessionId = data.session_id || data.sessionId;
+    const message = data.message || {};
+    if (!sessionId || !message) return;
+
+    if (selectedSessionId === sessionId) {
+        const container = document.getElementById('session-messages');
+        if (container) {
+            const messageId = message.id || message.messageId || `msg_${message.timestamp || Date.now()}`;
+            const existing = container.querySelector(`[data-message-id="${messageId}"]`);
+            if (existing) {
+                const contentEl = existing.querySelector('.session-msg-content');
+                if (contentEl) {
+                    const safeContent = escapeHtml(message.content || '').replace(/\n/g, '<br>');
+                    contentEl.innerHTML = safeContent;
+                }
+                const metaEl = existing.querySelector('.session-msg-meta');
+                if (metaEl) metaEl.textContent = formatTimeShort(message.timestamp);
+            } else {
+                container.insertAdjacentHTML('beforeend', renderSessionMessage(message));
+                sessionMessageMap.set(messageId, true);
+            }
+            scrollSessionMessages();
+        }
+    }
+
+    if (currentSessionDetail && currentSessionDetail.id === sessionId) {
+        if (!Array.isArray(currentSessionDetail.messages)) {
+            currentSessionDetail.messages = [];
+        }
+        const messageId = message.id || message.messageId;
+        const existingIndex = currentSessionDetail.messages.findIndex(m => (m.id || m.messageId) === messageId);
+        if (existingIndex >= 0) {
+            currentSessionDetail.messages[existingIndex] = message;
+        } else {
+            currentSessionDetail.messages.push(message);
+        }
+    }
+
+    scheduleSessionsRefresh();
+}
+
+async function saveSessionTitle() {
+    if (!selectedSessionId) {
+        showToast('Select a session first', 'warning');
+        return;
+    }
+    const input = document.getElementById('session-title-input');
+    const title = (input?.value || '').trim();
+    if (!title) {
+        showToast('Title cannot be empty', 'warning');
+        return;
+    }
+
+    const payload = {
+        id: selectedSessionId,
+        title: title,
+        pending_sync: true,
+        device_id: currentSessionDetail?.device_id,
+        device_name: currentSessionDetail?.device_name,
+        projectId: currentSessionDetail?.projectId
+    };
+
+    const result = await api.upsertSession(payload);
+    if (result.error) {
+        showToast('Failed to update title: ' + result.error, 'error');
+        return;
+    }
+    currentSessionDetail = result;
+    loadSessionsPanel(getDeviceIdParam(), true);
+    showToast('Session title updated', 'success');
+}
+
+async function onSessionComposeSubmit(event) {
+    event.preventDefault();
+    if (!selectedSessionId) {
+        showToast('Select a session first', 'warning');
+        return;
+    }
+
+    const input = document.getElementById('session-input');
+    const content = (input?.value || '').trim();
+    if (!content) return;
+
+    const message = {
+        id: generateMessageId(),
+        role: 'user',
+        content: content,
+        timestamp: Date.now(),
+        source: 'web'
+    };
+
+    const sessionMeta = {
+        pending_sync: true,
+        device_id: currentSessionDetail?.device_id,
+        device_name: currentSessionDetail?.device_name,
+        projectId: currentSessionDetail?.projectId,
+        backend_type: currentSessionDetail?.backend_type || currentSessionDetail?.backendType,
+        provider: currentSessionDetail?.provider,
+        model: currentSessionDetail?.model
+    };
+
+    const result = await api.appendSessionMessage(selectedSessionId, {
+        message: message,
+        session_meta: sessionMeta
+    });
+
+    if (result.error) {
+        showToast('Failed to send message: ' + result.error, 'error');
+        return;
+    }
+
+    handleSessionMessage({ session_id: selectedSessionId, message: result.message });
+    input.value = '';
+}
+
+function generateMessageId() {
+    return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function loadActivityFeed(deviceId) {
@@ -519,6 +920,302 @@ function getTimeAgo(date) {
 
 .empty-state p {
     margin-bottom: 16px;
+}
+
+.empty-state.compact {
+    padding: 16px;
+    font-size: 13px;
+}
+
+.mini-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.mini-card {
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 10px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    min-height: 82px;
+}
+
+.mini-card:hover {
+    background: var(--md-sys-color-surface-variant);
+    border-color: var(--md-sys-color-outline);
+}
+
+.mini-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.mini-header .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.mini-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mini-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.mini-meta .material-symbols-outlined {
+    font-size: 14px;
+}
+
+.mini-foot {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    opacity: 0.8;
+}
+
+.sessions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.session-status {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: var(--md-sys-color-surface-variant);
+    color: var(--md-sys-color-on-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.session-status.running {
+    background: rgba(var(--success-rgb), 0.18);
+    color: var(--success);
+    border-color: rgba(var(--success-rgb), 0.35);
+}
+
+.session-status.idle {
+    background: rgba(var(--warning-rgb), 0.15);
+    color: var(--warning);
+    border-color: rgba(var(--warning-rgb), 0.3);
+}
+
+.session-console {
+    margin-top: var(--spacing-lg);
+}
+
+.session-title-editor {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.session-title-editor input {
+    min-width: 220px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font-size: 13px;
+}
+
+.session-console-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 280px) 1fr;
+    gap: 16px;
+}
+
+.session-list {
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 10px;
+    padding: 8px;
+    max-height: 420px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.session-list-item {
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: var(--md-sys-color-surface);
+}
+
+.session-list-item:hover {
+    border-color: var(--md-sys-color-outline);
+    background: var(--md-sys-color-surface-variant);
+}
+
+.session-list-item.active {
+    border-color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.12);
+}
+
+.session-list-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-list-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: 4px;
+}
+
+.session-list-sub {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.session-chat {
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    min-height: 420px;
+}
+
+.session-meta {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.meta-pill {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--md-sys-color-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    font-size: 11px;
+}
+
+.meta-pill.running {
+    background: rgba(var(--success-rgb), 0.18);
+    color: var(--success);
+    border-color: rgba(var(--success-rgb), 0.35);
+}
+
+.meta-pill.idle {
+    background: rgba(var(--warning-rgb), 0.15);
+    color: var(--warning);
+    border-color: rgba(var(--warning-rgb), 0.3);
+}
+
+.session-messages {
+    flex: 1;
+    padding: 12px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.session-msg {
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-variant);
+    max-width: 92%;
+}
+
+.session-msg.user {
+    align-self: flex-end;
+    background: rgba(var(--accent-rgb), 0.15);
+    border-color: rgba(var(--accent-rgb), 0.35);
+}
+
+.session-msg.assistant {
+    align-self: flex-start;
+    background: var(--md-sys-color-surface);
+}
+
+.session-msg.system {
+    align-self: center;
+    background: var(--md-sys-color-surface-variant);
+    border-style: dashed;
+    font-size: 12px;
+}
+
+.session-msg-role {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.session-msg-content {
+    font-size: 13px;
+    color: var(--md-sys-color-on-surface);
+    margin-top: 4px;
+    white-space: pre-wrap;
+}
+
+.session-msg-meta {
+    font-size: 10px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-top: 4px;
+}
+
+.session-compose {
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    align-items: flex-end;
+}
+
+.session-compose textarea {
+    flex: 1;
+    resize: vertical;
+    border-radius: 8px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    padding: 8px;
+    font-size: 13px;
+}
+
+@media (max-width: 1000px) {
+    .session-console-grid {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 {% endblock %}

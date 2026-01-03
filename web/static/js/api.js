@@ -166,6 +166,34 @@ const api = {
         });
     },
 
+    // Sessions
+    async getSessions(deviceId = null, projectId = null, limit = null) {
+        const params = new URLSearchParams();
+        if (deviceId) params.append('device_id', deviceId);
+        if (projectId) params.append('project_id', projectId);
+        if (limit) params.append('limit', limit);
+        const query = params.toString();
+        return this.fetch(`/sessions${query ? '?' + query : ''}`);
+    },
+
+    async getSession(id) {
+        return this.fetch(`/sessions/${id}`);
+    },
+
+    async upsertSession(data) {
+        return this.fetch('/sessions', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    async appendSessionMessage(sessionId, payload) {
+        return this.fetch(`/sessions/${sessionId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+    },
+
     // Automations
     async getAutomations(deviceId = null) {
         const params = deviceId ? `?device_id=${deviceId}` : '';

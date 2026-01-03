@@ -16,6 +16,7 @@ import base64
 import io
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 _diffusers_available = False
 _rembg_available = False
 _torch_available = False
+_torch_has_cuda = False
 _pipeline = None
 _inpaint_pipeline = None
 _setup_thread = None
@@ -44,13 +46,16 @@ _setup_status = {
 
 def _check_dependencies():
     """Check which optional dependencies are available."""
-    global _diffusers_available, _rembg_available, _torch_available
+    global _diffusers_available, _rembg_available, _torch_available, _torch_has_cuda
 
     try:
         import torch
         _torch_available = True
-        logger.info(f"PyTorch available: {torch.__version__}, CUDA: {torch.cuda.is_available()}")
+        _torch_has_cuda = torch.cuda.is_available()
+        logger.info(f"PyTorch available: {torch.__version__}, CUDA: {_torch_has_cuda}")
     except ImportError:
+        _torch_available = False
+        _torch_has_cuda = False
         logger.warning("PyTorch not installed. Image generation will not be available.")
 
     try:
@@ -81,29 +86,167 @@ def _set_setup_status(state: str, stage: str, progress: int, message: str, error
             "updated_at": int(time.time() * 1000)
         })
 
+
+def _get_cuda_version() -> Optional[str]:
+    """Detect NVIDIA CUDA version from nvidia-smi."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and "CUDA Version:" in result.stdout:
+            match = re.search(r"CUDA Version:\s*(\d+\.\d+)", result.stdout)
+            if match:
+                return match.group(1)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _get_pytorch_cuda_index_url(cuda_version: Optional[str]) -> Optional[str]:
+    """Get the appropriate PyTorch wheel index URL for the CUDA version."""
+    if not cuda_version:
+        return None
+
+    cuda_float = float(cuda_version)
+    if cuda_float >= 12.4:
+        return "https://download.pytorch.org/whl/cu124"
+    elif cuda_float >= 12.1:
+        return "https://download.pytorch.org/whl/cu121"
+    elif cuda_float >= 11.8:
+        return "https://download.pytorch.org/whl/cu118"
+
+    return None
+
+
+def _check_torch_cuda_mismatch() -> bool:
+    """Check if PyTorch is installed but missing CUDA support when CUDA is available."""
+    cuda_version = _get_cuda_version()
+    if not cuda_version:
+        return False
+
+    if _torch_available and not _torch_has_cuda:
+        logger.warning(f"CUDA {cuda_version} detected but PyTorch has no CUDA support - will reinstall")
+        return True
+
+    return False
+
+
 def _install_python_packages(packages):
+    """Install Python packages, with special handling for PyTorch CUDA."""
     if not packages:
         return
 
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + packages
-    logger.info(f"Installing image dependencies: {' '.join(packages)}")
+    cuda_version = _get_cuda_version()
+    cuda_index_url = _get_pytorch_cuda_index_url(cuda_version)
+
+    # Separate torch packages from others
+    torch_packages = [p for p in packages if p in ("torch", "torchvision", "torchaudio")]
+    other_packages = [p for p in packages if p not in ("torch", "torchvision", "torchaudio")]
+
+    # Install torch with CUDA if available
+    if torch_packages:
+        if cuda_index_url:
+            logger.info(f"CUDA {cuda_version} detected, installing PyTorch with CUDA support")
+            _set_setup_status("running", "installing", 20, f"Installing PyTorch with CUDA {cuda_version}...")
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + torch_packages
+            cmd += ["--index-url", cuda_index_url]
+        else:
+            logger.warning("No CUDA detected, installing CPU-only PyTorch")
+            _set_setup_status("running", "installing", 20, "Installing PyTorch (CPU only)...")
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + torch_packages
+
+        logger.info(f"Running: {' '.join(cmd)}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except FileNotFoundError as e:
+            raise RuntimeError("pip not available") from e
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("PyTorch installation timed out after 10 minutes")
+
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "pip install failed").strip()
+            if "No matching distribution" in output:
+                raise RuntimeError("PyTorch wheels not available for this Python version. Try Python 3.10-3.12.")
+            raise RuntimeError(f"PyTorch install failed: {output[:500]}")
+
+    # Install other packages normally
+    if other_packages:
+        _set_setup_status("running", "installing", 30, f"Installing {', '.join(other_packages)}...")
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + other_packages
+        logger.info(f"Installing: {' '.join(other_packages)}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except FileNotFoundError as e:
+            raise RuntimeError("pip not available") from e
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Package installation timed out")
+
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "pip install failed").strip()
+            raise RuntimeError(output[:500])
+
+
+def _reinstall_torch_with_cuda():
+    """Reinstall PyTorch with CUDA support if currently CPU-only."""
+    cuda_version = _get_cuda_version()
+    cuda_index_url = _get_pytorch_cuda_index_url(cuda_version)
+
+    if not cuda_index_url:
+        logger.warning("Cannot reinstall PyTorch with CUDA - no compatible CUDA version")
+        return False
+
+    logger.info(f"Reinstalling PyTorch with CUDA {cuda_version} support...")
+    _set_setup_status("running", "installing", 15, f"Reinstalling PyTorch with CUDA {cuda_version}...")
+
+    # Uninstall existing CPU-only torch
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-    except FileNotFoundError as e:
-        raise RuntimeError("pip not available. Install Python and run: pip install torch diffusers transformers accelerate") from e
+        uninstall_cmd = [sys.executable, "-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"]
+        subprocess.run(uninstall_cmd, capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        logger.warning(f"Failed to uninstall existing PyTorch: {e}")
+
+    # Install with CUDA
+    install_cmd = [
+        sys.executable, "-m", "pip", "install",
+        "torch", "torchvision",
+        "--index-url", cuda_index_url
+    ]
+    logger.info(f"Running: {' '.join(install_cmd)}")
+
+    try:
+        result = subprocess.run(install_cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("PyTorch CUDA installation timed out after 10 minutes")
 
     if result.returncode != 0:
-        output = (result.stderr or result.stdout or "pip install failed").strip()
-        raise RuntimeError(output)
+        output = (result.stderr or result.stdout or "")[:500]
+        raise RuntimeError(f"PyTorch CUDA install failed: {output}")
+
+    # Verify installation
+    _check_dependencies()
+    if _torch_has_cuda:
+        logger.info("PyTorch with CUDA successfully installed!")
+        return True
+    else:
+        logger.error("PyTorch still missing CUDA after reinstall")
+        return False
 
 def _run_image_setup(model_id: Optional[str] = None):
     try:
-        _set_setup_status("running", "checking", 5, "Checking image dependencies")
+        _set_setup_status("running", "checking", 5, "Checking image dependencies...")
         _check_dependencies()
+
+        # Check for CUDA mismatch (PyTorch installed but no CUDA support)
+        if _check_torch_cuda_mismatch():
+            _set_setup_status("running", "installing", 10, "Detected CPU-only PyTorch, reinstalling with CUDA...")
+            _reinstall_torch_with_cuda()
+            _check_dependencies()
 
         missing = []
         if not _torch_available:
             missing.append("torch")
+            missing.append("torchvision")
         if not _diffusers_available:
             missing.extend(["diffusers", "transformers", "accelerate"])
 
@@ -473,10 +616,13 @@ def get_bg_removal_service() -> BackgroundRemovalService:
 
 def get_image_service_status() -> Dict[str, Any]:
     """Get status of image services."""
+    cuda_version = _get_cuda_version()
     status = {
         "diffusers_available": _diffusers_available,
         "rembg_available": _rembg_available,
         "torch_available": _torch_available,
+        "torch_has_cuda": _torch_has_cuda,
+        "system_cuda_version": cuda_version,
         "gpu_available": False,
         "gpu_name": None,
         "gpu_memory_gb": None
@@ -485,6 +631,7 @@ def get_image_service_status() -> Dict[str, Any]:
     if _torch_available:
         try:
             import torch
+            status["torch_version"] = torch.__version__
             status["gpu_available"] = torch.cuda.is_available()
             if torch.cuda.is_available():
                 status["gpu_name"] = torch.cuda.get_device_name(0)

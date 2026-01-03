@@ -37,7 +37,13 @@ from io import BytesIO
 
 # Import data service for bi-directional sync (web -> Android)
 try:
-    from web.services.data_service import get_pending_sync_items, mark_items_synced
+    from web.services.data_service import (
+        get_pending_sync_items,
+        mark_items_synced,
+        save_sessions_from_device,
+        append_session_message,
+        upsert_session
+    )
     SYNC_SERVICE_AVAILABLE = True
 except ImportError:
     SYNC_SERVICE_AVAILABLE = False
@@ -135,7 +141,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.021"
+APP_VERSION = "1.022"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -949,11 +955,12 @@ class DataReceiver(threading.Thread):
     # SECURITY: Limit concurrent connections to prevent resource exhaustion
     MAX_WORKERS = 10
 
-    def __init__(self, on_data_received, on_device_connected, on_notes_received=None, on_key_approval_needed=None):
+    def __init__(self, on_data_received, on_device_connected, on_notes_received=None, on_sessions_received=None, on_key_approval_needed=None):
         super().__init__(daemon=True)
         self.on_data_received = on_data_received
         self.on_device_connected = on_device_connected
         self.on_notes_received = on_notes_received
+        self.on_sessions_received = on_sessions_received
         self.on_key_approval_needed = on_key_approval_needed  # Callback for key approval UI
         self.running = True
         self.sock = None
@@ -1240,7 +1247,7 @@ class DataReceiver(threading.Thread):
             log.debug(f"Received length bytes: {len(length_bytes)}, value: {int.from_bytes(length_bytes, 'big')}")
 
             msg_length = int.from_bytes(length_bytes, 'big')
-            if msg_length > 1024 * 1024:  # 1MB limit
+            if msg_length > 10 * 1024 * 1024:  # 10MB limit for sessions payloads
                 log.error(f"Message too large: {msg_length}")
                 return
 
@@ -1354,12 +1361,27 @@ class DataReceiver(threading.Thread):
                                 response['sync_to_device'] = {'notes': pending['notes']}
                                 log.info(f"Including {len(pending['notes'])} pending notes for sync to device")
                         self._send_response(conn, response)
+                    elif action == 'sync_sessions' or 'sessions' in payload:
+                        sessions_payload = payload.get('sessions', [])
+                        if SYNC_SERVICE_AVAILABLE and isinstance(sessions_payload, list):
+                            save_sessions_from_device(device_id, device_name, sessions_payload)
+                        if self.on_sessions_received:
+                            self.on_sessions_received(device_id, sessions_payload)
+
+                        response = {'success': True, 'message': 'Sessions synced'}
+                        if SYNC_SERVICE_AVAILABLE:
+                            pending = get_pending_sync_items(device_id)
+                            if pending.get('sessions'):
+                                response['sync_to_device'] = {'sessions': pending['sessions']}
+                                log.info(f"Including {len(pending['sessions'])} pending sessions for sync to device")
+                        self._send_response(conn, response)
                     elif action == 'sync_confirm':
                         # Android confirming it received and saved web-created items
                         if SYNC_SERVICE_AVAILABLE:
                             synced_projects = payload.get('synced_projects', [])
                             synced_notes = payload.get('synced_notes', [])
                             synced_automations = payload.get('synced_automations', [])
+                            synced_sessions = payload.get('synced_sessions', [])
                             if synced_projects:
                                 mark_items_synced(device_id, 'projects', synced_projects)
                                 log.info(f"Marked {len(synced_projects)} projects as synced")
@@ -1369,6 +1391,9 @@ class DataReceiver(threading.Thread):
                             if synced_automations:
                                 mark_items_synced(device_id, 'automations', synced_automations)
                                 log.info(f"Marked {len(synced_automations)} automations as synced")
+                            if synced_sessions:
+                                mark_items_synced(device_id, 'sessions', synced_sessions)
+                                log.info(f"Marked {len(synced_sessions)} sessions as synced")
                         self._send_response(conn, {'success': True, 'message': 'Sync confirmed'})
                     else:
                         self._send_response(conn, {'success': True, 'message': 'OK'})
@@ -1908,6 +1933,12 @@ class CompanionRelayServer(threading.Thread):
         self._pc_session_lock = threading.Lock()
         self._session_history = []  # Recent interactions for context (max 20)
 
+        # Transcript watcher for PC session streaming
+        self._transcript_watcher_thread = None
+        self._transcript_path = None
+        self._transcript_last_pos = 0
+        self._transcript_stop_event = threading.Event()
+
         # SECURITY: Use thread pool instead of unbounded daemon threads
         self._executor = ThreadPoolExecutor(max_workers=self.MAX_WORKERS, thread_name_prefix="CompanionRelay")
 
@@ -2158,6 +2189,165 @@ class CompanionRelayServer(threading.Thread):
         data = json.dumps(message).encode('utf-8')
         conn.send(len(data).to_bytes(4, 'big'))
         conn.send(data)
+
+    def _notify_web_dashboard_sessions_updated(self, device_id):
+        """Notify web dashboard that sessions have been updated."""
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+                data = json_module.dumps({'device_id': device_id}).encode('utf-8')
+                req = urllib.request.Request(
+                    'http://127.0.0.1:6767/api/sessions/sync',
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                urllib.request.urlopen(req, timeout=2)
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def _notify_web_dashboard_session_message(self, session_id, message, is_update=False):
+        """Send a session message update to the web dashboard."""
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+                payload = json_module.dumps({
+                    'session_id': session_id,
+                    'message': message,
+                    'is_update': bool(is_update)
+                }).encode('utf-8')
+                req = urllib.request.Request(
+                    'http://127.0.0.1:6767/api/sessions/message',
+                    data=payload,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                urllib.request.urlopen(req, timeout=2)
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def _start_transcript_watcher(self, transcript_path):
+        """Start watching a transcript file for new content."""
+        if not transcript_path or not os.path.exists(transcript_path):
+            log.warning(f"Transcript path invalid or doesn't exist: {transcript_path}")
+            return
+
+        self._stop_transcript_watcher()
+
+        self._transcript_path = transcript_path
+        self._transcript_last_pos = os.path.getsize(transcript_path) if os.path.exists(transcript_path) else 0
+        self._transcript_stop_event.clear()
+
+        self._transcript_watcher_thread = threading.Thread(
+            target=self._watch_transcript,
+            daemon=True
+        )
+        self._transcript_watcher_thread.start()
+        log.info(f"Started transcript watcher for: {transcript_path}")
+
+    def _stop_transcript_watcher(self):
+        """Stop the transcript watcher."""
+        self._transcript_stop_event.set()
+        if self._transcript_watcher_thread and self._transcript_watcher_thread.is_alive():
+            self._transcript_watcher_thread.join(timeout=2)
+        self._transcript_watcher_thread = None
+        self._transcript_path = None
+
+    def _watch_transcript(self):
+        """Watch transcript file for new content and sync to web."""
+        while not self._transcript_stop_event.is_set():
+            try:
+                if not self._transcript_path or not os.path.exists(self._transcript_path):
+                    time.sleep(1)
+                    continue
+
+                current_size = os.path.getsize(self._transcript_path)
+                if current_size > self._transcript_last_pos:
+                    with open(self._transcript_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        f.seek(self._transcript_last_pos)
+                        new_content = f.read()
+                        self._transcript_last_pos = f.tell()
+
+                    if new_content.strip():
+                        self._parse_and_store_transcript(new_content)
+
+                time.sleep(0.5)
+            except Exception as e:
+                log.error(f"Transcript watcher error: {e}")
+                time.sleep(1)
+
+    def _parse_and_store_transcript(self, content):
+        """Parse transcript content and store messages for web sync."""
+        session_id = self._pc_session.get('sessionId') if self._pc_session else None
+        if not session_id:
+            return
+
+        provider = self._pc_session.get('provider') if self._pc_session else None
+        model = self._pc_session.get('model') if self._pc_session else None
+        device_id = self._pc_session.get('deviceId') if self._pc_session else f"pc:{socket.gethostname()}"
+        device_name = self._pc_session.get('deviceName') if self._pc_session else f"PC-{socket.gethostname()[:8]}"
+
+        lines = content.strip().split('\n')
+        for line in lines:
+            if not line.strip():
+                continue
+
+            role = 'assistant'
+            message_content = ''
+            try:
+                msg_data = json.loads(line)
+                role = msg_data.get('role', msg_data.get('sender', 'assistant')) or 'assistant'
+                message_content = msg_data.get('content', msg_data.get('message', ''))
+
+                if isinstance(message_content, list):
+                    text_parts = []
+                    for block in message_content:
+                        if isinstance(block, dict):
+                            if block.get('type') == 'text':
+                                text_parts.append(block.get('text', ''))
+                            elif block.get('type') == 'tool_use':
+                                text_parts.append(f"[Tool: {block.get('name', 'unknown')}]")
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    message_content = '\n'.join(text_parts)
+            except json.JSONDecodeError:
+                message_content = line.strip()
+
+            if not message_content:
+                continue
+
+            message_payload = {
+                'id': f"msg_{int(time.time() * 1000)}",
+                'role': role or 'assistant',
+                'content': str(message_content)[:5000],
+                'timestamp': int(time.time() * 1000),
+                'device_id': device_id,
+                'device_name': device_name,
+                'backend_type': 'SSH',
+                'provider': provider,
+                'model': model
+            }
+
+            if SYNC_SERVICE_AVAILABLE:
+                append_session_message(
+                    session_id=session_id,
+                    message=message_payload,
+                    session_meta={
+                        'device_id': device_id,
+                        'device_name': device_name,
+                        'backend_type': 'SSH',
+                        'provider': provider,
+                        'model': model
+                    }
+                )
+
+            self._notify_web_dashboard_session_message(session_id, message_payload)
 
     def _copy_to_clipboard(self, text):
         """Copy text to Windows clipboard."""
@@ -2421,6 +2611,9 @@ class CompanionRelayServer(threading.Thread):
             if msg_type == 'session_start':
                 # New Claude Code session started
                 transcript_path = payload.get('transcriptPath', '')
+                provider = payload.get('cliProvider') or payload.get('provider') or payload.get('clientName') or 'claude-code'
+                model = payload.get('model') or payload.get('modelName')
+                device_id = f"pc:{socket.gethostname()}"
                 self._pc_session = {
                     'sessionId': session_id,
                     'hostname': payload.get('hostname', socket.gethostname()),
@@ -2431,7 +2624,10 @@ class CompanionRelayServer(threading.Thread):
                     'lastActivityAt': timestamp,
                     'isActive': True,
                     'deviceType': 'PC',
-                    'deviceName': f"PC-{socket.gethostname()[:8]}"
+                    'deviceName': f"PC-{socket.gethostname()[:8]}",
+                    'provider': provider,
+                    'model': model,
+                    'deviceId': device_id
                 }
                 self._session_history = []  # Reset history for new session
                 log.info(f"PC session started: {session_id}")
@@ -2443,6 +2639,21 @@ class CompanionRelayServer(threading.Thread):
                 # Broadcast to all connected devices that PC session is available
                 self._broadcast_session_availability()
 
+                if SYNC_SERVICE_AVAILABLE:
+                    upsert_session({
+                        'id': session_id,
+                        'device_id': device_id,
+                        'device_name': self._pc_session.get('deviceName'),
+                        'backend_type': 'SSH',
+                        'provider': provider,
+                        'model': model,
+                        'projectId': payload.get('projectId'),
+                        'lastActivityAt': timestamp,
+                        'startedAt': timestamp,
+                        'isActive': True
+                    })
+                    self._notify_web_dashboard_sessions_updated(device_id)
+
             elif msg_type in ['session_end', 'session_complete']:
                 # Session ended
                 if self._pc_session:
@@ -2452,6 +2663,16 @@ class CompanionRelayServer(threading.Thread):
 
                 # Stop transcript watcher
                 self._stop_transcript_watcher()
+
+                if SYNC_SERVICE_AVAILABLE:
+                    device_id = self._pc_session.get('deviceId') if self._pc_session else f"pc:{socket.gethostname()}"
+                    upsert_session({
+                        'id': session_id,
+                        'lastActivityAt': timestamp,
+                        'endedAt': timestamp,
+                        'isActive': False
+                    })
+                    self._notify_web_dashboard_sessions_updated(device_id)
 
             elif msg_type in ['approval_request', 'notification']:
                 # Track activity for context
@@ -3074,6 +3295,7 @@ class ShadowBridgeApp:
                 on_data_received=self.on_projects_received,
                 on_device_connected=self.on_device_connected,
                 on_notes_received=self.on_notes_received,
+                on_sessions_received=self.on_sessions_received,
                 on_key_approval_needed=self.on_key_approval_needed
             )
             self.data_receiver.start()
@@ -4549,6 +4771,32 @@ Or run in PowerShell (Admin):
                 log.debug(f"Could not notify web dashboard: {e}")
 
         # Run in background thread to not block
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def on_sessions_received(self, device_id, sessions):
+        """Called when sessions data is received from Android app."""
+        if not isinstance(sessions, list):
+            return
+        self._notify_web_dashboard_sessions_updated(device_id)
+
+    def _notify_web_dashboard_sessions_updated(self, device_id):
+        """Notify web dashboard that sessions have been updated."""
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+                data = json_module.dumps({'device_id': device_id}).encode('utf-8')
+                req = urllib.request.Request(
+                    'http://127.0.0.1:6767/api/sessions/sync',
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                urllib.request.urlopen(req, timeout=2)
+                log.debug(f"Notified web dashboard of sessions update for {device_id}")
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
         threading.Thread(target=do_notify, daemon=True).start()
 
     def refresh_notes_ui(self):

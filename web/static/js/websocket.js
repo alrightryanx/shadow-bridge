@@ -70,6 +70,17 @@ class ShadowWebSocket {
             if (typeof loadDashboard === 'function') loadDashboard();
         });
 
+        this.socket.on('sessions_updated', (data) => {
+            this.trigger('sessions_updated', data);
+            if (typeof loadRecentSessions === 'function') loadRecentSessions(getDeviceIdParam());
+            if (typeof loadSessionsPanel === 'function') loadSessionsPanel(getDeviceIdParam(), true);
+        });
+
+        this.socket.on('session_message', (data) => {
+            this.trigger('session_message', data);
+            if (typeof handleSessionMessage === 'function') handleSessionMessage(data);
+        });
+
         this.socket.on('automation_status', (data) => {
             this.trigger('automation_status', data);
             if (typeof loadAutomations === 'function') loadAutomations();

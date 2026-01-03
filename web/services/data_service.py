@@ -18,6 +18,7 @@ _file_lock = threading.Lock()
 SHADOWAI_DIR = Path.home() / ".shadowai"
 PROJECTS_FILE = SHADOWAI_DIR / "projects.json"
 NOTES_FILE = SHADOWAI_DIR / "notes.json"
+SESSIONS_FILE = SHADOWAI_DIR / "sessions.json"
 DEVICES_FILE = SHADOWAI_DIR / "devices.json"
 AUTOMATIONS_FILE = SHADOWAI_DIR / "automations.json"
 AGENTS_FILE = SHADOWAI_DIR / "agents.json"
@@ -519,6 +520,295 @@ def get_note_content(note_id: str) -> Optional[Dict]:
     return None
 
 
+# ============ Sessions ============
+
+def _load_sessions_file() -> Dict[str, Any]:
+    """Load sessions data, normalizing legacy shapes."""
+    data = _read_json_file(SESSIONS_FILE)
+    if not data:
+        return {"sessions": {}}
+
+    sessions = data.get("sessions")
+    if isinstance(sessions, list):
+        sessions_map = {}
+        for session in sessions:
+            if not isinstance(session, dict):
+                continue
+            session_id = session.get("id") or session.get("sessionId") or _generate_id()
+            session["id"] = session_id
+            sessions_map[session_id] = session
+        data = {"sessions": sessions_map}
+    elif not isinstance(sessions, dict):
+        data["sessions"] = {}
+
+    return data
+
+
+def _session_last_activity(session: Dict[str, Any]) -> int:
+    """Find last activity timestamp for sorting."""
+    last_activity = session.get("lastActivityAt") or session.get("last_activity_at")
+    if isinstance(last_activity, int) and last_activity > 0:
+        return last_activity
+
+    messages = session.get("messages", [])
+    if isinstance(messages, list) and messages:
+        last_message = messages[-1]
+        if isinstance(last_message, dict):
+            ts = last_message.get("timestamp")
+            if isinstance(ts, int) and ts > 0:
+                return ts
+
+    for key in ("timestamp", "updatedAt", "updated_at", "createdAt", "created_at"):
+        ts = session.get(key)
+        if isinstance(ts, int) and ts > 0:
+            return ts
+
+    return 0
+
+
+def _session_project_id(session: Dict[str, Any]) -> Optional[str]:
+    project_id = session.get("projectId") or session.get("project_id")
+    return project_id if isinstance(project_id, str) else None
+
+
+def _session_device_id(session: Dict[str, Any]) -> Optional[str]:
+    device_id = session.get("device_id") or session.get("deviceId")
+    return device_id if isinstance(device_id, str) else None
+
+
+def _session_title(session: Dict[str, Any]) -> str:
+    title = session.get("title")
+    if isinstance(title, str) and title.strip():
+        return title
+
+    messages = session.get("messages", [])
+    if isinstance(messages, list):
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role", "")).lower()
+            if role == "user":
+                content = str(msg.get("content", "")).strip()
+                if content:
+                    return (content[:47] + "...") if len(content) > 50 else content
+
+    return "New Session"
+
+
+def get_sessions(
+    device_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Get session metadata list, optionally filtered."""
+    data = _load_sessions_file()
+    sessions = []
+
+    for session in data.get("sessions", {}).values():
+        if not isinstance(session, dict):
+            continue
+
+        if device_id and _session_device_id(session) != device_id:
+            continue
+        if project_id and _session_project_id(session) != project_id:
+            continue
+
+        last_activity = _session_last_activity(session)
+        messages = session.get("messages", [])
+        last_message = None
+        if isinstance(messages, list) and messages:
+            last_message = messages[-1] if isinstance(messages[-1], dict) else None
+
+        sessions.append({
+            "id": session.get("id") or session.get("sessionId"),
+            "projectId": _session_project_id(session),
+            "title": _session_title(session),
+            "device_id": _session_device_id(session),
+            "device_name": session.get("device_name") or session.get("deviceName"),
+            "backend_type": session.get("backend_type") or session.get("backendType"),
+            "provider": session.get("provider"),
+            "model": session.get("model"),
+            "lastActivityAt": last_activity,
+            "time_ago": _time_ago(last_activity),
+            "message_count": len(messages) if isinstance(messages, list) else 0,
+            "last_message": (last_message or {}).get("content", "") if last_message else "",
+            "is_running": (datetime.now().timestamp() * 1000 - last_activity) <= 600000 if last_activity else False
+        })
+
+    sessions.sort(key=lambda s: s.get("lastActivityAt", 0), reverse=True)
+    if isinstance(limit, int) and limit > 0:
+        sessions = sessions[:limit]
+    return sessions
+
+
+def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """Get full session with messages."""
+    data = _load_sessions_file()
+    session = data.get("sessions", {}).get(session_id)
+    if isinstance(session, dict):
+        session["id"] = session.get("id") or session_id
+        session["title"] = _session_title(session)
+        return session
+
+    # Backward compatibility: search list if needed
+    for item in data.get("sessions", {}).values():
+        if isinstance(item, dict) and item.get("id") == session_id:
+            item["title"] = _session_title(item)
+            return item
+    return None
+
+
+def upsert_session(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert or update a session record."""
+    data = _load_sessions_file()
+    sessions = data.get("sessions", {})
+
+    session_id = session.get("id") or session.get("sessionId") or _generate_id()
+    existing = sessions.get(session_id, {})
+
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(session)
+    merged["id"] = session_id
+
+    if "messages" not in session and "messages" in existing:
+        merged["messages"] = existing.get("messages", [])
+
+    if "createdAt" not in merged and "created_at" not in merged:
+        merged["createdAt"] = int(datetime.now().timestamp() * 1000)
+
+    last_activity = _session_last_activity(merged)
+    if last_activity:
+        merged["lastActivityAt"] = last_activity
+        merged["timestamp"] = last_activity
+
+    merged["title"] = _session_title(merged)
+
+    sessions[session_id] = merged
+    data["sessions"] = sessions
+    _write_json_file(SESSIONS_FILE, data)
+    return merged
+
+
+def save_sessions_from_device(device_id: str, device_name: str, sessions: List[Dict[str, Any]]) -> bool:
+    """Merge sessions from a device into the local store."""
+    data = _load_sessions_file()
+    sessions_map = data.get("sessions", {})
+
+    for session in sessions:
+        if not isinstance(session, dict):
+            continue
+
+        session_id = session.get("id") or session.get("sessionId") or _generate_id()
+        session["id"] = session_id
+        session.setdefault("device_id", device_id)
+        session.setdefault("device_name", device_name)
+        # Device-originated sessions shouldn't remain pending for sync back.
+        session.pop("pending_sync", None)
+
+        incoming_last = _session_last_activity(session)
+        existing = sessions_map.get(session_id)
+
+        if isinstance(existing, dict):
+            existing_last = _session_last_activity(existing)
+            if incoming_last < existing_last:
+                # Keep newer session but still merge metadata
+                existing.update({k: v for k, v in session.items() if k != "messages"})
+                sessions_map[session_id] = existing
+                continue
+
+        sessions_map[session_id] = session
+
+    data["sessions"] = sessions_map
+    return _write_json_file(SESSIONS_FILE, data)
+
+
+def append_session_message(
+    session_id: str,
+    message: Dict[str, Any],
+    delta: Optional[str] = None,
+    is_final: bool = False,
+    session_meta: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Append or update a session message (supports streaming updates)."""
+    data = _load_sessions_file()
+    sessions = data.get("sessions", {})
+
+    session = sessions.get(session_id)
+    if not isinstance(session, dict):
+        session = {
+            "id": session_id,
+            "projectId": message.get("projectId") or message.get("project_id"),
+            "createdAt": int(datetime.now().timestamp() * 1000),
+            "messages": []
+        }
+
+    if isinstance(session_meta, dict):
+        session.update({k: v for k, v in session_meta.items() if v is not None})
+
+    if isinstance(message, dict):
+        for key in ("device_id", "deviceId", "device_name", "deviceName", "backend_type", "backendType", "provider", "model"):
+            val = message.get(key)
+            if val is not None:
+                session[key] = val
+
+    messages = session.get("messages")
+    if not isinstance(messages, list):
+        messages = []
+
+    message_id = message.get("id") or message.get("messageId") or _generate_id()
+    role = message.get("role", "assistant")
+    timestamp = message.get("timestamp")
+    if not isinstance(timestamp, int) or timestamp <= 0:
+        timestamp = int(datetime.now().timestamp() * 1000)
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        content = ""
+
+    if isinstance(delta, str) and delta:
+        content = content or ""
+
+    existing_index = None
+    for idx, msg in enumerate(messages):
+        if isinstance(msg, dict) and msg.get("id") == message_id:
+            existing_index = idx
+            break
+
+    if existing_index is None:
+        new_message = dict(message)
+        new_message["id"] = message_id
+        new_message["role"] = role
+        new_message["timestamp"] = timestamp
+        new_message["content"] = delta if isinstance(delta, str) and delta else content
+        new_message["is_final"] = bool(is_final)
+        messages.append(new_message)
+        message = new_message
+    else:
+        existing = messages[existing_index]
+        if isinstance(existing, dict):
+            if isinstance(delta, str) and delta:
+                existing["content"] = (existing.get("content", "") or "") + delta
+            elif content:
+                existing["content"] = content
+            existing["timestamp"] = timestamp
+            existing["role"] = role
+            if is_final:
+                existing["is_final"] = True
+            existing.update({k: v for k, v in message.items() if k not in ("content",)})
+            message = existing
+            messages[existing_index] = existing
+
+    session["messages"] = messages
+    session["lastActivityAt"] = timestamp
+    session["timestamp"] = timestamp
+    session["title"] = _session_title(session)
+    sessions[session_id] = session
+    data["sessions"] = sessions
+    _write_json_file(SESSIONS_FILE, data)
+
+    return {"session": session, "message": message}
+
+
 def delete_note(note_id: str) -> Dict:
     """Delete a note from the local cache.
 
@@ -908,7 +1198,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.021",
+        "version": "1.022",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }
@@ -2017,7 +2307,8 @@ def get_pending_sync_items(device_id: str) -> Dict:
     pending = {
         "projects": [],
         "notes": [],
-        "automations": []
+        "automations": [],
+        "sessions": []
     }
 
     # Check projects
@@ -2034,6 +2325,17 @@ def get_pending_sync_items(device_id: str) -> Dict:
     auto_data = _read_json_file(AUTOMATIONS_FILE) or {}
     device_autos = auto_data.get(device_id, {}).get("automations", [])
     pending["automations"] = [a for a in device_autos if a.get("pending_sync")]
+
+    # Check sessions
+    sessions_data = _load_sessions_file()
+    sessions_map = sessions_data.get("sessions", {})
+    if isinstance(sessions_map, dict):
+        pending["sessions"] = [
+            s for s in sessions_map.values()
+            if isinstance(s, dict)
+            and s.get("device_id") == device_id
+            and s.get("pending_sync")
+        ]
 
     return pending
 
@@ -2068,6 +2370,17 @@ def mark_items_synced(device_id: str, item_type: str, item_ids: List[str]) -> bo
                 a["pending_sync"] = False
                 a["synced_at"] = timestamp
         _write_json_file(AUTOMATIONS_FILE, file_data)
+
+    elif item_type == "sessions":
+        file_data = _load_sessions_file()
+        sessions = file_data.get("sessions", {})
+        if isinstance(sessions, dict):
+            for session_id, session in sessions.items():
+                if session_id in item_ids and isinstance(session, dict):
+                    session["pending_sync"] = False
+                    session["synced_at"] = timestamp
+            file_data["sessions"] = sessions
+            _write_json_file(SESSIONS_FILE, file_data)
 
     return True
 

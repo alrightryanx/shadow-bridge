@@ -26,7 +26,8 @@ def main():
 
     # Generate command
     gen_parser = subparsers.add_parser('generate', help='Generate an image')
-    gen_parser.add_argument('prompt', help='Text prompt for image generation')
+    gen_parser.add_argument('prompt', nargs='?', help='Text prompt for image generation (optional if --prompt_b64 is used)')
+    gen_parser.add_argument('--prompt_b64', help='Base64 encoded text prompt (safer)')
     gen_parser.add_argument('--model', default='sd-xl-turbo',
                            choices=['sd-1.5', 'sd-xl', 'sd-xl-turbo'],
                            help='Model to use (default: sd-xl-turbo)')
@@ -43,6 +44,17 @@ def main():
     gen_parser.add_argument('--negative', type=str, default=None,
                            help='Negative prompt')
 
+    # Inpaint command
+    inpaint_parser = subparsers.add_parser('inpaint', help='Inpaint an image')
+    inpaint_parser.add_argument('--image_b64', required=True, help='Base64 encoded source image')
+    inpaint_parser.add_argument('--mask_b64', required=True, help='Base64 encoded mask image')
+    inpaint_parser.add_argument('--prompt_b64', required=True, help='Base64 encoded text prompt')
+    inpaint_parser.add_argument('--negative_b64', help='Base64 encoded negative prompt')
+
+    # Remove Background command
+    rembg_parser = subparsers.add_parser('remove-background', help='Remove background from image')
+    rembg_parser.add_argument('--image_b64', required=True, help='Base64 encoded source image')
+
     # Status command
     subparsers.add_parser('status', help='Check image service status')
 
@@ -57,8 +69,24 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    def print_json(data):
+        """Print JSON with strict markers to avoid parsing issues."""
+        print("<<<JSON_START>>>")
+        print(json.dumps(data))
+        print("<<<JSON_END>>>")
+
     try:
         if args.command == 'generate':
+            # Handle prompt input (prefer base64)
+            prompt = args.prompt
+            if args.prompt_b64:
+                import base64
+                prompt = base64.b64decode(args.prompt_b64).decode('utf-8')
+            
+            if not prompt:
+                print_json({"success": False, "error": "No prompt provided"})
+                sys.exit(1)
+
             # Adjust defaults based on model
             steps = args.steps
             guidance = args.guidance
@@ -79,7 +107,7 @@ def main():
             from web.services.image_service import get_image_generation_service
             service = get_image_generation_service()
             result = service.generate_image(
-                prompt=args.prompt,
+                prompt=prompt,
                 negative_prompt=args.negative,
                 model=args.model,
                 width=args.width,
@@ -88,38 +116,66 @@ def main():
                 guidance_scale=guidance,
                 seed=args.seed
             )
-            print(json.dumps(result))
+            print_json(result)
+
+        elif args.command == 'inpaint':
+            import base64
+            prompt = base64.b64decode(args.prompt_b64).decode('utf-8')
+            negative = base64.b64decode(args.negative_b64).decode('utf-8') if args.negative_b64 else None
+            
+            # Note: image_service needs to support these methods. 
+            # Assuming get_image_generation_service() returns the same service used by the Flask app.
+            from web.services.image_service import get_image_generation_service
+            service = get_image_generation_service()
+            
+            # The service might return just the image string or a dict, we standardize to dict
+            result = service.inpaint(
+                image_b64=args.image_b64,
+                mask_b64=args.mask_b64,
+                prompt=prompt,
+                negative_prompt=negative
+            )
+            print_json(result)
+
+        elif args.command == 'remove-background':
+            from web.services.image_service import get_image_generation_service
+            service = get_image_generation_service()
+            
+            result = service.remove_background(
+                image_b64=args.image_b64
+            )
+            print_json(result)
 
         elif args.command == 'status':
             from web.services.image_service import get_image_service_status, get_image_setup_status
             status = get_image_service_status()
             setup = get_image_setup_status()
-            print(json.dumps({
+            print_json({
                 "service": status,
                 "setup": setup
-            }))
+            })
 
         elif args.command == 'setup':
             from web.services.image_service import get_image_generation_service
             service = get_image_generation_service()
             try:
                 model = service.warmup_model(args.model)
-                print(json.dumps({
+                print_json({
                     "success": True,
                     "model": model,
                     "message": f"Model {model} is ready"
-                }))
+                })
             except Exception as e:
-                print(json.dumps({
+                print_json({
                     "success": False,
                     "error": str(e)
-                }))
+                })
 
     except Exception as e:
-        print(json.dumps({
+        print_json({
             "success": False,
             "error": str(e)
-        }))
+        })
         sys.exit(1)
 
 

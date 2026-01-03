@@ -74,6 +74,24 @@ def broadcast_notes_updated(device_id):
         }, room='all')
 
 
+def broadcast_sessions_updated(device_id):
+    """Broadcast sessions sync event."""
+    if socketio is not None:
+        socketio.emit('sessions_updated', {
+            'device_id': device_id
+        }, room='all')
+
+
+def broadcast_session_message(session_id, message, is_update=False):
+    """Broadcast a session message (supports streaming updates)."""
+    if socketio is not None:
+        socketio.emit('session_message', {
+            'session_id': session_id,
+            'message': message,
+            'is_update': bool(is_update)
+        }, room='all')
+
+
 def broadcast_automation_status(automation_id, status, result=None):
     """Broadcast automation status change."""
     if socketio is not None:
