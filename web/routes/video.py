@@ -156,30 +156,31 @@ def install_model(model_key, progress_callback):
 
 def generate_video_local(options, progress_callback):
     """Generate video locally."""
+    import time
     prompt = options.get('prompt', '')
     model = options.get('model', 'hunyuan-15')
     duration = options.get('duration', 10)
     aspect_ratio = options.get('aspect_ratio', '16:9')
-    
+
     try:
         progress_callback({'status': 'Generating', 'message': 'Starting video generation...', 'progress': 0})
-        
+
         # Check if model is installed
-        installed = await is_model_installed(model)
-        
+        installed = is_model_installed(model)
+
         if not installed:
             progress_callback({'status': 'Installing', 'message': 'Model not installed. Installing now...', 'progress': 10})
             try:
-                await install_model(model, progress_callback)
+                install_model(model, progress_callback)
             except Exception as install_error:
                 raise Exception(f"Failed to install model: {install_error}")
-        
+
         progress_callback({'status': 'Generating', 'message': 'Processing frames...', 'progress': 50})
-        await asyncio.sleep(2)  # Simulate generation time
-        
+        time.sleep(2)  # Simulate generation time
+
         progress_callback({'status': 'Generating', 'message': 'Encoding video...', 'progress': 90})
-        await asyncio.sleep(1)
-        
+        time.sleep(1)
+
         progress_callback({'status': 'Generating', 'message': 'Video generation complete', 'progress': 100})
         
         # For now, return test video URL
