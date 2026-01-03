@@ -6,7 +6,7 @@
 {% block content %}
 <div class="page-actions">
     <button class="btn btn-primary" onclick="showGenerateModal()">
-        <span class="material-symbols-outlined">add_photo_alternate</span> Generate Batch
+        <span class="material-symbols-outlined">add_photo_alternate</span> Generate Image
     </button>
 </div>
 
@@ -34,7 +34,7 @@
     <div class="empty-state">
         <span class="material-symbols-outlined" style="font-size: 48px; margin-bottom: 16px;">image</span>
         <p>No images generated yet</p>
-        <p class="text-muted">Click "Generate Batch" to create images</p>
+        <p class="text-muted">Click "Generate Image" to create your first image</p>
     </div>
 </div>
 
@@ -54,14 +54,26 @@
     </div>
 </div>
 
-<!-- Generate Batch Modal -->
+<!-- Generate Image Modal -->
 <div id="generate-modal" class="modal hidden">
     <div class="modal-content modal-large">
         <div class="modal-header">
-            <h2><span class="material-symbols-outlined">auto_awesome</span> Generate Batch</h2>
+            <h2><span class="material-symbols-outlined">auto_awesome</span> Generate Image</h2>
             <button class="modal-close" onclick="closeGenerateModal()">&times;</button>
         </div>
         <div class="modal-body">
+            <!-- Mode Toggle -->
+            <div class="mode-toggle-container">
+                <div class="mode-toggle">
+                    <button id="mode-single" class="mode-btn active" onclick="setGenerateMode('single')">
+                        <span class="material-symbols-outlined">image</span> Single
+                    </button>
+                    <button id="mode-batch" class="mode-btn" onclick="setGenerateMode('batch')">
+                        <span class="material-symbols-outlined">collections</span> Batch
+                    </button>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label for="gen-prompt">Prompt *</label>
                 <textarea id="gen-prompt" class="form-input" rows="3" placeholder="A beautiful sunset over mountains, golden hour, dramatic clouds..."></textarea>
@@ -71,8 +83,8 @@
                 <input type="text" id="gen-negative" class="form-input" placeholder="blurry, bad quality, distorted" value="blurry, bad quality, distorted">
             </div>
 
-            <!-- Quick Presets -->
-            <div class="form-group">
+            <!-- Quick Presets (Batch mode only) -->
+            <div id="batch-presets" class="form-group hidden">
                 <label>Quick Presets</label>
                 <div class="preset-buttons">
                     <button class="btn btn-outline preset-btn" onclick="applyPreset(20, 0.3)">
@@ -84,10 +96,11 @@
                 </div>
             </div>
 
-            <div class="form-row">
+            <!-- Batch Controls (Count & Variation) -->
+            <div id="batch-controls" class="form-row hidden">
                 <div class="form-group form-half">
                     <label for="gen-count">Count: <span id="count-display">10</span></label>
-                    <input type="range" id="gen-count" class="form-range" min="1" max="100" value="10" oninput="updateEstimates()">
+                    <input type="range" id="gen-count" class="form-range" min="2" max="100" value="10" oninput="updateEstimates()">
                 </div>
                 <div class="form-group form-half">
                     <label for="gen-variation">Variation: <span id="variation-display">0.3 (slight)</span></label>
@@ -95,13 +108,14 @@
                 </div>
             </div>
 
+            <!-- Model & Size -->
             <div class="form-row">
- <div class="form-group form-half">
+                <div class="form-group form-half">
                     <label for="gen-model">Model</label>
                     <select id="gen-model" class="form-input" onchange="updateEstimates()">
                         <option value="stable-diffusion" selected>Stable Diffusion XL (Free)</option>
+                        <option value="flux-schnell">FLUX Schnell (Free, Fast)</option>
                         <option value="dalle-3">DALL-E 3 (Premium)</option>
-                        <option value="midjourney">Midjourney (Premium)</option>
                     </select>
                 </div>
                 <div class="form-group form-half">
@@ -114,11 +128,44 @@
                 </div>
             </div>
 
+            <!-- Advanced Controls (collapsible) -->
+            <div class="advanced-toggle" onclick="toggleAdvanced()">
+                <span class="material-symbols-outlined" id="advanced-icon">expand_more</span>
+                <span>Advanced Settings</span>
+            </div>
+            <div id="advanced-controls" class="advanced-controls hidden">
+                <div class="form-row">
+                    <div class="form-group form-half">
+                        <label for="gen-steps">Steps: <span id="steps-display">20</span></label>
+                        <input type="range" id="gen-steps" class="form-range" min="1" max="50" value="20" oninput="document.getElementById('steps-display').textContent = this.value">
+                    </div>
+                    <div class="form-group form-half">
+                        <label for="gen-guidance">Guidance: <span id="guidance-display">7.5</span></label>
+                        <input type="range" id="gen-guidance" class="form-range" min="1" max="20" value="7.5" step="0.5" oninput="document.getElementById('guidance-display').textContent = this.value">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group form-half">
+                        <label for="gen-seed">Seed (optional)</label>
+                        <input type="number" id="gen-seed" class="form-input" placeholder="Random" min="0">
+                    </div>
+                    <div class="form-group form-half">
+                        <label for="gen-scheduler">Scheduler</label>
+                        <select id="gen-scheduler" class="form-input">
+                            <option value="euler" selected>Euler</option>
+                            <option value="euler_a">Euler Ancestral</option>
+                            <option value="dpm">DPM++ 2M</option>
+                            <option value="ddim">DDIM</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
             <!-- Estimates -->
             <div class="estimate-panel">
                 <div class="estimate-item">
                     <span class="material-symbols-outlined">schedule</span>
-                    <span>Time: <strong id="estimate-time">~35 sec</strong></span>
+                    <span>Time: <strong id="estimate-time">~3 sec</strong></span>
                 </div>
                 <div class="estimate-item">
                     <span class="material-symbols-outlined">payments</span>
@@ -128,8 +175,8 @@
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeGenerateModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="startBatchGeneration()">
-                <span class="material-symbols-outlined">play_arrow</span> Start Generation
+            <button class="btn btn-primary" id="generate-btn" onclick="startGeneration()">
+                <span class="material-symbols-outlined">play_arrow</span> Generate
             </button>
         </div>
     </div>
@@ -155,6 +202,7 @@
 let activeBatchId = null;
 let pollInterval = null;
 let allImages = [];
+let generateMode = 'single'; // 'single' or 'batch'
 
 document.addEventListener('DOMContentLoaded', function() {
     loadRecentImages();
@@ -184,10 +232,48 @@ async function loadRecentImages() {
 
 function showGenerateModal() {
     document.getElementById('generate-modal').classList.remove('hidden');
+    setGenerateMode('single'); // Default to single mode
 }
 
 function closeGenerateModal() {
     document.getElementById('generate-modal').classList.add('hidden');
+}
+
+function setGenerateMode(mode) {
+    generateMode = mode;
+
+    // Update toggle buttons
+    document.getElementById('mode-single').classList.toggle('active', mode === 'single');
+    document.getElementById('mode-batch').classList.toggle('active', mode === 'batch');
+
+    // Show/hide batch-specific controls
+    const batchPresets = document.getElementById('batch-presets');
+    const batchControls = document.getElementById('batch-controls');
+
+    if (mode === 'batch') {
+        batchPresets.classList.remove('hidden');
+        batchControls.classList.remove('hidden');
+    } else {
+        batchPresets.classList.add('hidden');
+        batchControls.classList.add('hidden');
+    }
+
+    // Update button text
+    const btn = document.getElementById('generate-btn');
+    if (mode === 'batch') {
+        btn.innerHTML = '<span class="material-symbols-outlined">play_arrow</span> Generate Batch';
+    } else {
+        btn.innerHTML = '<span class="material-symbols-outlined">play_arrow</span> Generate';
+    }
+
+    updateEstimates();
+}
+
+function toggleAdvanced() {
+    const controls = document.getElementById('advanced-controls');
+    const icon = document.getElementById('advanced-icon');
+    controls.classList.toggle('hidden');
+    icon.textContent = controls.classList.contains('hidden') ? 'expand_more' : 'expand_less';
 }
 
 function applyPreset(count, variation) {
@@ -206,14 +292,18 @@ function updateVariationLabel() {
     document.getElementById('variation-display').textContent = `${val.toFixed(1)} (${label})`;
 }
 
- async function updateEstimates() {
-    const count = parseInt(document.getElementById('gen-count').value);
+function updateEstimates() {
+    const count = generateMode === 'batch' ? parseInt(document.getElementById('gen-count').value) : 1;
     const model = document.getElementById('gen-model').value;
 
     document.getElementById('count-display').textContent = count;
 
     // Estimate time based on model type and count
-    const timePerImage = model === 'sd-xl-turbo' ? 2 : model === 'sd-xl' ? 5 : 1;
+    let timePerImage = 3; // default
+    if (model === 'flux-schnell') timePerImage = 1;
+    else if (model === 'stable-diffusion') timePerImage = 3;
+    else if (model === 'dalle-3') timePerImage = 8;
+
     const totalSeconds = count * timePerImage;
 
     if (totalSeconds >= 60) {
@@ -224,21 +314,76 @@ function updateVariationLabel() {
         document.getElementById('estimate-time').textContent = `~${Math.round(totalSeconds)} sec`;
     }
 
-    document.getElementById('estimate-cost').textContent = '$0 (local GPU)';
+    const cost = model === 'dalle-3' ? `$${(0.04 * count).toFixed(2)}` : '$0 (local GPU)';
+    document.getElementById('estimate-cost').textContent = cost;
 }
 
- async function startBatchGeneration() {
+async function startGeneration() {
     const prompt = document.getElementById('gen-prompt').value.trim();
     if (!prompt) {
         showToast('Please enter a prompt', 'error');
         return;
     }
 
-    const count = parseInt(document.getElementById('gen-count').value);
     const model = document.getElementById('gen-model').value;
     const size = parseInt(document.getElementById('gen-size').value);
     const negative = document.getElementById('gen-negative').value.trim();
-    const seed = document.getElementById('gen-variation').value;
+    const steps = parseInt(document.getElementById('gen-steps').value);
+    const guidance = parseFloat(document.getElementById('gen-guidance').value);
+    const seedInput = document.getElementById('gen-seed').value;
+    const seed = seedInput ? parseInt(seedInput) : undefined;
+    const scheduler = document.getElementById('gen-scheduler').value;
+
+    if (generateMode === 'single') {
+        await startSingleGeneration(prompt, model, size, negative, steps, guidance, seed, scheduler);
+    } else {
+        await startBatchGeneration(prompt, model, size, negative, steps, guidance, seed, scheduler);
+    }
+}
+
+async function startSingleGeneration(prompt, model, size, negative, steps, guidance, seed, scheduler) {
+    try {
+        const btn = document.getElementById('generate-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="material-symbols-outlined spin">autorenew</span> Generating...';
+
+        const response = await fetch('/v1/images/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: prompt,
+                model: model,
+                width: size,
+                height: size,
+                negative_prompt: negative || undefined,
+                steps: steps,
+                guidance_scale: guidance,
+                seed: seed,
+                scheduler: scheduler
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success || data.image) {
+            closeGenerateModal();
+            showToast('Image generated successfully!', 'success');
+            loadRecentImages();
+        } else {
+            showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        const btn = document.getElementById('generate-btn');
+        btn.disabled = false;
+        btn.innerHTML = '<span class="material-symbols-outlined">play_arrow</span> Generate';
+    }
+}
+
+async function startBatchGeneration(prompt, model, size, negative, steps, guidance, seed, scheduler) {
+    const count = parseInt(document.getElementById('gen-count').value);
+    const variation = document.getElementById('gen-variation').value / 100;
 
     try {
         const response = await fetch('/v1/images/generate-batch', {
@@ -251,7 +396,11 @@ function updateVariationLabel() {
                 width: size,
                 height: size,
                 negative_prompt: negative || undefined,
-                seed: seed || undefined
+                variation_strength: variation,
+                steps: steps,
+                guidance_scale: guidance,
+                base_seed: seed,
+                scheduler: scheduler
             })
         });
 
@@ -261,7 +410,6 @@ function updateVariationLabel() {
             activeBatchId = data.batch_id;
             closeGenerateModal();
             showToast(`Started batch generation: ${count} images`, 'success');
-            // Start polling for results
             pollBatchResults();
         } else {
             showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
@@ -403,7 +551,7 @@ function renderGallery(images) {
             <div class="empty-state">
                 <span class="material-symbols-outlined" style="font-size: 48px; margin-bottom: 16px;">image</span>
                 <p>No images generated yet</p>
-                <p class="text-muted">Click "Generate Batch" to create images</p>
+                <p class="text-muted">Click "Generate Image" to create your first image</p>
             </div>
         `;
         return;
@@ -736,6 +884,49 @@ function escapeHtml(text) {
     opacity: 0.5;
 }
 
+/* Mode Toggle */
+.mode-toggle-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+}
+
+.mode-toggle {
+    display: inline-flex;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 4px;
+    gap: 4px;
+}
+
+.mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+.mode-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.mode-btn.active {
+    background: var(--primary-color);
+    color: white;
+}
+
+.mode-btn .material-symbols-outlined {
+    font-size: 18px;
+}
+
 /* Generate Modal */
 .preset-buttons {
     display: flex;
@@ -751,6 +942,31 @@ function escapeHtml(text) {
 .form-range {
     width: 100%;
     margin-top: 8px;
+}
+
+/* Advanced Controls Toggle */
+.advanced-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.9em;
+    border-top: 1px solid var(--border-color);
+    margin-top: 16px;
+    transition: color 0.2s;
+}
+
+.advanced-toggle:hover {
+    color: var(--text-primary);
+}
+
+.advanced-controls {
+    padding: 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    margin-bottom: 16px;
 }
 
 .estimate-panel {
@@ -770,6 +986,11 @@ function escapeHtml(text) {
 
 .estimate-item .material-symbols-outlined {
     color: var(--primary-color);
+}
+
+/* Spin animation for generating state */
+.spin {
+    animation: spin 1s linear infinite;
 }
 
 /* Lightbox */
