@@ -35,3 +35,4 @@ email_config.json
 build/
 dist/
 *.spec
+build/

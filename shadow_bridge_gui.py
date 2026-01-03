@@ -141,7 +141,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.022"
+APP_VERSION = "1.023"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -149,6 +149,33 @@ PROJECTS_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~
 NOTES_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'notes.json')
 WINDOW_STATE_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'window_state.json')
 SETTINGS_FILE = os.path.join(os.environ.get('USERPROFILE', os.path.expanduser('~')), '.shadowai', 'settings.json')
+INSTALL_PATH_FILE = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'ShadowBridge', 'install_path.txt')
+
+
+def register_install_path():
+    """
+    Write the ShadowBridge install directory to a known location.
+    This allows the Android app to find us via SSH for image generation.
+    """
+    try:
+        # Get the directory where this script/exe is located
+        if getattr(sys, 'frozen', False):
+            # Running as compiled exe
+            install_dir = os.path.dirname(sys.executable)
+        else:
+            # Running as Python script
+            install_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(INSTALL_PATH_FILE), exist_ok=True)
+
+        # Write the path
+        with open(INSTALL_PATH_FILE, 'w', encoding='utf-8') as f:
+            f.write(install_dir)
+
+        log.info(f"Registered install path: {install_dir}")
+    except Exception as e:
+        log.warning(f"Failed to register install path: {e}")
 
 # GitHub release URL for auto-updates
 GITHUB_REPO = "alrightryanx/shadow-bridge"
@@ -5370,6 +5397,10 @@ def main():
         sys.exit(1)
 
     log.info(f"ShadowBridge v{APP_VERSION} starting...")
+
+    # Register install path so Android app can find us via SSH
+    register_install_path()
+
     app = ShadowBridgeApp()
     global _app_instance
     _app_instance = app
