@@ -17,7 +17,15 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'torch', 'torchvision', 'torchaudio',  # PyTorch - auto-installs on demand
+        'diffusers', 'transformers', 'accelerate',  # SD models - auto-install
+        'rembg',  # Background removal - auto-install
+        'onnxruntime', 'onnx',  # ONNX runtime
+        'tensorflow', 'keras',  # Not used
+        'scipy', 'sklearn', 'scikit-learn',  # Not needed
+        'matplotlib', 'pandas', 'numpy.distutils',  # Not needed for core
+    ],
     noarchive=False,
     optimize=0,
 )
