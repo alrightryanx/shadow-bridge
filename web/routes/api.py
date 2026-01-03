@@ -1,7 +1,7 @@
 """
 REST API endpoints for Shadow Web Dashboard
 """
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 import subprocess
 import socket
 import json
@@ -1388,6 +1388,55 @@ def api_delete_agent(agent_id):
     return jsonify(result)
 
 
+# ============ Agent Evolution (AGI-Readiness) ============
+
+@api_bp.route('/agents/<agent_id>/evolve', methods=['POST'])
+def api_agent_evolve(agent_id):
+    """
+    Manually trigger evolution analysis for an agent.
+    """
+    try:
+        from ..services.agent_evolution import get_evolution_service
+        from ..services.agent_protocol import AgentId, Task, TaskResult
+        
+        data = request.get_json() or {}
+        
+        # Mocking a successful task for evolution demo
+        mock_task = Task.create(
+            title=data.get("title", "Complex Code Optimization"),
+            description=data.get("description", "Optimized memory usage in core loops"),
+            required_capabilities=[]
+        )
+        
+        mock_result = TaskResult(
+            task_id=mock_task.id,
+            success=True,
+            output="Memory reduced by 40%",
+            artifacts=[{"type": "profiling"}, {"type": "refactor"}],
+            execution_time_ms=3500,
+            metrics={"improvement": 0.4}
+        )
+        
+        evol_service = get_evolution_service()
+        new_cap = evol_service.analyze_task_completion(
+            agent_id=AgentId.from_dict({"id": agent_id, "namespace": "shadowai"}),
+            task=mock_task,
+            result=mock_result
+        )
+        
+        if new_cap:
+            return jsonify({
+                "success": True, 
+                "evolved": True,
+                "capability": new_cap.to_dict()
+            })
+        
+        return jsonify({"success": True, "evolved": False})
+    except Exception as e:
+        logger.error(f"Evolution error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ============ Workflows ============
 
 @api_bp.route('/workflows')
@@ -1730,6 +1779,33 @@ def api_context_track():
         metadata=data.get("metadata")
     )
 
+    # AGI-Readiness: Predictive Context Pre-loading
+    # If we can guess what the user will do next, we can pre-load it into memory
+    # so the AI has zero-latency access to it.
+    try:
+        ps = get_preference_service()
+        if ps:
+            prediction = ps.predict_next_action(data["event_type"], data["resource_type"])
+            if prediction:
+                pred_action, pred_type, conf = prediction
+                if conf > 0.4:  # Low threshold for prototype
+                    logger.info(f"🧠 Predictive Engine: Expecting {pred_action}:{pred_type} (conf: {conf:.2f})")
+                    
+                    # Heuristic: If we predict user will use a type, they likely want 
+                    # the most recently used item of that type.
+                    recent = cs.get_recent_activity(resource_types=[pred_type], limit=1)
+                    if recent:
+                        target_id = recent[0].resource_id
+                        logger.info(f"🚀 Pre-loading context for {pred_type}:{target_id}")
+                        # Run in background to not block response
+                        import threading
+                        threading.Thread(
+                            target=cs.preload_context,
+                            args=(pred_type, target_id)
+                        ).start()
+    except Exception as e:
+        logger.warning(f"Prediction failed: {e}")
+
     return jsonify({"success": True})
 
 
@@ -1877,6 +1953,175 @@ def api_context_clear():
 
     cs.clear_session()
     return jsonify({"success": True})
+
+
+# ============ Metacognition (AGI-Readiness) ============
+
+@api_bp.route('/metacognition/assess', methods=['POST'])
+def api_metacognition_assess():
+    """
+    Assess a query for risk, ambiguity, and confidence.
+    """
+    try:
+        from ..services.metacognition import get_metacognitive_layer
+        
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({"error": "Missing 'query' field"}), 400
+            
+        meta = get_metacognitive_layer()
+        assessment = meta.assess_query(
+            query=data['query'],
+            context=data.get('context')
+        )
+        
+        return jsonify(assessment.to_dict())
+    except ImportError:
+        return jsonify({"error": "Metacognition service not available"}), 503
+    except Exception as e:
+        logger.error(f"Metacognition error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============ Multi-Model Debate (AGI-Readiness) ============
+
+@api_bp.route('/reasoning/debate', methods=['POST'])
+async def api_reasoning_debate():
+    """
+    Start a multi-model debate on a topic.
+    """
+    try:
+        from ..services.debate_system import get_debate_system
+        
+        data = request.get_json()
+        if not data or 'topic' not in data:
+            return jsonify({"error": "Missing 'topic' field"}), 400
+            
+        rounds = data.get('rounds', 2)
+        debate_sys = get_debate_system()
+        
+        # Start debate asynchronously
+        session = await debate_sys.conduct_debate(
+            topic=data['topic'],
+            rounds=rounds
+        )
+        
+        return jsonify(session.to_dict())
+    except Exception as e:
+        logger.error(f"Debate system error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route('/reasoning/debate/<session_id>', methods=['GET'])
+def api_get_debate(session_id):
+    """
+    Get a specific debate session.
+    """
+    from ..services.debate_system import get_debate_system
+    session = get_debate_system().get_session(session_id)
+    if session:
+        return jsonify(session.to_dict())
+    return jsonify({"error": "Debate session not found"}), 404
+
+
+# ============ Cognitive Orchestrator (AGI-Readiness) ============
+
+@api_bp.route('/cognitive/process', methods=['POST'])
+async def api_cognitive_process():
+    """
+    Process a query through the full cognitive architecture.
+    """
+    try:
+        from ..services.cognitive_orchestrator import get_cognitive_orchestrator
+        
+        data = request.get_json()
+        if not data or 'query' not in data:
+            return jsonify({"error": "Missing 'query' field"}), 400
+            
+        orchestrator = get_cognitive_orchestrator()
+        
+        # Process asynchronously
+        plan = await orchestrator.process_query(
+            query=data['query'],
+            client_context=data.get('context')
+        )
+        
+        return jsonify(plan.to_dict())
+    except Exception as e:
+        logger.error(f"Cognitive Orchestrator error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============ Swarm Intelligence (AGI-Readiness) ============
+
+@api_bp.route('/swarm/execute', methods=['POST'])
+async def api_swarm_execute():
+    """
+    Execute a task using an emergent agent swarm.
+    """
+    try:
+        from ..services.swarm_intelligence import get_swarm_orchestrator
+        from ..services.agent_protocol import Task, CapabilityCategory
+        
+        data = request.get_json()
+        if not data or 'title' not in data:
+            return jsonify({"error": "Missing 'title' field"}), 400
+            
+        task = Task.create(
+            title=data['title'],
+            description=data.get('description', ''),
+            required_capabilities=[CapabilityCategory.RESEARCH]
+        )
+        
+        agent_count = data.get('agent_count', 3)
+        swarm_orch = get_swarm_orchestrator()
+        
+        result = await swarm_orch.execute_swarm_task(task, agent_count)
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Swarm error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============ Recursive Reasoning (AGI-Readiness) ============
+
+@api_bp.route('/reasoning/recurse', methods=['POST'])
+async def api_reasoning_recurse():
+    """
+    Refine a solution recursively until optimal.
+    """
+    try:
+        from ..services.recursive_reasoning import get_recursive_engine
+        
+        data = request.get_json()
+        if not data or 'problem' not in data:
+            return jsonify({"error": "Missing 'problem' field"}), 400
+            
+        problem = data['problem']
+        initial = data.get('initial_solution', f"Initial thought on {problem}")
+        
+        engine = get_recursive_engine()
+        result = await engine.recurse_until_optimal(problem, initial)
+        
+        # Convert to dict manually as result is a dataclass with nested objects
+        return jsonify({
+            "final_solution": result.final_solution,
+            "total_iterations": result.total_iterations,
+            "converged": result.converged,
+            "final_confidence": result.final_confidence,
+            "iterations": [
+                {
+                    "depth": i.depth,
+                    "confidence": i.confidence,
+                    "improvement": i.improvement,
+                    "solution_preview": i.solution[:100]
+                } for i in result.iterations
+            ]
+        })
+    except Exception as e:
+        logger.error(f"Recursive reasoning error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # ============ User Preference Learning (AGI-Readiness) ============
@@ -4117,7 +4362,8 @@ def api_image_generate():
             steps=data.get('steps', 20),
             guidance_scale=data.get('guidance_scale', 7.5),
             seed=data.get('seed'),
-            model=data.get('model')
+            model=data.get('model'),
+            source="api",
         )
 
         return jsonify(result)
@@ -4364,6 +4610,40 @@ def api_batch_list():
     except Exception as e:
         logger.error(f"Batch list error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/history')
+def api_image_history():
+    """Return recent image generations (single + batch)."""
+    try:
+        limit = int(request.args.get('limit', 50))
+        from ..services.image_service import get_image_history
+
+        images = get_image_history(limit=limit)
+        for img in images:
+            img['stream_url'] = f"/api/image/file/{img.get('id')}"
+        return jsonify({"success": True, "images": images})
+    except Exception as e:
+        logger.error(f"Image history error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_bp.route('/image/file/<image_id>')
+def api_image_file(image_id):
+    """Serve a generated image file from local history."""
+    try:
+        from ..services.image_service import get_image_record
+
+        record = get_image_record(image_id)
+        if not record:
+            return jsonify({"error": "Image not found"}), 404
+        path = record.get("image_path")
+        if not path or not os.path.exists(path):
+            return jsonify({"error": "Image file missing"}), 404
+        return send_file(path, mimetype="image/png", as_attachment=False)
+    except Exception as e:
+        logger.error(f"Image file error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @api_bp.route('/image/estimate')

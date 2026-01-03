@@ -418,8 +418,19 @@ function formatBackendLabel(session) {
     const rawType = String(session.backend_type || session.backendType || '').toLowerCase();
     const provider = String(session.provider || '').trim();
 
+    if (rawType.includes('ssh_claude_code')) return 'Claude Code (SSH)';
+    if (rawType.includes('ssh_gemini_cli')) return 'Gemini CLI (SSH)';
+    if (rawType.includes('ssh_aider')) return 'Aider (SSH)';
+    if (rawType.includes('ssh_cursor')) return 'Cursor (SSH)';
+    if (rawType.includes('ssh_opencode')) return 'OpenCode (SSH)';
     if (rawType.includes('ssh')) return provider ? `SSH - ${provider}` : 'SSH';
+    
+    if (rawType.includes('openai_api')) return 'OpenAI API';
+    if (rawType.includes('anthropic_api')) return 'Anthropic API';
+    if (rawType.includes('gemini_api')) return 'Gemini API';
+    if (rawType.includes('grok_api')) return 'Grok API';
     if (rawType.includes('api')) return provider || 'API';
+    
     if (rawType.includes('local')) return 'On-phone LLM';
     if (!rawType && provider) return provider;
     if (rawType) return rawType.toUpperCase();
@@ -929,7 +940,8 @@ function getTimeAgo(date) {
 
 .mini-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(2, 1fr);
     gap: 10px;
 }
 

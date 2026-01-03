@@ -3,6 +3,12 @@
  * With offline caching and retry logic
  */
 
+function reportConnectionStatus() {
+    if (typeof window !== 'undefined' && typeof window.updateConnectionStatus === 'function') {
+        window.updateConnectionStatus();
+    }
+}
+
 const api = {
     baseUrl: '/api',
     cache: new Map(),
@@ -66,6 +72,7 @@ const api = {
 
                 // Update online status
                 this.isOnline = true;
+                reportConnectionStatus();
 
                 // Cache successful GET responses
                 if (!options.method || options.method === 'GET') {
@@ -87,6 +94,7 @@ const api = {
         // All retries failed - check offline cache
         console.error('API Error after retries:', lastError);
         this.isOnline = false;
+        reportConnectionStatus();
 
         const offlineData = this.getOfflineCache(cacheKey);
         if (offlineData) {
@@ -608,30 +616,30 @@ const api = {
 
     // ============ Video Generation ============
     async generateVideo(data) {
-        return this.fetch('/v1/video/generate', {
+        return this.fetch('/video/generate', {
             method: 'POST',
             body: JSON.stringify(data)
         });
     },
 
     async getVideoModels() {
-        return this.fetch('/v1/video/models');
+        return this.fetch('/video/models');
     },
 
     async getGenerationStatus(generationId) {
-        return this.fetch(`/v1/video/status/${generationId}`);
+        return this.fetch(`/video/status/${generationId}`);
     },
 
     async getGenerationResult(generationId) {
-        return this.fetch(`/v1/video/result/${generationId}`);
+        return this.fetch(`/video/result/${generationId}`);
     },
 
     async cancelGeneration(generationId) {
-        return this.fetch(`/v1/video/cancel/${generationId}`, { method: 'DELETE' });
+        return this.fetch(`/video/cancel/${generationId}`, { method: 'DELETE' });
     },
 
     async getVideoHistory(deviceId) {
         const params = deviceId ? `?device_id=${deviceId}` : '';
-        return this.fetch(`/v1/video/history${params}`);
+        return this.fetch(`/video/history${params}`);
     }
 };

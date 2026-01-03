@@ -13,6 +13,7 @@ GPU Requirements:
 """
 
 import base64
+import json
 import io
 import logging
 import os
@@ -26,9 +27,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from queue import Queue
 from typing import Optional, Dict, Any, Tuple, List
+from pathlib import Path
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+IMAGE_HISTORY_FILE = Path.home() / ".shadowai" / "image_generations.json"
+IMAGE_OUTPUT_DIR = Path.home() / ".shadowai" / "image_outputs"
 
 # Lazy-load heavy dependencies
 _diffusers_available = False
@@ -124,6 +129,80 @@ _batch_lock = threading.Lock()
 _batch_worker_thread: Optional[threading.Thread] = None
 _batch_queue: Queue = Queue()
 _batch_cancel_flags: Dict[str, bool] = {}
+
+
+def _load_image_history() -> Dict[str, Any]:
+    try:
+        if IMAGE_HISTORY_FILE.exists():
+            with open(IMAGE_HISTORY_FILE, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+    except Exception as exc:
+        logger.warning(f"Failed to load image history: {exc}")
+    return {"images": []}
+
+
+def _save_image_history(data: Dict[str, Any]) -> None:
+    try:
+        IMAGE_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(IMAGE_HISTORY_FILE, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+    except Exception as exc:
+        logger.error(f"Failed to save image history: {exc}")
+
+
+def record_image_generation(
+    prompt: str,
+    image: Image.Image,
+    model: str,
+    width: int,
+    height: int,
+    seed: Optional[int],
+    negative_prompt: Optional[str],
+    generation_time_ms: int,
+    source: str = "unknown",
+) -> Dict[str, Any]:
+    """Persist an image generation to the local history."""
+    IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    image_id = str(uuid.uuid4())
+    output_path = IMAGE_OUTPUT_DIR / f"{image_id}.png"
+    image.save(output_path, format="PNG")
+
+    entry = {
+        "id": image_id,
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "model": model,
+        "width": width,
+        "height": height,
+        "seed": seed,
+        "generation_time_ms": generation_time_ms,
+        "created_at": int(time.time() * 1000),
+        "image_path": str(output_path),
+        "source": source,
+    }
+
+    data = _load_image_history()
+    data.setdefault("images", []).append(entry)
+    _save_image_history(data)
+    return entry
+
+
+def get_image_history(limit: int = 50) -> List[Dict[str, Any]]:
+    data = _load_image_history()
+    images = sorted(
+        data.get("images", []),
+        key=lambda item: item.get("created_at", 0),
+        reverse=True,
+    )
+    return images[:limit]
+
+
+def get_image_record(image_id: str) -> Optional[Dict[str, Any]]:
+    data = _load_image_history()
+    for item in data.get("images", []):
+        if item.get("id") == image_id:
+            return item
+    return None
 
 
 # Benchmark times per image (seconds) - based on RTX 3080 Laptop GPU
@@ -673,6 +752,7 @@ class ImageGenerationService:
         guidance_scale: float = 7.5,
         seed: int = None,
         model: str = None,
+        source: str = "unknown",
     ) -> Dict[str, Any]:
         """
         Generate an image from a text prompt.
@@ -715,6 +795,18 @@ class ImageGenerationService:
 
             generation_time = int((time.time() - start_time) * 1000)
 
+            history_entry = record_image_generation(
+                prompt=prompt,
+                image=image,
+                model=self.current_model,
+                width=width,
+                height=height,
+                seed=seed,
+                negative_prompt=negative_prompt,
+                generation_time_ms=generation_time,
+                source=source,
+            )
+
             # Clean up GPU memory after generation to prevent leaks
             if self.device == "cuda":
                 _cleanup_gpu_memory()
@@ -728,6 +820,8 @@ class ImageGenerationService:
                 "height": height,
                 "model": self.current_model,
                 "device": self.device,
+                "image_id": history_entry.get("id"),
+                "image_path": history_entry.get("image_path"),
             }
 
         except Exception as e:
@@ -1026,6 +1120,7 @@ def _batch_worker():
                     guidance_scale=job.guidance_scale,
                     seed=seed,
                     model=job.model,
+                    source=f"batch:{job_id}",
                 )
                 gen_time = time.time() - start_gen
 
@@ -1037,6 +1132,9 @@ def _batch_worker():
                             "seed": seed,
                             "image": result["image"],
                             "generation_time_ms": result.get("generation_time_ms", 0),
+                            "image_id": result.get("image_id"),
+                            "image_path": result.get("image_path"),
+                            "prompt": job.prompt,
                         })
                     else:
                         job.failed_count += 1
@@ -1191,6 +1289,11 @@ def get_batch_results(job_id: str, include_images: bool = True) -> Optional[Dict
 
         job = _batch_jobs[job_id]
         results = _batch_results.get(job_id, [])
+
+        for item in results:
+            image_id = item.get("image_id")
+            if image_id:
+                item["stream_url"] = f"/api/image/file/{image_id}"
 
         if not include_images:
             # Strip image data for lighter response

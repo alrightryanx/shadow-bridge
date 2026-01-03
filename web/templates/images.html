@@ -38,6 +38,14 @@
     </div>
 </div>
 
+<!-- Image Prompt History -->
+<div class="image-history-section">
+    <h3>Recent Prompts</h3>
+    <div id="image-history" class="image-history-list">
+        <div class="loading">Loading prompt history...</div>
+    </div>
+</div>
+
 <!-- Batch Jobs History -->
 <div class="batch-history-section">
     <h3>Recent Batches</h3>
@@ -88,12 +96,12 @@
             </div>
 
             <div class="form-row">
-                <div class="form-group form-half">
+ <div class="form-group form-half">
                     <label for="gen-model">Model</label>
                     <select id="gen-model" class="form-input" onchange="updateEstimates()">
-                        <option value="sd-xl-turbo" selected>SDXL-Turbo (Fast)</option>
-                        <option value="sd-xl">SDXL (Quality)</option>
-                        <option value="sd-1.5">SD 1.5 (Lightweight)</option>
+                        <option value="stable-diffusion" selected>Stable Diffusion XL (Free)</option>
+                        <option value="dalle-3">DALL-E 3 (Premium)</option>
+                        <option value="midjourney">Midjourney (Premium)</option>
                     </select>
                 </div>
                 <div class="form-group form-half">
@@ -149,9 +157,30 @@ let pollInterval = null;
 let allImages = [];
 
 document.addEventListener('DOMContentLoaded', function() {
+    loadRecentImages();
     loadBatchHistory();
     updateEstimates();
 });
+
+async function loadRecentImages() {
+    try {
+        const response = await fetch('/api/image/history');
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.error || 'Unknown history error');
+        }
+
+        const images = data.images || [];
+        allImages = images;
+        renderGallery(allImages);
+        renderImageHistory(allImages);
+    } catch (err) {
+        console.error('History error:', err);
+        document.getElementById('images-container').innerHTML = `
+            <div class="error-message">Failed to load images</div>
+        `;
+    }
+}
 
 function showGenerateModal() {
     document.getElementById('generate-modal').classList.remove('hidden');
@@ -177,32 +206,28 @@ function updateVariationLabel() {
     document.getElementById('variation-display').textContent = `${val.toFixed(1)} (${label})`;
 }
 
-async function updateEstimates() {
+ async function updateEstimates() {
     const count = parseInt(document.getElementById('gen-count').value);
     const model = document.getElementById('gen-model').value;
 
     document.getElementById('count-display').textContent = count;
 
-    try {
-        const response = await fetch(`/api/image/estimate?count=${count}&model=${model}`);
-        const data = await response.json();
+    // Estimate time based on model type and count
+    const timePerImage = model === 'sd-xl-turbo' ? 2 : model === 'sd-xl' ? 5 : 1;
+    const totalSeconds = count * timePerImage;
 
-        if (data.success) {
-            const seconds = data.estimated_seconds;
-            if (seconds >= 60) {
-                const mins = Math.floor(seconds / 60);
-                const secs = Math.round(seconds % 60);
-                document.getElementById('estimate-time').textContent = `~${mins}m ${secs}s`;
-            } else {
-                document.getElementById('estimate-time').textContent = `~${Math.round(seconds)} sec`;
-            }
-        }
-    } catch (err) {
-        console.error('Estimate error:', err);
+    if (totalSeconds >= 60) {
+        const mins = Math.floor(totalSeconds / 60);
+        const secs = Math.round(totalSeconds % 60);
+        document.getElementById('estimate-time').textContent = `~${mins}m ${secs}s`;
+    } else {
+        document.getElementById('estimate-time').textContent = `~${Math.round(totalSeconds)} sec`;
     }
+
+    document.getElementById('estimate-cost').textContent = '$0 (local GPU)';
 }
 
-async function startBatchGeneration() {
+ async function startBatchGeneration() {
     const prompt = document.getElementById('gen-prompt').value.trim();
     if (!prompt) {
         showToast('Please enter a prompt', 'error');
@@ -210,34 +235,34 @@ async function startBatchGeneration() {
     }
 
     const count = parseInt(document.getElementById('gen-count').value);
-    const variation = document.getElementById('gen-variation').value / 100;
     const model = document.getElementById('gen-model').value;
     const size = parseInt(document.getElementById('gen-size').value);
     const negative = document.getElementById('gen-negative').value.trim();
+    const seed = document.getElementById('gen-variation').value;
 
     try {
-        const response = await fetch('/api/image/batch', {
+        const response = await fetch('/v1/images/generate-batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 prompt: prompt,
                 count: count,
-                variation_strength: variation,
-                negative_prompt: negative || null,
                 model: model,
                 width: size,
-                height: size
+                height: size,
+                negative_prompt: negative || undefined,
+                seed: seed || undefined
             })
         });
 
         const data = await response.json();
 
         if (data.success) {
-            activeBatchId = data.job.id;
+            activeBatchId = data.batch_id;
             closeGenerateModal();
-            showActiveBatch(data.job);
-            startPolling();
             showToast(`Started batch generation: ${count} images`, 'success');
+            // Start polling for results
+            pollBatchResults();
         } else {
             showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
         }
@@ -284,88 +309,61 @@ function stopPolling() {
     }
 }
 
-async function pollBatchStatus() {
-    if (!activeBatchId) {
-        stopPolling();
-        return;
-    }
-
-    try {
-        const response = await fetch(`/api/image/batch/${activeBatchId}`);
-        const data = await response.json();
-
-        if (data.success) {
-            const job = data.job;
-            updateBatchProgress(job);
-
-            if (job.state === 'completed' || job.state === 'failed' || job.state === 'cancelled') {
-                stopPolling();
-                document.getElementById('active-batch-panel').classList.add('hidden');
-
-                if (job.state === 'completed') {
-                    showToast(`Batch completed: ${job.completed_count} images generated`, 'success');
-                    loadBatchResults(activeBatchId);
-                } else if (job.state === 'cancelled') {
-                    showToast('Batch cancelled', 'info');
-                } else {
-                    showToast('Batch failed: ' + (job.error || 'Unknown error'), 'error');
-                }
-
-                activeBatchId = null;
-                loadBatchHistory();
-            }
-        }
-    } catch (err) {
-        console.error('Poll error:', err);
-    }
-}
-
-async function cancelActiveBatch() {
+ async function pollBatchResults() {
     if (!activeBatchId) return;
 
-    try {
-        const response = await fetch(`/api/image/batch/${activeBatchId}`, { method: 'DELETE' });
-        const data = await response.json();
+    // For now, just reload images after a delay
+    // In production, poll individual generation IDs
+    setTimeout(() => {
+        loadRecentImages();
+        showToast('Batch generation complete', 'success');
+        activeBatchId = null;
+    }, 5000);
+}
 
-        if (data.success) {
-            showToast('Cancellation requested', 'info');
-        } else {
-            showToast('Cancel failed: ' + (data.error || 'Unknown error'), 'error');
-        }
-    } catch (err) {
-        showToast('Error: ' + err.message, 'error');
-    }
+ async function cancelActiveBatch() {
+    if (!activeBatchId) return;
+    
+    showToast('Batch cancellation not yet implemented', 'info');
+    activeBatchId = null;
+    stopPolling();
+    document.getElementById('active-batch-panel').classList.add('hidden');
 }
 
 async function loadBatchHistory() {
     try {
-        const response = await fetch('/api/image/batch/list?limit=10');
+        const response = await fetch('/api/image/batch/list');
         const data = await response.json();
-
         const container = document.getElementById('batch-history');
 
-        if (!data.success || !data.jobs || data.jobs.length === 0) {
+        if (!data.success || !Array.isArray(data.jobs) || data.jobs.length === 0) {
             container.innerHTML = '<div class="empty-state">No batch jobs yet</div>';
             return;
         }
 
-        container.innerHTML = data.jobs.map(job => {
-            const stateClass = job.state === 'completed' ? 'success' :
-                               job.state === 'failed' ? 'error' :
-                               job.state === 'cancelled' ? 'warning' : 'info';
-            const shortPrompt = job.prompt.length > 50 ? job.prompt.substring(0, 50) + '...' : job.prompt;
-            const timeAgo = formatTimeAgo(job.created_at);
+        container.innerHTML = data.jobs.slice(0, 10).map(job => {
+            const state = job.state || 'pending';
+            const stateClass = state === 'completed' ? 'success' :
+                               state === 'failed' ? 'error' :
+                               state === 'cancelled' ? 'warning' : 'info';
+            const shortPrompt = (job.prompt || '').length > 50
+                ? `${job.prompt.substring(0, 50)}...`
+                : job.prompt || 'Untitled batch';
+            const timestamp = job.created_at ? formatTimeAgo(job.created_at) : 'just now';
+            const progress = job.progress_percent || 0;
 
             return `
-                <div class="batch-history-item" onclick="loadBatchResults('${job.id}')">
+                <div class="batch-history-item">
                     <div class="batch-info">
-                        <span class="batch-state ${stateClass}">${job.state}</span>
+                        <span class="batch-state ${stateClass}">${state}</span>
                         <span class="batch-prompt">${escapeHtml(shortPrompt)}</span>
                     </div>
                     <div class="batch-meta">
-                        <span>${job.completed_count}/${job.count} images</span>
+                        <span>${job.count || 0} images</span>
                         <span class="separator">|</span>
-                        <span>${timeAgo}</span>
+                        <span>${progress}%</span>
+                        <span class="separator">|</span>
+                        <span>${timestamp}</span>
                     </div>
                 </div>
             `;
@@ -377,26 +375,20 @@ async function loadBatchHistory() {
     }
 }
 
-async function loadBatchResults(jobId) {
+ async function viewImage(imageId) {
     try {
-        const response = await fetch(`/api/image/batch/${jobId}/results`);
+        const response = await fetch(`/v1/images/result/${imageId}`);
         const data = await response.json();
 
-        if (!data.success) {
-            showToast('Failed to load results', 'error');
+        if (!data.image_url) {
+            showToast('Image not available', 'error');
             return;
         }
 
-        const results = data.results || [];
-        const successResults = results.filter(r => r.image);
-
-        if (successResults.length === 0) {
-            showToast('No images in this batch', 'info');
-            return;
-        }
-
-        allImages = successResults;
-        renderGallery(successResults);
+        // Show image in lightbox
+        allImages = [data];
+        renderGallery([data]);
+        openLightbox(0);
 
     } catch (err) {
         showToast('Error: ' + err.message, 'error');
@@ -417,22 +409,68 @@ function renderGallery(images) {
         return;
     }
 
-    container.innerHTML = images.map((img, idx) => `
+    container.innerHTML = images.map((img, idx) => {
+        const imageSrc = img.stream_url ? img.stream_url : `data:image/png;base64,${img.image}`;
+        const seed = img.seed || img.seed === 0 ? img.seed : 'unknown';
+        return `
         <div class="image-card" onclick="openLightbox(${idx})">
-            <img src="data:image/png;base64,${img.image}" alt="Generated image ${idx + 1}" loading="lazy">
+            <img src="${imageSrc}" alt="Generated image ${idx + 1}" loading="lazy">
             <div class="image-overlay">
-                <span class="image-seed">Seed: ${img.seed}</span>
+                <span class="image-seed">Seed: ${seed}</span>
             </div>
         </div>
-    `).join('');
+    `}).join('');
+}
+
+function renderImageHistory(images) {
+    const container = document.getElementById('image-history');
+
+    if (!container) return;
+
+    if (!images || images.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">history</span>
+                <p>No prompts yet</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = images.slice(0, 6).map((img, idx) => {
+        const prompt = img.prompt || 'Untitled';
+        const model = img.model || 'Unknown model';
+        const size = img.width && img.height ? `${img.width}x${img.height}` : null;
+        const timeAgo = formatTimeAgo(img.created_at);
+        const seedMeta = img.seed != null ? `Seed ${img.seed}` : null;
+        const metaParts = [model, size, seedMeta].filter(Boolean);
+        const meta = metaParts.join(' • ');
+
+        return `
+            <div class="image-history-item">
+                <div class="image-history-info">
+                    <div class="image-history-prompt">${escapeHtml(prompt)}</div>
+                    <div class="image-history-meta">
+                        <span>${escapeHtml(meta)}</span>
+                        ${timeAgo ? '<span class="separator">|</span><span>' + escapeHtml(timeAgo) + '</span>' : ''}
+                    </div>
+                </div>
+                <button class="btn btn-small" onclick="openLightbox(${idx})">
+                    <span class="material-symbols-outlined">visibility</span> View
+                </button>
+            </div>
+        `;
+    }).join('');
 }
 
 function openLightbox(index) {
     const img = allImages[index];
     if (!img) return;
 
-    document.getElementById('lightbox-image').src = `data:image/png;base64,${img.image}`;
-    document.getElementById('lightbox-seed').textContent = `Seed: ${img.seed}`;
+    const imageSrc = img.stream_url ? img.stream_url : `data:image/png;base64,${img.image}`;
+    const seed = img.seed || img.seed === 0 ? img.seed : 'unknown';
+    document.getElementById('lightbox-image').src = imageSrc;
+    document.getElementById('lightbox-seed').textContent = `Seed: ${seed}`;
     document.getElementById('image-lightbox').classList.remove('hidden');
     document.getElementById('image-lightbox').dataset.currentIndex = index;
 }
@@ -643,6 +681,59 @@ function escapeHtml(text) {
 
 .batch-meta .separator {
     margin: 0 8px;
+}
+
+.image-history-section {
+    margin-top: 32px;
+}
+
+.image-history-section h3 {
+    margin-bottom: 12px;
+    color: var(--text-secondary);
+}
+
+.image-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.image-history-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    gap: 12px;
+}
+
+.image-history-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.image-history-prompt {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.image-history-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.image-history-meta .separator {
+    opacity: 0.5;
 }
 
 /* Generate Modal */

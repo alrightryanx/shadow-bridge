@@ -94,6 +94,10 @@ class ContextWindowService:
         self.data_service = data_service
         self.vector_store = vector_store
 
+        # Resource details cache (LRU)
+        self._resource_cache: Dict[str, Dict] = {}
+        self._cache_order: deque = deque(maxlen=50)
+
         # Activity tracking
         self._activity_history: deque = deque(maxlen=100)
         self._current_focus: Optional[ActivityEvent] = None
@@ -102,6 +106,12 @@ class ContextWindowService:
         self._session_start: datetime = datetime.now()
         self._query_count: int = 0
         self._topics_discussed: List[str] = []
+
+    def preload_context(self, resource_type: str, resource_id: str) -> None:
+        """Pre-load resource details into cache."""
+        # This triggers _get_resource_details which handles caching
+        self._get_resource_details(resource_type, resource_id)
+        logger.debug(f"Preloaded context for {resource_type}:{resource_id}")
 
     def track_activity(
         self,
@@ -260,59 +270,92 @@ class ContextWindowService:
         return context
 
     def _get_resource_details(self, resource_type: str, resource_id: str) -> Optional[Dict]:
-        """Fetch details for a resource."""
+        """Fetch details for a resource (cached)."""
+        cache_key = f"{resource_type}:{resource_id}"
+        
+        # Check cache
+        if cache_key in self._resource_cache:
+            # Refresh LRU position
+            if cache_key in self._cache_order:
+                self._cache_order.remove(cache_key)
+            self._cache_order.append(cache_key)
+            return self._resource_cache[cache_key]
+
         if not self.data_service:
             return None
 
+        result = None
         try:
             if resource_type == 'project':
                 projects = self.data_service.get_projects() or []
                 for p in projects:
                     if str(p.get('id', '')) == str(resource_id) or p.get('path', '') == resource_id:
-                        return {
+                        result = {
                             'type': 'project',
                             'id': p.get('id', p.get('path', '')),
                             'title': p.get('name', 'Unknown Project'),
                             'content': p.get('description', '')
                         }
+                        break
 
             elif resource_type == 'note':
-                notes = self.data_service.get_notes() or []
-                for n in notes:
-                    if str(n.get('id', '')) == str(resource_id):
-                        return {
-                            'type': 'note',
-                            'id': n.get('id', ''),
-                            'title': n.get('title', 'Untitled Note'),
-                            'content': n.get('content', n.get('preview', ''))[:500]
-                        }
+                # Try getting cached content first for speed
+                cached_note = self.data_service.get_cached_note_content(resource_id)
+                if cached_note:
+                     result = {
+                        'type': 'note',
+                        'id': cached_note.get('id', ''),
+                        'title': cached_note.get('title', 'Untitled Note'),
+                        'content': cached_note.get('content', '')[:500]
+                    }
+                else:
+                    notes = self.data_service.get_notes() or []
+                    for n in notes:
+                        if str(n.get('id', '')) == str(resource_id):
+                            result = {
+                                'type': 'note',
+                                'id': n.get('id', ''),
+                                'title': n.get('title', 'Untitled Note'),
+                                'content': n.get('content', n.get('preview', ''))[:500]
+                            }
+                            break
 
             elif resource_type == 'automation':
                 automations = self.data_service.get_automations() or []
                 for a in automations:
                     if str(a.get('id', '')) == str(resource_id):
-                        return {
+                        result = {
                             'type': 'automation',
                             'id': a.get('id', ''),
                             'title': a.get('name', 'Unknown Automation'),
                             'content': a.get('description', '') or a.get('prompt', '')
                         }
+                        break
 
             elif resource_type == 'agent':
                 agents = self.data_service.get_agents() or []
                 for ag in agents:
                     if str(ag.get('id', '')) == str(resource_id):
-                        return {
+                        result = {
                             'type': 'agent',
                             'id': ag.get('id', ''),
                             'title': ag.get('name', 'Unknown Agent'),
                             'content': ag.get('specialty', '') or ag.get('description', '')
                         }
-
+                        break
         except Exception as e:
             logger.warning(f"Failed to get resource details: {e}")
 
-        return None
+        # Update cache if found
+        if result:
+            if len(self._cache_order) >= 50:
+                oldest = self._cache_order.popleft()
+                del self._resource_cache[oldest]
+            
+            self._resource_cache[cache_key] = result
+            self._cache_order.append(cache_key)
+
+        return result
 
     def _build_session_summary(self) -> str:
         """Build a summary of the current session."""

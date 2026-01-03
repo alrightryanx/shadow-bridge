@@ -315,6 +315,44 @@ class PreferenceLearningService:
         self._save_preferences()
         logger.info(f"Learned from feedback: {category}={value} ({'positive' if is_positive else 'negative'})")
 
+    def predict_next_action(
+        self,
+        current_action: str,
+        current_resource: str
+    ) -> Optional[Tuple[str, str, float]]:
+        """
+        Predict the next likely action based on learned sequences.
+
+        Returns:
+            Tuple of (action, resource_type, confidence) or None
+        """
+        current_key = f"{current_action}:{current_resource}"
+
+        # Simple 1-step lookahead from learned sequences
+        # common_sequences is a list of lists: [["view:project", "edit:note"], ...]
+        candidates = []
+        for seq in self.preferences.common_sequences:
+            for i, step in enumerate(seq):
+                if step == current_key and i < len(seq) - 1:
+                    candidates.append(seq[i + 1])
+
+        if not candidates:
+            return None
+
+        # Find most frequent next step
+        from collections import Counter
+        counts = Counter(candidates)
+        most_common, count = counts.most_common(1)[0]
+        
+        confidence = count / len(candidates) if candidates else 0.0
+        
+        # Parse "action:resource" back to components
+        if ":" in most_common:
+            action, resource = most_common.split(":", 1)
+            return (action, resource, confidence)
+            
+        return None
+
     def get_preferences(self) -> UserPreferences:
         """Get current user preferences."""
         return self.preferences

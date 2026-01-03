@@ -161,6 +161,7 @@ def main():
                 steps=steps,
                 guidance_scale=guidance,
                 seed=args.seed,
+                source="cli",
             )
             print_json(result)
 

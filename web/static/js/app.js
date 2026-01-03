@@ -41,6 +41,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeof marked !== 'undefined') {
         marked.setOptions({ breaks: true });
     }
+
+    updateConnectionStatus();
 });
 
 // ============ Toast Notification System ============
@@ -173,6 +175,7 @@ async function updateStatus() {
 
     // Update sidebar counts
     await updateSidebarCounts();
+    updateConnectionStatus();
 }
 
 async function updateSidebarCounts() {

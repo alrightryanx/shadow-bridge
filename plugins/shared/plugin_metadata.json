@@ -1,0 +1,55 @@
+{
+  "version": "1.0.0",
+  "schema": "plugin-manifest",
+  "platforms": {
+    "claude": {
+      "name": "Claude Code",
+      "provider_name": "claude-code",
+      "backend_type": "SSH_CLAUDE_CODE",
+      "hooks_system": "production",
+      "migration_support": false,
+      "event_types": ["SessionStart", "SessionEnd", "PermissionRequest", "Notification", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"],
+      "tool_events": true,
+      "script_language": "PowerShell",
+      "install_method": "local_directory",
+      "compatibility": "full"
+    },
+    "gemini": {
+      "name": "Gemini CLI",
+      "provider_name": "gemini-cli",
+      "backend_type": "SSH_GEMINI_CLI",
+      "hooks_system": "production",
+      "migration_support": true,
+      "migration_command": "gemini hooks migrate --from-claude",
+      "event_types": ["SessionStart", "SessionEnd", "BeforeAgent", "AfterAgent", "BeforeModel", "AfterModel", "BeforeTool", "AfterTool"],
+      "tool_events": true,
+      "script_language": "Bash",
+      "install_method": "hooks_install",
+      "compatibility": "full"
+    },
+    "cursor": {
+      "name": "Cursor IDE",
+      "provider_name": "cursor-ide",
+      "backend_type": "SSH_CURSOR",
+      "hooks_system": "beta",
+      "migration_support": false,
+      "event_types": ["beforeShellExecution", "afterFileEdit", "stop"],
+      "tool_events": true,
+      "script_language": "Bash",
+      "install_method": "cursor_settings",
+      "compatibility": "partial"
+    },
+    "codex": {
+      "name": "OpenAI Codex",
+      "provider_name": "codex-cli",
+      "backend_type": "SSH_CODEX",
+      "hooks_system": "none",
+      "migration_support": false,
+      "event_types": ["ThreadStarted", "TurnCompleted"],
+      "tool_events": false,
+      "script_language": "TypeScript (SDK)",
+      "install_method": "sdk_wrapper",
+      "compatibility": "limited"
+    }
+  }
+}

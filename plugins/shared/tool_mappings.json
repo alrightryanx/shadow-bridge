@@ -1,0 +1,47 @@
+{
+  "claude_to_gemini": {
+    "Bash": "run_shell_command",
+    "Edit": "replace",
+    "Read": "read_file",
+    "Write": "write_file",
+    "Glob": "glob",
+    "Grep": "search_file_content",
+    "LS": "list_directory"
+  },
+  "claude_to_cursor": {
+    "Bash": "shell",
+    "Edit": "edit",
+    "Read": "read",
+    "Write": "write",
+    "Glob": "glob",
+    "Grep": "grep",
+    "LS": "ls"
+  },
+  "claude_to_codex": {
+    "Bash": null,
+    "Edit": null,
+    "Read": null,
+    "Write": null,
+    "Glob": null,
+    "Grep": null,
+    "LS": null
+  },
+  "gemini_to_claude": {
+    "run_shell_command": "Bash",
+    "replace": "Edit",
+    "read_file": "Read",
+    "write_file": "Write",
+    "glob": "Glob",
+    "search_file_content": "Grep",
+    "list_directory": "LS"
+  },
+  "cursor_to_claude": {
+    "shell": "Bash",
+    "edit": "Edit",
+    "read": "Read",
+    "write": "Write",
+    "glob": "Glob",
+    "grep": "Grep",
+    "ls": "LS"
+  }
+}

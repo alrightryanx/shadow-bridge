@@ -108,9 +108,11 @@ def create_app():
     # Register blueprints
     from .routes.api import api_bp
     from .routes.video import video_bp
+    from .routes.audio import audio_bp
 
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(video_bp, url_prefix="/video")
+    app.register_blueprint(audio_bp, url_prefix="/audio")
 
     # SECURITY: Add security headers to all responses
     @app.after_request
@@ -156,6 +158,14 @@ def create_app():
     def images():
         return render_template("images.html")
 
+    @app.route("/audio")
+    def audio():
+        return render_template("audio.html")
+
+    @app.route("/video")
+    def video():
+        return render_template("video.html")
+
     @app.route("/automations")
     def automations():
         return render_template("automations.html")
@@ -175,6 +185,10 @@ def create_app():
     @app.route("/audits")
     def audits():
         return render_template("audits.html")
+
+    @app.route("/reasoning/<audit_id>")
+    def reasoning(audit_id):
+        return render_template("reasoning.html", audit_id=audit_id)
 
     @app.route("/settings")
     def settings():

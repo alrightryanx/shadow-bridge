@@ -147,6 +147,41 @@ class Capability:
         )
 
 
+@dataclass
+class EvolvedCapability:
+    """A capability learned by an agent through experience."""
+    id: str
+    source_task_id: str
+    capability: Capability
+    pattern: Dict[str, Any]  # Sequence of steps/tools
+    usage_count: int = 0
+    success_rate: float = 1.0
+    created_at: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> Dict:
+        return {
+            'id': self.id,
+            'source_task_id': self.source_task_id,
+            'capability': self.capability.to_dict(),
+            'pattern': self.pattern,
+            'usage_count': self.usage_count,
+            'success_rate': self.success_rate,
+            'created_at': self.created_at.isoformat()
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'EvolvedCapability':
+        return cls(
+            id=data['id'],
+            source_task_id=data['source_task_id'],
+            capability=Capability.from_dict(data['capability']),
+            pattern=data['pattern'],
+            usage_count=data.get('usage_count', 0),
+            success_rate=data.get('success_rate', 1.0),
+            created_at=datetime.fromisoformat(data['created_at'])
+        )
+
+
 # ============ Agent Descriptor ============
 
 @dataclass
@@ -156,6 +191,7 @@ class AgentDescriptor:
     name: str
     agent_type: str  # SENIOR_DEVELOPER, TESTER, etc.
     capabilities: List[Capability]
+    evolved_capabilities: List[EvolvedCapability] = field(default_factory=list)
     max_concurrent_tasks: int = 1
     cost_per_token: float = 0.0
     average_response_time_ms: int = 1000
@@ -168,6 +204,7 @@ class AgentDescriptor:
             'name': self.name,
             'agent_type': self.agent_type,
             'capabilities': [c.to_dict() for c in self.capabilities],
+            'evolved_capabilities': [ec.to_dict() for ec in self.evolved_capabilities],
             'max_concurrent_tasks': self.max_concurrent_tasks,
             'cost_per_token': self.cost_per_token,
             'average_response_time_ms': self.average_response_time_ms,
@@ -182,6 +219,7 @@ class AgentDescriptor:
             name=data['name'],
             agent_type=data['agent_type'],
             capabilities=[Capability.from_dict(c) for c in data.get('capabilities', [])],
+            evolved_capabilities=[EvolvedCapability.from_dict(ec) for ec in data.get('evolved_capabilities', [])],
             max_concurrent_tasks=data.get('max_concurrent_tasks', 1),
             cost_per_token=data.get('cost_per_token', 0.0),
             average_response_time_ms=data.get('average_response_time_ms', 1000),

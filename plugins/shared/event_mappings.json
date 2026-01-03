@@ -1,0 +1,42 @@
+{
+  "claude": {
+    "SessionStart": "SessionStart",
+    "SessionEnd": "SessionEnd",
+    "PermissionRequest": "PermissionRequest",
+    "Notification": "Notification",
+    "UserPromptSubmit": "UserPromptSubmit",
+    "PreToolUse": "BeforeTool",
+    "PostToolUse": "AfterTool",
+    "Stop": "AfterAgent"
+  },
+  "gemini": {
+    "SessionStart": "SessionStart",
+    "SessionEnd": "SessionEnd",
+    "PermissionRequest": "BeforeTool",
+    "Notification": "Notification",
+    "UserPromptSubmit": "BeforeAgent",
+    "PreToolUse": "BeforeTool",
+    "PostToolUse": "AfterTool",
+    "Stop": "AfterAgent"
+  },
+  "cursor": {
+    "SessionStart": null,
+    "SessionEnd": "stop",
+    "PermissionRequest": "beforeShellExecution",
+    "Notification": null,
+    "UserPromptSubmit": null,
+    "PreToolUse": "beforeShellExecution",
+    "PostToolUse": "afterFileEdit",
+    "Stop": "stop"
+  },
+  "codex": {
+    "SessionStart": "ThreadStarted",
+    "SessionEnd": "TurnCompleted",
+    "PermissionRequest": null,
+    "Notification": null,
+    "UserPromptSubmit": null,
+    "PreToolUse": null,
+    "PostToolUse": null,
+    "Stop": "TurnCompleted"
+  }
+}

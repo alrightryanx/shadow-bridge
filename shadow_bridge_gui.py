@@ -30,6 +30,7 @@ import webbrowser
 import logging
 import tempfile
 import ctypes
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 from pathlib import Path
@@ -52,6 +53,7 @@ except ImportError:
 # Check for command modes
 IMAGE_MODE = len(sys.argv) > 1 and sys.argv[1] == "image"
 VIDEO_MODE = len(sys.argv) > 1 and sys.argv[1] == "video"
+AUDIO_MODE = len(sys.argv) > 1 and sys.argv[1] == "audio"
 WEB_SERVER_MODE = "--web-server" in sys.argv
 
 
@@ -189,6 +191,7 @@ def run_image_command():
                 steps=steps,
                 guidance_scale=guidance,
                 seed=args.seed,
+                source="cli",
             )
             print_json(result)
 
@@ -287,6 +290,282 @@ def run_image_command():
         sys.exit(1)
 
 
+def run_video_command():
+    """Handle video generation commands via CLI.
+
+    Usage:
+        ShadowBridge.exe video generate "A cat dancing in the rain"
+        ShadowBridge.exe video generate --prompt_b64 <base64>
+        ShadowBridge.exe video status
+        ShadowBridge.exe video install hunyuan-15
+        ShadowBridge.exe video list-models
+    """
+    import argparse
+
+    def print_json(data):
+        """Print JSON with strict markers to avoid parsing issues."""
+        print("<<<VIDEO_JSON_START>>>")
+        print(json.dumps(data))
+        print("<<<VIDEO_JSON_END>>>")
+
+    # Remove "video" from argv for argparse
+    argv = sys.argv[2:]  # Skip program name and "video"
+
+    parser = argparse.ArgumentParser(
+        description="Generate videos using local AI models"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Generate command
+    gen_parser = subparsers.add_parser("generate", help="Generate a video")
+    gen_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Text prompt for video generation",
+    )
+    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
+    gen_parser.add_argument(
+        "--model",
+        default="hunyuan-15",
+        choices=["hunyuan-15", "wan-21", "ltx-video"],
+        help="Model to use (default: hunyuan-15)",
+    )
+    gen_parser.add_argument(
+        "--duration",
+        type=int,
+        default=10,
+        help="Video duration in seconds (default: 10)",
+    )
+    gen_parser.add_argument(
+        "--aspect_ratio",
+        default="16:9",
+        choices=["16:9", "9:16", "1:1"],
+        help="Video aspect ratio (default: 16:9)",
+    )
+    gen_parser.add_argument(
+        "--negative",
+        type=str,
+        default=None,
+        help="Negative prompt",
+    )
+    gen_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for reproducibility",
+    )
+
+    # Install command
+    install_parser = subparsers.add_parser("install", help="Install a video model")
+    install_parser.add_argument(
+        "model",
+        choices=["hunyuan-15", "wan-21", "ltx-video"],
+        help="Model to install",
+    )
+
+    # Status command
+    status_parser = subparsers.add_parser("status", help="Check video generation status")
+    status_parser.add_argument("--model", help="Check specific model status")
+
+    # List models command
+    subparsers.add_parser("list-models", help="List available video models")
+
+    args = parser.parse_args(argv)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        if args.command == "generate":
+            # Import video generation functions
+            from web.routes.video import (
+                generate_video_local,
+                MODELS,
+                is_model_installed,
+                _load_generations,
+                _save_generations,
+            )
+
+            # Handle prompt input
+            prompt = args.prompt
+            if args.prompt_b64:
+                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
+
+            if not prompt:
+                print_json({"success": False, "error": "No prompt provided"})
+                sys.exit(1)
+
+            # Validate model
+            if args.model not in MODELS:
+                print_json({"success": False, "error": f"Unknown model: {args.model}"})
+                sys.exit(1)
+
+            # Check if model is installed
+            if not is_model_installed(args.model):
+                print_json({
+                    "success": False,
+                    "error": f"Model {args.model} is not installed. Run 'video install {args.model}' first."
+                })
+                sys.exit(1)
+
+            generation_id = f"gen_{int(time.time() * 1000)}"
+            generations = _load_generations() or {"generations": []}
+            generations.setdefault("generations", []).append(
+                {
+                    "id": generation_id,
+                    "prompt": prompt,
+                    "mode": "free",
+                    "model": args.model,
+                    "input_type": "text",
+                    "status": "pending",
+                    "progress": 0,
+                    "created_at": datetime.now().isoformat(),
+                    "video_path": None,
+                }
+            )
+            _save_generations(generations)
+
+            # Progress callback function
+            def progress_callback(progress_data):
+                print_json({
+                    "type": "progress",
+                    "status": progress_data.get("status", "Unknown"),
+                    "message": progress_data.get("message", ""),
+                    "progress": progress_data.get("progress", 0)
+                })
+
+                updates = {
+                    "status": "running",
+                    "progress": progress_data.get("progress", 0),
+                    "message": progress_data.get("message", ""),
+                }
+                generations = _load_generations()
+                if generations and "generations" in generations:
+                    for gen in generations["generations"]:
+                        if gen.get("id") == generation_id:
+                            gen.update(updates)
+                            break
+                    _save_generations(generations)
+
+            # Prepare generation options
+            options = {
+                "prompt": prompt,
+                "model": args.model,
+                "duration": args.duration,
+                "aspect_ratio": args.aspect_ratio,
+                "negative_prompt": args.negative,
+                "seed": args.seed
+            }
+
+            # Generate video
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                result = loop.run_until_complete(generate_video_local(options, progress_callback))
+                generations = _load_generations()
+                if generations and "generations" in generations:
+                    for gen in generations["generations"]:
+                        if gen.get("id") == generation_id:
+                            gen["status"] = "completed" if result.get("success") else "failed"
+                            gen["video_url"] = result.get("videoUrl")
+                            gen["video_path"] = result.get("videoPath")
+                            gen["duration"] = result.get("duration")
+                            gen["cost"] = 0
+                            gen["error"] = result.get("error")
+                            gen["completed_at"] = datetime.now().isoformat() if result.get("success") else None
+                            break
+                    _save_generations(generations)
+                print_json(result)
+            finally:
+                loop.close()
+
+        elif args.command == "install":
+            from web.routes.video import (
+                install_model,
+                MODELS
+            )
+
+            if args.model not in MODELS:
+                print_json({"success": False, "error": f"Unknown model: {args.model}"})
+                sys.exit(1)
+
+            # Progress callback for installation
+            def install_progress_callback(progress_data):
+                print_json({
+                    "type": "install_progress",
+                    "status": progress_data.get("status", "Installing"),
+                    "message": progress_data.get("message", ""),
+                    "progress": progress_data.get("progress", 0)
+                })
+
+            # Install model
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                result = loop.run_until_complete(install_model(args.model, install_progress_callback))
+                print_json(result)
+            finally:
+                loop.close()
+
+        elif args.command == "status":
+            from web.routes.video import (
+                MODELS,
+                is_model_installed,
+                _load_generations
+            )
+
+            status_data = {
+                "models": {},
+                "total_generations": 0,
+                "recent_generations": []
+            }
+
+            # Check each model
+            for model_key, model_info in MODELS.items():
+                model_status = {
+                    "name": model_info["name"],
+                    "installed": is_model_installed(model_key),
+                    "path": model_info["path"]
+                }
+                status_data["models"][model_key] = model_status
+
+            # Load generation statistics
+            generations_data = _load_generations()
+            all_generations = generations_data.get("generations", [])
+            
+            status_data["total_generations"] = len(all_generations)
+            
+            # Get recent generations (last 10)
+            recent = sorted(all_generations, key=lambda x: x.get("created_at", ""), reverse=True)[:10]
+            status_data["recent_generations"] = recent
+
+            print_json(status_data)
+
+        elif args.command == "list-models":
+            from web.routes.video import MODELS, is_model_installed
+
+            models_data = []
+            for model_key, model_info in MODELS.items():
+                models_data.append({
+                    "id": model_key,
+                    "name": model_info["name"],
+                    "installed": is_model_installed(model_key),
+                    "repo": model_info["repo"],
+                    "description": model_info.get("description", "")
+                })
+
+            print_json({"models": models_data})
+
+    except Exception as e:
+        print_json({"success": False, "error": str(e)})
+        sys.exit(1)
+
+
 def is_admin():
     """Check if running with administrator privileges."""
     if platform.system() != "Windows":
@@ -379,7 +658,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.026"
+APP_VERSION = "1.027"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -3509,6 +3788,7 @@ class ShadowBridgeApp:
         self.data_receiver = None
         self.companion_relay = None
         self.web_process = None
+        self.web_server_thread = None
         self.tray_icon = None
         self.selected_device_id = "__ALL__"  # '__ALL__' or a device_id
         self.devices = load_projects_state().get(
@@ -3520,6 +3800,8 @@ class ShadowBridgeApp:
         self.selected_notes_device_id = "__ALL__"
         self._device_menu_updating = False
         self._tool_poll_job = None
+
+        self._auto_web_dashboard_attempts = 0
 
         # Setup modern styles
         self.setup_styles()
@@ -3543,7 +3825,6 @@ class ShadowBridgeApp:
         self.root.after(100, self.update_qr_code)
         self.root.after(200, self.update_status)
         self.root.after(500, self.auto_start_broadcast)
-        # Web dashboard is NOT auto-started - user must explicitly open it
         self.root.after(2000, self.check_for_updates_on_startup)
 
     def setup_styles(self):
@@ -4076,6 +4357,9 @@ class ShadowBridgeApp:
             "<Leave>", lambda e: help_link.configure(fg=COLORS["accent_light"])
         )
 
+        # Auto-start web dashboard server so users don't have to click the button
+        self.auto_start_web_dashboard()
+
         # Start periodic web server status check
         self.root.after(1000, self.check_web_server_status)
 
@@ -4574,39 +4858,21 @@ class ShadowBridgeApp:
             cmd.append("--no-browser")
         return cmd
 
-    def auto_start_web_dashboard(self):
-        """Auto-start web dashboard server (without opening browser)."""
-        try:
-            import urllib.request
+    def _launch_web_server_process(self, tools_dir: str):
+        """Start the web dashboard subprocess and keep it detached."""
+        cmd = self._get_web_server_command(open_browser=False)
+        web_log = open(WEB_LOG_FILE, "a", encoding="utf-8", errors="replace")
 
-            urllib.request.urlopen("http://127.0.0.1:6767", timeout=1)
-            # Already running
-            return
-        except (urllib.error.URLError, OSError, TimeoutError):
-            pass  # Server not running, we'll start it
-
-        # Start the server silently
-        try:
-            tools_dir = self._get_tools_dir()
-            if not getattr(sys, "frozen", False):
-                web_folder = os.path.join(tools_dir, "web")
-                if not os.path.exists(web_folder):
-                    log.warning("Web dashboard folder not found, skipping auto-start")
-                    return
-
-            # Launch as detached process
+        if IS_WINDOWS:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0
-            # Use DETACHED_PROCESS to fully separate from parent
             creation_flags = (
                 subprocess.CREATE_NO_WINDOW
                 | subprocess.DETACHED_PROCESS
                 | subprocess.CREATE_NEW_PROCESS_GROUP
             )
-            cmd = self._get_web_server_command(open_browser=False)
-            web_log = open(WEB_LOG_FILE, "a", encoding="utf-8", errors="replace")
-            self.web_process = subprocess.Popen(
+            process = subprocess.Popen(
                 cmd,
                 cwd=tools_dir,
                 startupinfo=startupinfo,
@@ -4616,10 +4882,138 @@ class ShadowBridgeApp:
                 stderr=web_log,
                 close_fds=True,
             )
-            web_log.close()
-            log.info(f"Web dashboard auto-started (PID: {self.web_process.pid})")
-        except Exception as e:
-            log.error(f"Failed to auto-start web dashboard: {e}")
+        else:
+            process = subprocess.Popen(
+                cmd, cwd=tools_dir, stdout=web_log, stderr=web_log
+            )
+
+        web_log.close()
+        self.web_process = process
+        log.info(f"Web dashboard started (PID: {process.pid})")
+        return process
+
+    def _is_web_server_process_alive(self) -> bool:
+        proc = getattr(self, "web_process", None)
+        return proc is not None and proc.poll() is None
+
+    def _is_web_server_thread_alive(self) -> bool:
+        thread = getattr(self, "web_server_thread", None)
+        return thread is not None and thread.is_alive()
+
+    def _start_web_server_thread(self, open_browser: bool, show_errors: bool) -> bool:
+        if self._is_web_server_thread_alive():
+            return True
+
+        def run_server():
+            try:
+                run_web_dashboard_server(open_browser=open_browser)
+            except Exception as exc:
+                log.error(f"Threaded web dashboard failed: {exc}")
+                if show_errors:
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Web Dashboard Error",
+                            f"Failed to launch web dashboard:\n{exc}",
+                        ),
+                    )
+
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
+        self.web_server_thread = thread
+        return True
+
+    def _monitor_web_server_and_open(self, url: str, show_errors: bool):
+        """Poll the web server until available and optionally open browser."""
+        def monitor():
+            time.sleep(1.5)
+            attempts = 0
+            while attempts < 4:
+                try:
+                    import urllib.request
+                    urllib.request.urlopen(url, timeout=3)
+                    webbrowser.open(url)
+                    return
+                except Exception as exc:
+                    log.warning(f"Waiting for web dashboard: {exc}")
+                    attempts += 1
+                    time.sleep(1.5)
+
+            log.error("Web dashboard failed to start")
+            if show_errors:
+                self.root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Web Dashboard Error",
+                        "Web server failed to start. Check if port 6767 is available.",
+                    ),
+                )
+
+        threading.Thread(target=monitor, daemon=True).start()
+
+    def _start_web_dashboard_process(self, open_browser: bool, show_errors: bool) -> bool:
+        """Ensure the web dashboard server is running; optionally open browser."""
+        web_port = 6767
+        web_url = f"http://127.0.0.1:{web_port}"
+
+        try:
+            import urllib.request
+            import urllib.error
+
+            urllib.request.urlopen(web_url, timeout=1)
+            if open_browser:
+                webbrowser.open(web_url)
+            return True
+        except Exception:
+            pass
+
+        if self._is_web_server_process_alive() or self._is_web_server_thread_alive():
+            if open_browser:
+                self._monitor_web_server_and_open(web_url, show_errors)
+            return True
+
+        try:
+            tools_dir = self._get_tools_dir()
+            if not getattr(sys, "frozen", False):
+                web_folder = os.path.join(tools_dir, "web")
+                if not os.path.exists(web_folder):
+                    msg = (
+                        f"Web dashboard folder not found.\n\n"
+                        f"Expected at:\n{web_folder}"
+                    )
+                    log.warning(msg)
+                    if show_errors:
+                        messagebox.showerror("Web Dashboard Missing", msg)
+                    return False
+
+            self._launch_web_server_process(tools_dir)
+            if open_browser:
+                self._monitor_web_server_and_open(web_url, show_errors)
+            return True
+        except Exception as exc:
+            log.error(f"Failed to start web dashboard: {exc}")
+            if show_errors:
+                messagebox.showerror("Error", f"Failed to launch web dashboard:\n{exc}")
+            if self._start_web_server_thread(open_browser=open_browser, show_errors=show_errors):
+                if open_browser:
+                    self._monitor_web_server_and_open(web_url, show_errors)
+                return True
+            return False
+
+    def auto_start_web_dashboard(self):
+        """Auto-start web dashboard server (without opening browser)."""
+        self._auto_web_dashboard_attempts = 0
+        self._attempt_auto_start_web_dashboard()
+
+    def _attempt_auto_start_web_dashboard(self):
+        if self._start_web_dashboard_process(open_browser=False, show_errors=False):
+            return
+
+        self._auto_web_dashboard_attempts += 1
+        if self._auto_web_dashboard_attempts < 3:
+            self.root.after(5000, self._attempt_auto_start_web_dashboard)
+        else:
+            log.warning("Auto-start web dashboard exceeded retry limit.")
 
     def toggle_broadcast(self):
         """Toggle broadcasting."""
@@ -4630,102 +5024,7 @@ class ShadowBridgeApp:
 
     def launch_web_dashboard(self):
         """Launch the web dashboard in browser."""
-        web_port = 6767
-        web_url = f"http://127.0.0.1:{web_port}"
-
-        # Check if server is already running
-        try:
-            import urllib.request
-
-            urllib.request.urlopen(web_url, timeout=1)
-            # Server is running, just open browser
-            webbrowser.open(web_url)
-            return
-        except (urllib.error.URLError, OSError, TimeoutError):
-            pass  # Server not running, we'll start it
-
-        # Start the web server
-        try:
-            tools_dir = self._get_tools_dir()
-            if not getattr(sys, "frozen", False):
-                web_folder = os.path.join(tools_dir, "web")
-                if not os.path.exists(web_folder):
-                    messagebox.showerror(
-                        "Web Dashboard Missing",
-                        f"Web dashboard folder not found.\n\n"
-                        f"Expected at:\n{web_folder}",
-                    )
-                    return
-
-            # Launch web server in background
-            if IS_WINDOWS:
-                # Use CREATE_NO_WINDOW + DETACHED_PROCESS to fully hide console
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = 0  # SW_HIDE
-                creation_flags = (
-                    subprocess.CREATE_NO_WINDOW
-                    | subprocess.DETACHED_PROCESS
-                    | subprocess.CREATE_NEW_PROCESS_GROUP
-                )
-                cmd = self._get_web_server_command(open_browser=False)
-                web_log = open(WEB_LOG_FILE, "a", encoding="utf-8", errors="replace")
-                self.web_process = subprocess.Popen(
-                    cmd,
-                    cwd=tools_dir,
-                    startupinfo=startupinfo,
-                    creationflags=creation_flags,
-                    stdin=subprocess.DEVNULL,
-                    stdout=web_log,
-                    stderr=web_log,
-                    close_fds=True,
-                )
-                web_log.close()
-            else:
-                cmd = self._get_web_server_command(open_browser=False)
-                web_log = open(WEB_LOG_FILE, "a", encoding="utf-8", errors="replace")
-                self.web_process = subprocess.Popen(
-                    cmd, cwd=tools_dir, stdout=web_log, stderr=web_log
-                )
-                web_log.close()
-
-            log.info(f"Web dashboard started (PID: {self.web_process.pid})")
-
-            # Monitor and open browser when server is ready
-            def monitor_and_open():
-                time.sleep(1.5)
-                # Check if server is responding (more reliable than process check with DETACHED)
-                try:
-                    import urllib.request
-
-                    urllib.request.urlopen("http://127.0.0.1:6767", timeout=3)
-                    # Server is running, open browser
-                    webbrowser.open(web_url)
-                except Exception as e:
-                    log.warning(f"Web server not responding yet: {e}")
-                    # Wait a bit more and try again
-                    time.sleep(2)
-                    try:
-                        urllib.request.urlopen("http://127.0.0.1:6767", timeout=3)
-                        webbrowser.open(web_url)
-                    except (urllib.error.URLError, OSError, TimeoutError):
-                        log.error("Web dashboard failed to start")
-                        self.root.after(
-                            0,
-                            lambda: messagebox.showerror(
-                                "Web Dashboard Error",
-                                "Web server failed to start. Check if port 6767 is available.",
-                            ),
-                        )
-
-            threading.Thread(target=monitor_and_open, daemon=True).start()
-
-        except Exception as e:
-            log.error(f"Failed to launch web dashboard: {e}")
-            import traceback
-
-            log.error(traceback.format_exc())
-            messagebox.showerror("Error", f"Failed to launch web dashboard:\n{e}")
+        self._start_web_dashboard_process(open_browser=True, show_errors=True)
 
     def check_web_server_status(self):
         """Check if web dashboard server is running and update status indicator."""
@@ -6573,6 +6872,171 @@ def run_web_dashboard_server(open_browser: bool):
         raise
 
 
+def run_audio_command():
+    """Handle audio generation commands via CLI.
+
+    Usage:
+        ShadowBridge.exe audio generate "A mellow lo-fi track"
+        ShadowBridge.exe audio generate --prompt_b64 <base64>
+        ShadowBridge.exe audio status
+        ShadowBridge.exe audio setup
+        ShadowBridge.exe audio list-models
+    """
+    import argparse
+
+    def print_json(data):
+        """Print JSON with strict markers to avoid parsing issues."""
+        print("<<<AUDIO_JSON_START>>>")
+        print(json.dumps(data))
+        print("<<<AUDIO_JSON_END>>>")
+
+    argv = sys.argv[2:]
+
+    parser = argparse.ArgumentParser(
+        description="Generate audio using local AI models"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    gen_parser = subparsers.add_parser("generate", help="Generate audio")
+    gen_parser.add_argument("prompt", nargs="?", help="Text prompt for audio generation")
+    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
+    gen_parser.add_argument(
+        "--mode",
+        default="music",
+        choices=["music", "sfx"],
+        help="Audio mode (music or sfx)",
+    )
+    gen_parser.add_argument(
+        "--model",
+        default="musicgen-small",
+        help="Model ID (default: musicgen-small)",
+    )
+    gen_parser.add_argument("--duration", type=float, default=8, help="Duration in seconds")
+    gen_parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature")
+    gen_parser.add_argument("--top_k", type=int, default=250, help="Top-k sampling")
+    gen_parser.add_argument("--top_p", type=float, default=0.0, help="Top-p sampling")
+    gen_parser.add_argument("--seed", type=int, default=None, help="Seed for reproducibility")
+
+    subparsers.add_parser("status", help="Check audio service status")
+    subparsers.add_parser("setup", help="Install audio dependencies")
+    subparsers.add_parser("list-models", help="List available models")
+
+    args = parser.parse_args(argv)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        if args.command == "generate":
+            from web.routes.audio import _load_generations, _save_generations
+            from web.services.audio_service import get_audio_generation_service
+
+            prompt = args.prompt
+            if args.prompt_b64:
+                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
+
+            if not prompt:
+                print_json({"success": False, "error": "No prompt provided"})
+                sys.exit(1)
+
+            generation_id = f"aud_{int(time.time() * 1000)}"
+            generations = _load_generations() or {"generations": []}
+            generations.setdefault("generations", []).append(
+                {
+                    "id": generation_id,
+                    "prompt": prompt,
+                    "mode": args.mode,
+                    "model": args.model,
+                    "duration": args.duration,
+                    "status": "pending",
+                    "progress": 0,
+                    "created_at": datetime.now().isoformat(),
+                    "audio_path": None,
+                }
+            )
+            _save_generations(generations)
+
+            def update_generation(updates):
+                generations = _load_generations()
+                if generations and "generations" in generations:
+                    for gen in generations["generations"]:
+                        if gen.get("id") == generation_id:
+                            gen.update(updates)
+                            break
+                    _save_generations(generations)
+
+            update_generation({"status": "running", "progress": 20})
+
+            service = get_audio_generation_service()
+            result = service.generate_audio(
+                prompt=prompt,
+                duration_seconds=args.duration,
+                model_id=args.model,
+                mode=args.mode,
+                output_name=generation_id,
+                seed=args.seed,
+                temperature=args.temperature,
+                top_k=args.top_k,
+                top_p=args.top_p,
+            )
+
+            if result.success:
+                update_generation(
+                    {
+                        "status": "completed",
+                        "progress": 100,
+                        "audio_path": result.audio_path,
+                        "duration": result.duration_seconds,
+                        "sample_rate": result.sample_rate,
+                        "completed_at": datetime.now().isoformat(),
+                    }
+                )
+            else:
+                update_generation(
+                    {
+                        "status": "failed",
+                        "progress": 100,
+                        "error": result.error,
+                    }
+                )
+
+            payload = result.to_dict()
+            payload["generation_id"] = generation_id
+            print_json(payload)
+
+        elif args.command == "status":
+            from web.routes.audio import _load_generations
+            from web.services.audio_service import get_audio_service_status, get_audio_setup_status
+
+            generations = _load_generations()
+            all_generations = generations.get("generations", [])
+            recent = sorted(all_generations, key=lambda x: x.get("created_at", ""), reverse=True)[:10]
+
+            print_json(
+                {
+                    "service": get_audio_service_status(),
+                    "setup": get_audio_setup_status(),
+                    "total_generations": len(all_generations),
+                    "recent_generations": recent,
+                }
+            )
+
+        elif args.command == "setup":
+            from web.services.audio_service import start_audio_setup
+
+            print_json(start_audio_setup())
+
+        elif args.command == "list-models":
+            from web.services.audio_service import DEFAULT_MODELS
+
+            print_json({"models": DEFAULT_MODELS})
+
+    except Exception as e:
+        print_json({"success": False, "error": str(e)})
+        sys.exit(1)
+
+
 def main():
     """Main entry point."""
     # Handle command modes (no GUI, just CLI)
@@ -6582,6 +7046,10 @@ def main():
 
     if VIDEO_MODE:
         run_video_command()
+        return
+
+    if AUDIO_MODE:
+        run_audio_command()
         return
 
     if WEB_SERVER_MODE:

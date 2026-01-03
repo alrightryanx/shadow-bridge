@@ -291,7 +291,12 @@ async function showAuditDetail(id) {
 
             ${traces && traces.length > 0 ? `
             <div class="detail-section">
-                <h3>AI Decision Trace</h3>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h3 style="margin:0">AI Decision Trace</h3>
+                    <a href="/reasoning/${entry.id}" target="_blank" class="btn btn-primary btn-small" style="display:flex; align-items:center; gap:5px;">
+                        <span class="material-symbols-outlined" style="font-size:16px">account_tree</span> Explorer
+                    </a>
+                </div>
                 ${traces.map(trace => `
                     <div class="trace-card">
                         <div class="trace-row">
