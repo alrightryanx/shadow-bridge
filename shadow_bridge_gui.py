@@ -141,7 +141,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.023"
+APP_VERSION = "1.024"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -156,6 +156,7 @@ def register_install_path():
     """
     Write the ShadowBridge install directory to a known location.
     This allows the Android app to find us via SSH for image generation.
+    Also copies shadow_image_cli.py to the install directory if running as exe.
     """
     try:
         # Get the directory where this script/exe is located
@@ -174,6 +175,23 @@ def register_install_path():
             f.write(install_dir)
 
         log.info(f"Registered install path: {install_dir}")
+
+        # Copy shadow_image_cli.py to install directory if it doesn't exist there
+        # This is needed when running as frozen exe (dist folder)
+        cli_script = os.path.join(install_dir, 'shadow_image_cli.py')
+        if not os.path.exists(cli_script):
+            # Try to find it in common locations
+            source_locations = [
+                os.path.join(os.path.dirname(install_dir), 'shadow_image_cli.py'),  # Parent dir (for dist/)
+                os.path.join(install_dir, '..', 'shadow_image_cli.py'),
+                r'C:\shadow\shadow-bridge\shadow_image_cli.py',  # Hardcoded fallback
+            ]
+            for source in source_locations:
+                if os.path.exists(source):
+                    import shutil
+                    shutil.copy2(source, cli_script)
+                    log.info(f"Copied shadow_image_cli.py to {install_dir}")
+                    break
     except Exception as e:
         log.warning(f"Failed to register install path: {e}")
 
