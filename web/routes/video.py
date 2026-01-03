@@ -360,11 +360,9 @@ def api_generate():
             }), 501
         
         # Free mode - local generation
-        loop = asyncio.new_event_loop()
-        
-        async def run_generation():
+        def run_generation():
             try:
-                result = await generate_video_local({
+                result = generate_video_local({
                     'prompt': prompt,
                     'model': model,
                     'input_type': input_type,
@@ -404,7 +402,7 @@ def api_generate():
                     'error': f"Video generation failed: {str(e)}"
                 }), 500
         
-        return loop.run_until_complete(run_generation())
+        return run_generation()
         
     except Exception as e:
         logger.error(f"Generate video error: {e}")
