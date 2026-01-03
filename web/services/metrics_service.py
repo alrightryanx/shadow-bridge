@@ -53,7 +53,7 @@ class MetricsService:
         except Exception as e:
             return {"available": False, "error": str(e)}
 
-    def record_generation(self, model: str, duration_ms: float, success: bool, error: str = None):
+    def _load_metrics(self):
         """Load metrics from disk."""
         try:
             if os.path.exists(METRICS_FILE):
@@ -61,7 +61,7 @@ class MetricsService:
                     return json.load(f)
         except Exception as e:
             logger.error(f"Failed to load metrics: {e}")
-        
+
         return {
             "total_generations": 0,
             "successful_generations": 0,
