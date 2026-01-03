@@ -32,6 +32,9 @@ _setup_status: Dict[str, Any] = {
     "error": None,
 }
 
+# Detect if running from PyInstaller bundle
+IS_FROZEN = getattr(sys, 'frozen', False)
+
 try:
     from audiocraft.models import MusicGen, AudioGen
     from audiocraft.data.audio import audio_write
@@ -176,6 +179,8 @@ def get_audio_service_status() -> Dict[str, Any]:
         "torch_available": TORCH_AVAILABLE,
         "gpu_available": False,
         "gpu_name": None,
+        "is_frozen": IS_FROZEN,
+        "install_size_gb": 2.5,  # Approximate size of PyTorch + AudioCraft
     }
 
     if TORCH_AVAILABLE:
@@ -187,6 +192,14 @@ def get_audio_service_status() -> Dict[str, Any]:
             pass
 
     status["ready"] = AUDIOCRAFT_AVAILABLE and TORCH_AVAILABLE
+    
+    # Add helpful message if not ready
+    if not status["ready"]:
+        if IS_FROZEN:
+            status["install_note"] = "Running from EXE. Install ShadowBridge from source or use the installer version for audio generation."
+        else:
+            status["install_note"] = "Click 'Install Audio' to download PyTorch + AudioCraft (~2.5GB)."
+    
     return status
 
 
@@ -211,23 +224,37 @@ def _run_audio_setup() -> None:
             _set_setup_status("ready", "ready", 100, "Audio generation ready")
             return
 
-        _set_setup_status("running", "installing", 20, "Installing audio dependencies...")
+        # Cannot pip install when running from frozen EXE
+        if IS_FROZEN:
+            _set_setup_status(
+                "error", "frozen", 100,
+                "Cannot install dependencies in portable EXE mode. Please run ShadowBridge from source or use the installer version.",
+                error="Running from frozen executable"
+            )
+            return
 
-        packages = [
-            "torch",
-            "torchaudio",
-            "audiocraft",
-        ]
+        _set_setup_status("running", "installing", 20, "Installing PyTorch + AudioCraft (~2.5GB download)...")
 
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + packages
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Install PyTorch with CUDA support first
+        _set_setup_status("running", "installing_torch", 30, "Installing PyTorch with CUDA support (~2GB)...")
+        torch_cmd = [sys.executable, "-m", "pip", "install", "torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu121"]
+        result = subprocess.run(torch_cmd, capture_output=True, text=True, timeout=1800)  # 30 min timeout
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "pip install failed")
+            raise RuntimeError(f"PyTorch install failed: {result.stderr.strip()}")
 
-        _set_setup_status("ready", "ready", 100, "Audio generation ready")
+        _set_setup_status("running", "installing_audiocraft", 70, "Installing AudioCraft (~500MB)...")
+        ac_cmd = [sys.executable, "-m", "pip", "install", "audiocraft"]
+        result = subprocess.run(ac_cmd, capture_output=True, text=True, timeout=600)  # 10 min timeout
+        if result.returncode != 0:
+            raise RuntimeError(f"AudioCraft install failed: {result.stderr.strip()}")
+
+        _set_setup_status("ready", "ready", 100, "Audio generation ready! Please restart ShadowBridge to use audio generation.")
+    except subprocess.TimeoutExpired:
+        logger.error("Audio setup timed out")
+        _set_setup_status("error", "timeout", 100, "Installation timed out. Try running manually: pip install torch torchaudio audiocraft", error="Timeout")
     except Exception as exc:
         logger.error(f"Audio setup failed: {exc}")
-        _set_setup_status("error", "error", 100, "Audio setup failed", error=str(exc))
+        _set_setup_status("error", "error", 100, f"Audio setup failed: {exc}", error=str(exc))
 
 
 def start_audio_setup() -> Dict[str, Any]:

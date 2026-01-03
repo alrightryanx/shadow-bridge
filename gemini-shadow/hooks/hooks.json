@@ -1,0 +1,84 @@
+{
+  "description": "Gemini Shadow - ShadowAI mobile notifications for Gemini CLI",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${GEMINI_PLUGIN_ROOT}/scripts/session-start.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${GEMINI_PLUGIN_ROOT}/scripts/session-end.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${GEMINI_PLUGIN_ROOT}/scripts/before-agent.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${GEMINI_PLUGIN_ROOT}/scripts/after-agent.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${GEMINI_PLUGIN_ROOT}/scripts/before-tool.sh\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${GEMINI_PLUGIN_ROOT}/scripts/after-tool.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${GEMINI_PLUGIN_ROOT}/scripts/notification.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

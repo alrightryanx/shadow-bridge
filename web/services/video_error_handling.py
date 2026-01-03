@@ -253,6 +253,14 @@ class VideoErrorRecovery:
         return suggestions
 
 
+
+def parse_nvidia_memory_mb(value_str: str) -> int:
+    """Parse memory string like '16384 MiB' to MB as int."""
+    # Remove common suffixes and extract numeric part
+    numeric = ''.join(c for c in value_str.split()[0] if c.isdigit())
+    return int(numeric) if numeric else 0
+
+
 class SystemResourceChecker:
     """Checks system resources and constraints."""
 
@@ -318,8 +326,8 @@ class SystemResourceChecker:
                             {
                                 "available": True,
                                 "name": parts[0],
-                                "memory_gb": int(parts[1]) / 1024,  # Convert MB to GB
-                                "free_memory_gb": int(parts[2]) / 1024,
+                                "memory_gb": parse_nvidia_memory_mb(parts[1]) / 1024,  # Convert MiB to GB
+                                "free_memory_gb": parse_nvidia_memory_mb(parts[2]) / 1024,
                             }
                         )
 

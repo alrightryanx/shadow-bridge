@@ -1,0 +1,30 @@
+{
+  "name": "gemini-shadow",
+  "version": "1.0.0",
+  "description": "Gemini CLI session persistence and mobile notifications for ShadowAI",
+  "author": {
+    "name": "ShadowAI",
+    "email": "contact@ryancartwright.com"
+  },
+  "homepage": "https://ryancartwright.com/shadowai",
+  "repository": "https://github.com/alrightryanx/shadowai-plugins",
+  "license": "MIT",
+  "keywords": [
+    "notifications",
+    "mobile",
+    "companion",
+    "shadowai",
+    "android",
+    "gemini",
+    "session-sync"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "provider": "gemini",
+  "compatibility": {
+    "gemini-cli": ">=1.0.0"
+  },
+  "dependencies": {
+    "jq": ">=1.6",
+    "python3": ">=3.8"
+  }
+}
