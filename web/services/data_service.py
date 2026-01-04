@@ -28,7 +28,29 @@ EMAILS_FILE = SHADOWAI_DIR / "emails.json"
 
 # Note encryption constants (must match Android SyncEncryption.kt)
 SYNC_ENC_PREFIX = "SYNC_ENC:"
-FIXED_SALT = b"ShadowAI_Sync_2024"
+SALT_FILE = SHADOWAI_DIR / "salt.bin"
+
+def _get_or_create_salt() -> bytes:
+    """Get the persistent random salt or create it if it doesn't exist."""
+    try:
+        SHADOWAI_DIR.mkdir(parents=True, exist_ok=True)
+        if SALT_FILE.exists():
+            with open(SALT_FILE, 'rb') as f:
+                salt = f.read()
+                if len(salt) == 16:
+                    return salt
+        
+        # Create new random salt
+        import secrets
+        salt = secrets.token_bytes(16)
+        with open(SALT_FILE, 'wb') as f:
+            f.write(salt)
+        return salt
+    except Exception as e:
+        print(f"Error managing salt: {e}")
+        return b"ShadowAI_Sync_2024" # Safe fallback
+
+DYNAMIC_SALT = _get_or_create_salt()
 ITERATION_COUNT = 50000
 KEY_LENGTH = 32  # 256 bits
 IV_LENGTH = 12
@@ -41,7 +63,7 @@ def _derive_encryption_key(password: str) -> bytes:
     return hashlib.pbkdf2_hmac(
         'sha256',
         password.encode('utf-8'),
-        FIXED_SALT,
+        DYNAMIC_SALT,
         ITERATION_COUNT,
         dklen=KEY_LENGTH
     )
@@ -1198,7 +1220,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.029",
+        "version": "1.031",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR)
     }

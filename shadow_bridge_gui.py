@@ -25,6 +25,7 @@ import socket
 import platform
 import subprocess
 import threading
+import shlex
 import base64
 import webbrowser
 import logging
@@ -658,7 +659,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.029"
+APP_VERSION = "1.031"
 
 # Global reference for IPC to restore window
 _app_instance = None
@@ -999,16 +1000,17 @@ def find_ssh_port():
     """Find which port SSH is running on by checking common ports and netstat."""
     # First try netstat to find sshd
     try:
+        # Avoid shell=True and pipes for security
         result = subprocess.run(
-            'netstat -an | findstr "LISTENING" | findstr ":22"',
-            shell=True,
+            ["netstat", "-an"],
             capture_output=True,
             text=True,
             timeout=5,
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
         )
-        # Parse netstat output to find SSH ports
-        for line in result.stdout.splitlines():
+        # Parse netstat output to find SSH ports (filtering for LISTENING and :22)
+        lines = [line for line in result.stdout.splitlines() if "LISTENING" in line and ":22" in line]
+        for line in lines:
             parts = line.split()
             for part in parts:
                 if ":" in part:
@@ -1075,47 +1077,55 @@ def check_ssh_running(port=22):
 
 
 def setup_firewall_rule():
-    """Add Windows Firewall rule for UDP discovery port."""
+    """Add Windows Firewall rules for necessary ports."""
     if not IS_WINDOWS:
         return True
     try:
-        # Check if rule exists
-        check = subprocess.run(
-            [
-                "netsh",
-                "advfirewall",
-                "firewall",
-                "show",
-                "rule",
-                "name=ShadowBridge Discovery",
-            ],
-            capture_output=True,
-            text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        if "ShadowBridge Discovery" in check.stdout:
-            return True  # Rule already exists
+        # Rules to ensure are present: (Name, Protocol, Port)
+        required_rules = [
+            ("ShadowBridge Discovery", "UDP", "19283"),
+            ("ShadowBridge Data Receiver", "TCP", "19284"),
+            ("ShadowBridge Companion", "TCP", "19286"),
+            ("ShadowBridge Dashboard", "TCP", "6767"),
+        ]
 
-        # Add inbound UDP rule
-        result = subprocess.run(
-            [
-                "netsh",
-                "advfirewall",
-                "firewall",
-                "add",
-                "rule",
-                "name=ShadowBridge Discovery",
-                "dir=in",
-                "action=allow",
-                "protocol=UDP",
-                "localport=19283",
-            ],
+        # Check existing rules
+        check = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", "name=all"],
             capture_output=True,
             text=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        return result.returncode == 0
-    except Exception:
+        existing_rules = check.stdout
+
+        all_success = True
+        for name, proto, port in required_rules:
+            if name not in existing_rules:
+                log.info(f"Adding firewall rule: {name} ({proto} {port})")
+                result = subprocess.run(
+                    [
+                        "netsh",
+                        "advfirewall",
+                        "firewall",
+                        "add",
+                        "rule",
+                        f"name={name}",
+                        "dir=in",
+                        "action=allow",
+                        f"protocol={proto}",
+                        f"localport={port}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                if result.returncode != 0:
+                    all_success = False
+                    log.error(f"Failed to add firewall rule {name}: {result.stderr}")
+
+        return all_success
+    except Exception as e:
+        log.error(f"Firewall setup error: {e}")
         return False
 
 
@@ -1794,15 +1804,19 @@ class DataReceiver(threading.Thread):
                         },
                     }
 
-                    # Relay to all connected devices
+                    # Relay to all devices
                     self._relay_to_all_devices(relay_msg)
                     log.debug(
                         f"Relayed session message: {role} - {message_content[:50]}..."
                     )
 
+                    # Detect file creation for Phase 4.3 requirement (File Notifications)
+                    self._detect_file_creation(message_content, sessionId=relay_msg.get("sessionId"))
+
                 except json.JSONDecodeError:
                     # Not JSON, might be plain text output
                     if len(line.strip()) > 10:
+                        content = line.strip()
                         relay_msg = {
                             "type": "session_message",
                             "id": f"msg_{int(time.time() * 1000)}",
@@ -1812,14 +1826,50 @@ class DataReceiver(threading.Thread):
                             "timestamp": int(time.time() * 1000),
                             "payload": {
                                 "role": "assistant",
-                                "content": line.strip()[:5000],
+                                "content": content[:5000],
                                 "hostname": socket.gethostname(),
                             },
                         }
                         self._relay_to_all_devices(relay_msg)
+                        self._detect_file_creation(content, sessionId=relay_msg.get("sessionId"))
 
         except Exception as e:
             log.error(f"Failed to parse transcript content: {e}")
+
+    def _detect_file_creation(self, content, sessionId=None):
+        """Scan content for file creation and notify devices."""
+        import re
+        # Look for common file creation patterns
+        # e.g. "Created file index.html", "Writing to styles.css", "Saved as image.png"
+        file_patterns = [
+            r"(?:Created|Saved|Writing to|Generated)\s+file\s+[`'\"\(]?([^\s`'\"\)\[\]]+\.[a-z0-9]{2,10})",
+            r"(?:Created|Saved|Writing to|Generated)\s+[`'\"\(]?([^\s`'\"\)\[\]]+\.(?:html|png|jpg|pdf|md|txt|py|js|json))",
+            r"\[Tool:\s+(?:Write|Edit)\]\s+[`'\"\(]?([^\s`'\"\)\[\]]+\.[a-z0-9]{2,10})"
+        ]
+        
+        found_files = []
+        for pattern in file_patterns:
+            matches = re.findall(pattern, content, re.IGNORE_VALUE | re.IGNORE_CASE)
+            found_files.extend(matches)
+            
+        for file_path in set(found_files):
+            log.info(f"Detected file creation: {file_path}")
+            
+            # Send notification message
+            notif_msg = {
+                "type": "notification",
+                "id": f"notif_{int(time.time() * 1000)}_{file_path.replace('.', '_')}",
+                "sessionId": sessionId,
+                "timestamp": int(time.time() * 1000),
+                "payload": {
+                    "message": f"New file ready: {file_path}",
+                    "notificationType": "file_ready",
+                    "summary": "File Created",
+                    "fileUrl": f"file://{file_path}", # Placeholder for actual access
+                    "hostname": socket.gethostname()
+                }
+            }
+            self._relay_to_all_devices(notif_msg)
 
     def _relay_to_all_devices(self, message):
         """Relay a message to all connected Android devices."""
@@ -2968,6 +3018,13 @@ class CompanionRelayServer(threading.Thread):
                         }
                         self._send_to_conn(conn, response)
                         log.info(f"Sent PC session data to device: {device_id}")
+
+                    # Internal relay action for Task completion notifications
+                    elif msg_type == "relay_message":
+                        inner_message = message.get("message")
+                        if inner_message:
+                            self._relay_to_all_devices(inner_message)
+                            log.info(f"Internal relay successful for: {inner_message.get('type')}")
 
                     else:
                         log.debug(f"Unknown message type: {msg_type}")
@@ -4357,8 +4414,13 @@ class ShadowBridgeApp:
             "<Leave>", lambda e: help_link.configure(fg=COLORS["accent_light"])
         )
 
+        self._web_dashboard_monitor_stop_event = threading.Event()
+        self._web_dashboard_monitor_thread = None
+        self._web_dashboard_start_lock = threading.Lock()
+
         # Auto-start web dashboard server so users don't have to click the button
         self.auto_start_web_dashboard()
+        self._start_web_dashboard_monitor()
 
         # Start periodic web server status check
         self.root.after(1000, self.check_web_server_status)
@@ -4758,6 +4820,13 @@ class ShadowBridgeApp:
         local_ip = get_local_ip()
         hostname_local = get_hostname_local()
 
+        # Get the dynamic encryption salt for note sync (Phase 5.3 requirement)
+        try:
+            from web.services.data_service import DYNAMIC_SALT
+            salt_b64 = base64.b64encode(DYNAMIC_SALT).decode('ascii')
+        except Exception:
+            salt_b64 = None
+
         # Build list of hosts to try (in priority order)
         # Android app will try these in order until one works
         hosts_to_try = []
@@ -4802,6 +4871,7 @@ class ShadowBridgeApp:
             "hosts": hosts_to_try,  # All hosts to try in order
             "local_ip": local_ip,
             "tailscale_ip": tailscale_ip,
+            "encryption_salt": salt_b64,
             "timestamp": int(time.time()),
         }
 
@@ -5015,6 +5085,47 @@ class ShadowBridgeApp:
         else:
             log.warning("Auto-start web dashboard exceeded retry limit.")
 
+    def _start_web_dashboard_monitor(self):
+        if (
+            getattr(self, "_web_dashboard_monitor_thread", None)
+            and self._web_dashboard_monitor_thread.is_alive()
+        ):
+            return
+
+        self._web_dashboard_monitor_stop_event.clear()
+
+        def monitor_loop():
+            while not self._web_dashboard_monitor_stop_event.wait(4):
+                try:
+                    if not self._is_web_server_process_alive() and not self._is_web_server_thread_alive():
+                        log.debug("Web dashboard monitor detected downtime, restarting")
+                        self._ensure_web_dashboard_running()
+                except Exception as exc:
+                    log.debug(f"Web dashboard monitor error: {exc}")
+
+        thread = threading.Thread(target=monitor_loop, daemon=True)
+        thread.start()
+        self._web_dashboard_monitor_thread = thread
+
+    def _stop_web_dashboard_monitor(self):
+        if not getattr(self, "_web_dashboard_monitor_stop_event", None):
+            return
+
+        self._web_dashboard_monitor_stop_event.set()
+        thread = getattr(self, "_web_dashboard_monitor_thread", None)
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+        self._web_dashboard_monitor_thread = None
+
+    def _ensure_web_dashboard_running(self):
+        if self._web_dashboard_start_lock.locked():
+            return False
+
+        with self._web_dashboard_start_lock:
+            if self._is_web_server_process_alive() or self._is_web_server_thread_alive():
+                return True
+            return self._start_web_dashboard_process(open_browser=False, show_errors=False)
+
     def toggle_broadcast(self):
         """Toggle broadcasting."""
         if self.is_broadcasting:
@@ -5050,6 +5161,8 @@ class ShadowBridgeApp:
                 1, 1, 9, 9, fill=COLORS["text_muted"], outline="", tags="dot"
             )
             self.web_dashboard_btn.configure(text="Launch Web Dashboard")
+            log.debug("Web dashboard down; triggering monitor to restart it")
+            self._ensure_web_dashboard_running()
 
         # Schedule next check
         self.root.after(3000, self.check_web_server_status)
@@ -5131,9 +5244,10 @@ class ShadowBridgeApp:
 
                 last_error = "Unknown error"
                 for command in commands:
+                    # Use shlex.split and shell=False for security
+                    args = shlex.split(command)
                     proc = subprocess.Popen(
-                        command,
-                        shell=True,
+                        args,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
@@ -5695,6 +5809,7 @@ Or run in PowerShell (Admin):
 
     def quit_app(self):
         """Quit application."""
+        self._stop_web_dashboard_monitor()
         self._save_window_state()
         self.stop_broadcast()
         if self.data_receiver:
@@ -5723,6 +5838,7 @@ Or run in PowerShell (Admin):
 
     def force_exit(self):
         """Force exit the application immediately."""
+        self._stop_web_dashboard_monitor()
         self.stop_broadcast()
         if self.data_receiver:
             try:
@@ -6831,12 +6947,13 @@ def run_web_dashboard_server(open_browser: bool):
     try:
         from web.app import create_app, socketio
 
-        host = "127.0.0.1"
+        host = "0.0.0.0"  # Allow external access
         port = 6767
 
         def open_browser_delayed():
             time.sleep(1.5)
-            webbrowser.open(f"http://{host}:{port}")
+            # Browser should still open to 127.0.0.1 for local user convenience
+            webbrowser.open(f"http://127.0.0.1:{port}")
 
         if open_browser:
             thread = threading.Thread(target=open_browser_delayed, daemon=True)
