@@ -49,6 +49,15 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("Downloader service not available")
 
+# Try to import ComfyUI executor
+try:
+    from web.services.comfyui_executor import get_comfyui_executor, ComfyUIExecutor
+    COMFYUI_AVAILABLE = True
+except ImportError:
+    COMFYUI_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("ComfyUI executor not available")
+
 logger = logging.getLogger(__name__)
 
 video_bp = Blueprint("video", __name__)
@@ -707,6 +716,9 @@ def _run_generation_internal(context, progress_callback):
     seed = context.get('seed')
     precision = context.get('precision', 'bf16')
     generation_id = context.get('generation_id', f"gen_{int(time.time())}")
+    input_type = context.get('input_type', 'text')
+    input_path = context.get('input_path')
+    motion_strength = context.get('motion_strength', 0.7)
 
     # Use tracker if available
     tracker = get_progress_tracker()
@@ -716,6 +728,54 @@ def _run_generation_internal(context, progress_callback):
 
     try:
         monitor.update_progress(ProgressStage.INITIALIZING, 'Starting video generation...', 0)
+
+        # Use ComfyUI for SVI Pro or I2V/V2V workflows
+        if model == 'svi-pro-wan22' or input_type in ('image', 'video'):
+            if COMFYUI_AVAILABLE:
+                monitor.update_progress(ProgressStage.LOADING_MODEL, 'Using ComfyUI for generation...', 10)
+
+                executor = get_comfyui_executor()
+
+                # Progress adapter
+                def comfyui_progress(percent, message):
+                    if percent >= 0:
+                        stage = ProgressStage.LOADING_MODEL if percent < 20 else ProgressStage.PROCESSING_FRAMES if percent < 90 else ProgressStage.ENCODING
+                        monitor.update_progress(stage, message, percent)
+
+                result = executor.generate_video(
+                    prompt=prompt,
+                    duration=duration,
+                    aspect_ratio=aspect_ratio,
+                    input_type=input_type,
+                    input_path=input_path,
+                    progress_callback=comfyui_progress,
+                    motion_strength=motion_strength,
+                    seed=seed if seed else -1
+                )
+
+                if result.get('success'):
+                    video_path = result.get('video_path')
+                    if video_path and os.path.exists(video_path):
+                        file_size = os.path.getsize(video_path)
+                        actual_duration = get_video_duration(video_path)
+
+                        monitor.complete('Video generation complete!')
+
+                        return {
+                            'success': True,
+                            'videoUrl': f"file://{video_path}",
+                            'videoPath': video_path,
+                            'model': MODELS.get(model, {}).get('name', 'ComfyUI'),
+                            'duration': actual_duration,
+                            'fileSize': file_size,
+                            'seed': seed,
+                            'error': None,
+                            'generation_id': generation_id
+                        }
+                else:
+                    raise Exception(result.get('error', 'ComfyUI generation failed'))
+            else:
+                raise Exception("ComfyUI not available. Please install dependencies.")
 
         # Check if model is installed
         installed = is_model_installed(model)
@@ -1129,6 +1189,233 @@ def api_generate():
 
     except Exception as e:
         logger.error(f"Generate video error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@video_bp.route("/image-to-video", methods=["POST"])
+def api_image_to_video():
+    """
+    Generate video from a still image.
+
+    Request body:
+        - image: Base64 encoded image or file path
+        - prompt: Text description of desired motion/animation
+        - duration: Video duration in seconds (default: 5)
+        - aspect_ratio: Output aspect ratio (default: from image)
+        - motion_strength: How much motion to add (0.0-1.0, default: 0.7)
+        - model: Model to use (default: svi-pro-wan22)
+    """
+    try:
+        data = request.get_json()
+        image_data = data.get("image")
+        prompt = data.get("prompt", "")
+        duration = data.get("duration", 5)
+        aspect_ratio = data.get("aspect_ratio", "16:9")
+        motion_strength = data.get("motion_strength", 0.7)
+        model = data.get("model", "svi-pro-wan22")
+
+        if not image_data:
+            return jsonify({"error": "Image is required"}), 400
+
+        if not prompt:
+            return jsonify({"error": "Prompt is required for image-to-video"}), 400
+
+        # Handle base64 image
+        input_path = None
+        if image_data.startswith("data:image"):
+            import base64
+            # Extract base64 data
+            header, encoded = image_data.split(",", 1)
+            image_bytes = base64.b64decode(encoded)
+
+            # Save to temp file
+            temp_dir = os.path.join(MODELS_DIR, "temp_inputs")
+            os.makedirs(temp_dir, exist_ok=True)
+            input_path = os.path.join(temp_dir, f"i2v_{int(time.time())}.png")
+
+            with open(input_path, "wb") as f:
+                f.write(image_bytes)
+        elif os.path.exists(image_data):
+            input_path = image_data
+        else:
+            return jsonify({"error": "Invalid image: must be base64 data URL or file path"}), 400
+
+        generation_id = f"i2v_{int(time.time())}"
+
+        # Store generation request
+        generations = _load_generations()
+        if not generations or "generations" not in generations:
+            generations = {"generations": []}
+
+        generations["generations"].append({
+            "id": generation_id,
+            "prompt": prompt,
+            "mode": "free",
+            "model": model,
+            "input_type": "image",
+            "input_path": input_path,
+            "status": "pending",
+            "progress": 0,
+            "created_at": datetime.now().isoformat(),
+            "video_url": None,
+        })
+        _save_generations(generations)
+
+        def progress_callback(progress_data):
+            generations = _load_generations()
+            if generations and "generations" in generations:
+                for gen in generations["generations"]:
+                    if gen.get("id") == generation_id:
+                        gen.update(progress_data)
+                _save_generations(generations)
+
+        def run_i2v_generation():
+            try:
+                with WindowsKeepAwake():
+                    with generation_lock:
+                        result = generate_video_local(
+                            {
+                                "prompt": prompt,
+                                "model": model,
+                                "input_type": "image",
+                                "input_path": input_path,
+                                "duration": duration,
+                                "aspect_ratio": aspect_ratio,
+                                "motion_strength": motion_strength,
+                            },
+                            progress_callback,
+                        )
+
+                        generations = _load_generations()
+                        if generations and "generations" in generations:
+                            for gen in generations["generations"]:
+                                if gen.get("id") == generation_id:
+                                    gen["status"] = "completed" if result.get("success") else "failed"
+                                    gen["video_url"] = result.get("videoUrl")
+                                    gen["video_path"] = result.get("videoPath")
+                                    gen["error"] = result.get("error")
+                                    gen["completed_at"] = datetime.now().isoformat() if result.get("success") else None
+                            _save_generations(generations)
+
+            except Exception as e:
+                logger.error(f"I2V generation error: {e}")
+
+        threading.Thread(target=run_i2v_generation).start()
+
+        return jsonify({
+            "success": True,
+            "generation_id": generation_id,
+            "status": "pending",
+            "message": "Image-to-video generation started"
+        })
+
+    except Exception as e:
+        logger.error(f"I2V error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@video_bp.route("/video-to-video", methods=["POST"])
+def api_video_to_video():
+    """
+    Transform an existing video with style transfer or enhancement.
+
+    Request body:
+        - video: File path to source video
+        - prompt: Text description of desired transformation
+        - denoise: How much to modify (0.0-1.0, default: 0.6)
+        - model: Model to use (default: svi-pro-wan22)
+    """
+    try:
+        data = request.get_json()
+        video_path = data.get("video")
+        prompt = data.get("prompt", "")
+        denoise = data.get("denoise", 0.6)
+        model = data.get("model", "svi-pro-wan22")
+        aspect_ratio = data.get("aspect_ratio", "16:9")
+
+        if not video_path:
+            return jsonify({"error": "Video path is required"}), 400
+
+        if not os.path.exists(video_path):
+            return jsonify({"error": f"Video file not found: {video_path}"}), 400
+
+        if not prompt:
+            return jsonify({"error": "Prompt is required for video-to-video"}), 400
+
+        generation_id = f"v2v_{int(time.time())}"
+
+        # Get source video duration
+        source_duration = get_video_duration(video_path) or 5
+
+        # Store generation request
+        generations = _load_generations()
+        if not generations or "generations" not in generations:
+            generations = {"generations": []}
+
+        generations["generations"].append({
+            "id": generation_id,
+            "prompt": prompt,
+            "mode": "free",
+            "model": model,
+            "input_type": "video",
+            "input_path": video_path,
+            "status": "pending",
+            "progress": 0,
+            "created_at": datetime.now().isoformat(),
+            "video_url": None,
+        })
+        _save_generations(generations)
+
+        def progress_callback(progress_data):
+            generations = _load_generations()
+            if generations and "generations" in generations:
+                for gen in generations["generations"]:
+                    if gen.get("id") == generation_id:
+                        gen.update(progress_data)
+                _save_generations(generations)
+
+        def run_v2v_generation():
+            try:
+                with WindowsKeepAwake():
+                    with generation_lock:
+                        result = generate_video_local(
+                            {
+                                "prompt": prompt,
+                                "model": model,
+                                "input_type": "video",
+                                "input_path": video_path,
+                                "duration": source_duration,
+                                "aspect_ratio": aspect_ratio,
+                                "denoise": denoise,
+                            },
+                            progress_callback,
+                        )
+
+                        generations = _load_generations()
+                        if generations and "generations" in generations:
+                            for gen in generations["generations"]:
+                                if gen.get("id") == generation_id:
+                                    gen["status"] = "completed" if result.get("success") else "failed"
+                                    gen["video_url"] = result.get("videoUrl")
+                                    gen["video_path"] = result.get("videoPath")
+                                    gen["error"] = result.get("error")
+                                    gen["completed_at"] = datetime.now().isoformat() if result.get("success") else None
+                            _save_generations(generations)
+
+            except Exception as e:
+                logger.error(f"V2V generation error: {e}")
+
+        threading.Thread(target=run_v2v_generation).start()
+
+        return jsonify({
+            "success": True,
+            "generation_id": generation_id,
+            "status": "pending",
+            "message": "Video-to-video generation started"
+        })
+
+    except Exception as e:
+        logger.error(f"V2V error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -2119,84 +2406,111 @@ def api_generate_with_fallback():
         return jsonify({"error": str(e)}), 500
 
 
-def generate_local_video(model_id: str, prompt: str, duration: int, aspect_ratio: str, generation_id: str) -> dict:
-    """Generate video using local ComfyUI model."""
-    import subprocess
-    import json
+def generate_local_video(
+    model_id: str,
+    prompt: str,
+    duration: int,
+    aspect_ratio: str,
+    generation_id: str,
+    input_type: str = "text",
+    input_path: str = None,
+    motion_strength: float = 0.7,
+    **kwargs
+) -> dict:
+    """
+    Generate video using local ComfyUI model.
+
+    Args:
+        model_id: Model identifier (svi-pro-wan22, etc.)
+        prompt: Text description of the video
+        duration: Video duration in seconds
+        aspect_ratio: Output aspect ratio (16:9, 9:16, 1:1)
+        generation_id: Unique generation identifier
+        input_type: "text", "image", or "video"
+        input_path: Path to input image/video (for I2V/V2V)
+        motion_strength: Motion intensity for I2V (0.0-1.0)
+
+    Returns:
+        Dict with video_path and cost
+    """
+    if not COMFYUI_AVAILABLE:
+        raise Exception("ComfyUI executor not available. Please install dependencies.")
 
     comfyui_path = os.path.join(MODELS_DIR, "comfyui")
 
     if not os.path.exists(comfyui_path):
-        raise Exception("ComfyUI not installed. Please install first.")
+        raise Exception("ComfyUI not installed. Please install first via /api/video/install-comfyui")
 
-    # Update progress
+    # Get the executor
+    executor = get_comfyui_executor()
+
+    # Progress callback to update active_generations
+    def progress_callback(percent: int, message: str):
+        if percent < 0:
+            # Status message without percent
+            active_generations[generation_id].update({
+                "message": message
+            })
+        else:
+            stage = "loading_model" if percent < 20 else "processing" if percent < 90 else "encoding"
+            active_generations[generation_id].update({
+                "stage": stage,
+                "progress": percent,
+                "message": message
+            })
+
+    # Update initial progress
     active_generations[generation_id].update({
-        "stage": "loading_model",
-        "progress": 10,
-        "message": f"Loading {MODELS[model_id]['name']}..."
+        "stage": "initializing",
+        "progress": 5,
+        "message": f"Initializing {MODELS[model_id]['name']}..."
     })
 
-    # Prepare ComfyUI workflow
-    workflow = {
-        "prompt": prompt,
-        "duration": duration,
-        "aspect_ratio": aspect_ratio,
-        "model": model_id
-    }
+    # Handle input upload for I2V/V2V
+    uploaded_input = None
+    if input_type in ("image", "video") and input_path:
+        if os.path.exists(input_path):
+            progress_callback(8, f"Uploading input {input_type}...")
+            uploaded_input = executor.upload_input(input_path, input_type)
+        else:
+            raise Exception(f"Input file not found: {input_path}")
 
-    workflow_path = os.path.join(comfyui_path, f"workflow_{generation_id}.json")
-    with open(workflow_path, "w") as f:
-        json.dump(workflow, f)
+    # Generate video using ComfyUI
+    result = executor.generate_video(
+        prompt=prompt,
+        duration=duration,
+        aspect_ratio=aspect_ratio,
+        input_type=input_type,
+        input_path=uploaded_input,
+        progress_callback=progress_callback,
+        motion_strength=motion_strength,
+        **kwargs
+    )
 
-    # Update progress
-    active_generations[generation_id].update({
-        "stage": "processing",
-        "progress": 30,
-        "message": "Generating video frames..."
-    })
+    if not result.get("success"):
+        raise Exception(result.get("error", "Video generation failed"))
 
-    # Run ComfyUI generation
+    video_path = result.get("video_path")
+
+    # Copy to output directory with consistent naming
     output_dir = os.path.join(OUTPUT_DIR, "local")
     os.makedirs(output_dir, exist_ok=True)
+    final_output_path = os.path.join(output_dir, f"{generation_id}.mp4")
 
-    output_path = os.path.join(output_dir, f"{generation_id}.mp4")
+    if video_path and os.path.exists(video_path):
+        import shutil
+        shutil.copy2(video_path, final_output_path)
+    else:
+        raise Exception("Video generation completed but output file not found")
 
-    # Execute ComfyUI via command line
-    # This is a placeholder - actual implementation would use ComfyUI API
-    try:
-        result = subprocess.run(
-            [
-                sys.executable,
-                os.path.join(comfyui_path, "main.py"),
-                "--input", workflow_path,
-                "--output", output_path
-            ],
-            check=True,
-            timeout=duration * 20,  # Timeout based on video duration
-            capture_output=True,
-            text=True
-        )
+    # Final progress update
+    active_generations[generation_id].update({
+        "stage": "completed",
+        "progress": 100,
+        "message": "Video generation complete!"
+    })
 
-        # Clean up workflow file
-        if os.path.exists(workflow_path):
-            os.remove(workflow_path)
-
-        # Update progress
-        active_generations[generation_id].update({
-            "stage": "encoding",
-            "progress": 90,
-            "message": "Encoding video..."
-        })
-
-        if not os.path.exists(output_path):
-            raise Exception("Video generation completed but output file not found")
-
-        return {
-            "video_path": output_path,
-            "cost": 0
-        }
-
-    except subprocess.TimeoutExpired:
-        raise Exception(f"Local generation timed out after {duration * 20} seconds")
-    except subprocess.CalledProcessError as e:
-        raise Exception(f"ComfyUI execution failed: {e.stderr}")
+    return {
+        "video_path": final_output_path,
+        "cost": 0
+    }
