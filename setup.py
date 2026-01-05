@@ -108,32 +108,16 @@ bdist_msi_options = {
             ("MainFeature", None, "ShadowBridge", "Main application and dashboard", 1, 1, "TARGETDIR", 0),
             ("AIDependencies", "MainFeature", "AI Dependencies (2.5GB)", "Optional PyTorch and AudioCraft for audio/video generation. Requires internet.", 3, 1, "TARGETDIR", 0),
         ],
-        "FeatureComponents": [
-            ("MainFeature", "ShadowBridge.exe"),
-            ("AIDependencies", "AIDepsMarker"),
-        ],
-        "Component": [
-            ("AIDepsMarker", "{E1F1A2B3-C4D5-4E6F-A7B8-C9D0E1F2A3B4}", "TARGETDIR", 0, None, "ShadowBridge.exe"),
-        ],
         "CustomAction": [
             ("LaunchApp", 210, "TARGETDIR", "[TARGETDIR]ShadowBridge.exe"),
             ("InstallAIDeps", 210, "TARGETDIR", '[TARGETDIR]ShadowBridge.exe audio setup'),
         ],
         "Property": [
             ("LAUNCHAPP", "1"),
-            ("INSTALLDEPS", "0"),
-        ],
-        "Checkbox": [
-            ("LAUNCHAPP", "Launch ShadowBridge", "1"),
-            ("INSTALLDEPS", "Install AI Dependencies (~2.5GB)", "1"),
-        ],
-        "Control": [
-            ("ExitDialog", "LaunchCheckbox", "CheckBox", 10, 40, 200, 17, 3, "LAUNCHAPP", "Launch ShadowBridge", "LAUNCHAPP"),
-            ("ExitDialog", "InstallCheckbox", "CheckBox", 10, 60, 200, 17, 3, "INSTALLDEPS", "Install AI Dependencies (~2.5GB)", "INSTALLDEPS"),
         ],
         "ControlEvent": [
             ("ExitDialog", "Finish", "DoAction", "LaunchApp", 'LAUNCHAPP="1"', 1),
-            ("ExitDialog", "Finish", "DoAction", "InstallAIDeps", 'INSTALLDEPS="1" OR &AIDependencies=3', 2),
+            ("ExitDialog", "Finish", "DoAction", "InstallAIDeps", "&AIDependencies=3", 2),
         ],
     },
 }
