@@ -21,13 +21,6 @@
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon"><span class="material-symbols-outlined">description</span></div>
-        <div class="stat-info">
-            <span class="stat-value" id="notes-count">-</span>
-            <span class="stat-label">Notes</span>
-        </div>
-    </div>
-    <div class="stat-card">
         <div class="stat-icon"><span class="material-symbols-outlined">sync</span></div>
         <div class="stat-info">
             <span class="stat-value" id="last-sync">-</span>
@@ -166,106 +159,226 @@ async function loadStats(deviceId) {
     localStorage.setItem('shadow_last_sync', Date.now().toString());
 }
 
-async function loadRecentProjects(deviceId) {
-    const projects = await api.getProjects(deviceId);
-    const container = document.getElementById('recent-projects');
-
-    if (projects.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <span class="material-symbols-outlined">folder_off</span>
-                <p>No projects found</p>
-                <a href="/settings" class="btn btn-small btn-primary">Connect a device</a>
-            </div>
-        `;
-        return;
-    }
-
-    container.innerHTML = projects.slice(0, 4).map(p => `
-        <div class="mini-card project-mini" onclick="openProject('${p.id}')">
-            <div class="mini-header">
-                <span class="material-symbols-outlined">folder</span>
-                <span>${escapeHtml(p.device_name)}</span>
-            </div>
-            <div class="mini-title">${escapeHtml(p.name)}</div>
-            <div class="mini-meta">
-                <span class="material-symbols-outlined">schedule</span>
-                <span>${p.time_ago}</span>
-            </div>
-        </div>
-    `).join('');
-}
-
-async function loadRecentNotes(deviceId) {
-    const notes = await api.getNotes(deviceId);
-    const container = document.getElementById('recent-notes');
-
-    if (notes.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <span class="material-symbols-outlined">note_stack</span>
-                <p>No notes found</p>
-            </div>
-        `;
-        return;
-    }
-
-    container.innerHTML = notes.slice(0, 4).map(n => `
-        <div class="mini-card note-mini" onclick="openNoteModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}')">
-            <div class="mini-header">
-                <span class="material-symbols-outlined">description</span>
-                <span>${escapeHtml(n.device_name)}</span>
-            </div>
-            <div class="mini-title">${escapeHtml(n.title)}</div>
-            <div class="mini-meta">
-                <span class="material-symbols-outlined">schedule</span>
-                <span>${n.time_ago}</span>
-            </div>
-        </div>
-    `).join('');
-}
-
-async function loadRecentSessions(deviceId) {
-    const sessions = await api.getSessions(deviceId, null, 4);
-    const container = document.getElementById('recent-sessions');
-    if (!container) return;
-
-    if (!sessions || sessions.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <span class="material-symbols-outlined">forum</span>
-                <p>No recent sessions</p>
-            </div>
-        `;
-        return;
-    }
-
-    container.innerHTML = sessions.map(s => {
-        const status = s.is_running ? 'Running' : 'Idle';
-        const backend = formatBackendLabel(s);
-        const model = formatModelLabel(s);
-        const subtitle = [backend, model].filter(Boolean).join(' / ');
-        return `
-            <div class="mini-card session-mini ${s.is_running ? 'running' : ''}" onclick="selectSessionFromCard('${s.id}')">
+ async function loadRecentProjects(deviceId) {
+    try {
+        const projects = await api.getProjects(deviceId);
+        const container = document.getElementById('recent-projects');
+        
+        if (!projects) {
+            console.error('loadRecentProjects: API returned null');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load projects</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (!Array.isArray(projects)) {
+            console.error('loadRecentProjects: API returned non-array data', typeof projects, projects);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load projects: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (projects.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">folder_off</span>
+                    <p>No projects found</p>
+                    <a href="/settings" class="btn btn-small btn-primary">Connect a device</a>
+                </div>
+            `;
+            return;
+        }
+        
+        console.log('loadRecentProjects: Loaded', projects.length, 'projects');
+        container.innerHTML = projects.slice(0, 4).map(p => `
+            <div class="mini-card project-mini" onclick="openProject('${p.id}')">
                 <div class="mini-header">
-                    <span class="material-symbols-outlined">chat</span>
-                    <span>${escapeHtml(s.device_name || s.device_id || 'Unknown device')}</span>
+                    <span class="material-symbols-outlined">folder</span>
+                    <span>${escapeHtml(p.device_name)}</span>
                 </div>
-                <div class="mini-title">${escapeHtml(s.title || 'New Session')}</div>
+                <div class="mini-title">${escapeHtml(p.name)}</div>
                 <div class="mini-meta">
-                    <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
-                    <span>${escapeHtml(subtitle || 'Unknown backend')}</span>
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>${p.time_ago}</span>
                 </div>
-                <div class="mini-foot">${escapeHtml(s.time_ago || '')}</div>
             </div>
-        `;
-    }).join('');
+        `).join('');
+    } catch (error) {
+        console.error('loadRecentProjects: Error loading projects', error);
+        const container = document.getElementById('recent-projects');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading projects: ${escapeHtml(error.message || 'Unknown error')}</p>
+                </div>
+            `;
+        }
+    }
 }
 
-async function loadSessionsPanel(deviceId, preserveSelection = false) {
-    const sessions = await api.getSessions(deviceId, null, 50);
-    dashboardSessions = Array.isArray(sessions) ? sessions : [];
-    renderSessionList(dashboardSessions, preserveSelection);
+ async function loadRecentNotes(deviceId) {
+    try {
+        const notes = await api.getNotes(deviceId);
+        const container = document.getElementById('recent-notes');
+        
+        if (!notes) {
+            console.error('loadRecentNotes: API returned null');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load notes</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (!Array.isArray(notes)) {
+            console.error('loadRecentNotes: API returned non-array data', typeof notes, notes);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load notes: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (notes.length === 0) {
+            console.log('loadRecentNotes: No notes');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">note_stack</span>
+                    <p>No notes found</p>
+                </div>
+            `;
+            return;
+        }
+        
+        console.log('loadRecentNotes: Loaded', notes.length, 'notes');
+        container.innerHTML = notes.slice(0, 4).map(n => `
+            <div class="mini-card note-mini" onclick="openNoteModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}')">
+                <div class="mini-header">
+                    <span class="material-symbols-outlined">description</span>
+                    <span>${escapeHtml(n.device_name)}</span>
+                </div>
+                <div class="mini-title">${escapeHtml(n.title)}</div>
+                <div class="mini-meta">
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>${n.time_ago}</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('loadRecentNotes: Error loading notes', error);
+        const container = document.getElementById('recent-notes');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading notes: ${escapeHtml(error.message || 'Unknown error')}</p>
+                </div>
+            `;
+        }
+    }
+}
+
+ async function loadRecentSessions(deviceId) {
+    try {
+        const sessions = await api.getSessions(deviceId, null, 4);
+        const container = document.getElementById('recent-sessions');
+        if (!container) {
+            console.error('loadRecentSessions: Container not found');
+            return;
+        }
+        
+        if (!sessions) {
+            console.error('loadRecentSessions: API returned null or failed');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load sessions</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (!Array.isArray(sessions)) {
+            console.error('loadRecentSessions: API returned non-array data', typeof sessions, sessions);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load sessions: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (sessions.length === 0) {
+            console.log('loadRecentSessions: No sessions');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">forum</span>
+                    <p>No recent sessions</p>
+                </div>
+            `;
+            return;
+        }
+        
+        console.log('loadRecentSessions: Loaded', sessions.length, 'sessions');
+        container.innerHTML = sessions.map(s => {
+            const status = s.is_running ? 'Running' : 'Idle';
+            const backend = formatBackendLabel(s);
+            const model = formatModelLabel(s);
+            const subtitle = [backend, model].filter(Boolean).join(' / ');
+            return `
+                <div class="mini-card session-mini ${s.is_running ? 'running' : ''}" onclick="selectSessionFromCard('${s.id}')">
+                    <div class="mini-header">
+                        <span class="material-symbols-outlined">chat</span>
+                        <span>${escapeHtml(s.device_name || s.device_id || 'Unknown device')}</span>
+                    </div>
+                    <div class="mini-title">${escapeHtml(s.title || 'New Session')}</div>
+                    <div class="mini-meta">
+                        <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
+                        <span>${escapeHtml(subtitle || 'Unknown backend')}</span>
+                    </div>
+                    <div class="mini-foot">${escapeHtml(s.time_ago || '')}</div>
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('loadRecentSessions: Error loading sessions', error);
+        const container = document.getElementById('recent-sessions');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading sessions: ${escapeHtml(error.message || 'Unknown error')}</p>
+                </div>
+            `;
+        }
+    }
+}
+
+ async function loadSessionsPanel(deviceId, preserveSelection = false) {
+    try {
+        const sessions = await api.getSessions(deviceId, null, 50);
+        dashboardSessions = Array.isArray(sessions) ? sessions : [];
+        console.log('loadSessionsPanel: Loaded', dashboardSessions.length, 'sessions');
+        renderSessionList(dashboardSessions, preserveSelection);
+    } catch (error) {
+        console.error('loadSessionsPanel: Error loading session list', error);
+        dashboardSessions = [];
+        renderSessionList([], false);
+    }
 }
 
 function renderSessionList(sessions, preserveSelection) {
@@ -589,50 +702,76 @@ function generateMessageId() {
     return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function loadActivityFeed(deviceId) {
-    const container = document.getElementById('activity-feed');
-
-    // Combine projects and notes for activity
-    const projects = await api.getProjects(deviceId);
-    const notes = await api.getNotes(deviceId);
-
-    const activities = [
-        ...projects.slice(0, 3).map(p => ({
-            type: 'project',
-            title: p.name,
-            device: p.device_name,
-            time: p.time_ago,
-            timestamp: p.updated_at || 0
-        })),
-        ...notes.slice(0, 3).map(n => ({
-            type: 'note',
-            title: n.title,
-            device: n.device_name,
-            time: n.time_ago,
-            timestamp: n.updated_at || 0
-        }))
-    ].sort((a, b) => b.timestamp - a.timestamp).slice(0, 6);
-
-    if (activities.length === 0) {
-        container.innerHTML = '<div class="empty-state"><p>No recent activity</p></div>';
-        return;
+ async function loadActivityFeed(deviceId) {
+    try {
+        const container = document.getElementById('activity-feed');
+        
+        // Combine projects and notes for activity
+        const projects = await api.getProjects(deviceId);
+        const notes = await api.getNotes(deviceId);
+        
+        // Check if data is arrays before processing
+        if (!Array.isArray(projects) || !Array.isArray(notes)) {
+            console.error('loadActivityFeed: API returned non-array data', 'projects:', typeof projects, 'notes:', typeof notes);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading activity: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        const activities = [
+            ...projects.slice(0, 3).map(p => ({
+                type: 'project',
+                title: p.name,
+                device: p.device_name,
+                time: p.time_ago,
+                timestamp: p.updated_at || 0
+            })),
+            ...notes.slice(0, 3).map(n => ({
+                type: 'note',
+                title: n.title,
+                device: n.device_name,
+                time: n.time_ago,
+                timestamp: n.updated_at || 0
+            }))
+        ].sort((a, b) => b.timestamp - a.timestamp).slice(0, 6);
+        
+        if (activities.length === 0) {
+            container.innerHTML = '<div class="empty-state"><p>No recent activity</p></div>';
+            return;
+        }
+        
+        container.innerHTML = activities.map(a => `
+            <div class="activity-item">
+                <div class="activity-icon ${a.type}">
+                    <span class="material-symbols-outlined">${a.type === 'project' ? 'folder' : 'description'}</span>
+                </div>
+                <div class="activity-content">
+                    <span class="activity-action">${a.type === 'project' ? 'Project updated' : 'Note modified'}</span>
+                    <span class="activity-title">${escapeHtml(a.title)}</span>
+                </div>
+                <div class="activity-meta">
+                    <span class="activity-device">${escapeHtml(a.device)}</span>
+                    <span class="activity-time">${a.time}</span>
+                </div>
+            </div>
+        `).join('');
+        console.log('loadActivityFeed: Loaded', activities.length, 'activities');
+    } catch (error) {
+        console.error('loadActivityFeed: Error loading activity', error);
+        const container = document.getElementById('activity-feed');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading activity: ${escapeHtml(error.message || 'Unknown error')}</p>
+                </div>
+            `;
+        }
     }
-
-    container.innerHTML = activities.map(a => `
-        <div class="activity-item">
-            <div class="activity-icon ${a.type}">
-                <span class="material-symbols-outlined">${a.type === 'project' ? 'folder' : 'description'}</span>
-            </div>
-            <div class="activity-content">
-                <span class="activity-action">${a.type === 'project' ? 'Project updated' : 'Note modified'}</span>
-                <span class="activity-title">${escapeHtml(a.title)}</span>
-            </div>
-            <div class="activity-meta">
-                <span class="activity-device">${escapeHtml(a.device)}</span>
-                <span class="activity-time">${a.time}</span>
-            </div>
-        </div>
-    `).join('');
 }
 
 async function openNoteModal(noteId, title) {

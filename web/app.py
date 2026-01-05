@@ -86,7 +86,12 @@ def create_app():
     template_folder = os.path.join(web_path, "templates")
     static_folder = os.path.join(web_path, "static")
 
-    app = Flask(__name__, template_folder=template_folder, static_folder=static_folder)
+    app = Flask(
+        __name__,
+        template_folder=template_folder,
+        static_folder=static_folder,
+        static_url_path="/static",
+    )
     app.config["SECRET_KEY"] = os.urandom(24)
 
     # Initialize SocketIO if available - skip in frozen builds to avoid async_mode issues
@@ -95,15 +100,13 @@ def create_app():
             socketio.init_app(
                 app,
                 async_mode="threading",
-                cors_allowed_origins=["http://127.0.0.1:6767", "http://localhost:6767"],
+                cors_allowed_origins="*",  # Allow all origins for remote dashboard access
             )
-            app.socketio_enabled = True
         except ValueError:
             # async_mode not supported in frozen environment, disable SocketIO
             print("Warning: SocketIO disabled (async_mode not available)")
-            app.socketio_enabled = False
     else:
-        app.socketio_enabled = False
+        print("Warning: SocketIO not available")
 
     # Register blueprints
     from .routes.api import api_bp

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -34,11 +34,11 @@
                 <li><a href="/audio" class="{% if request.path == '/audio' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">music_note</span> <span class="nav-label">Audio</span>
                 </a></li>
-                <li><a href="/video" class="{% if request.path == '/video' %}active{% endif %}">
-                    <span class="material-symbols-outlined nav-icon">movie</span> <span class="nav-label">Video</span>
-                </a></li>
-                <li><a href="/automations" class="{% if request.path == '/automations' %}active{% endif %}">
-                    <span class="material-symbols-outlined nav-icon">auto_awesome</span> <span class="nav-label">Automations</span>
+                 <li><a href="/video" class="{% if request.path == '/video' %}active{% endif %}">
+                    <span class="material-symbols-outlined">movie</span> <span class="nav-label">Video</span>
+                 </a></li>
+                 <li><a href="/automations" class="{% if request.path == '/automations' %}active{% endif %}">
+                     <span class="material-symbols-outlined nav-icon">auto_awesome</span> <span class="nav-label">Automations</span>
                 </a></li>
                 <li><a href="/teams" class="{% if request.path == '/teams' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">group</span> <span class="nav-label">AI Teams</span>
@@ -75,9 +75,6 @@
                     <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
                         <span class="material-symbols-outlined sun-icon">light_mode</span>
                         <span class="material-symbols-outlined moon-icon">dark_mode</span>
-                    </button>
-                    <button id="refresh-btn" class="btn btn-icon" onclick="refreshData()" title="Refresh data">
-                        <span class="material-symbols-outlined refresh-icon">refresh</span>
                     </button>
                 </div>
             </header>

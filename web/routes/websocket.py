@@ -1,6 +1,7 @@
 """
 WebSocket handlers for real-time updates
 """
+
 from flask import request
 
 # Client tracking
@@ -13,100 +14,107 @@ from ..app import socketio
 if socketio is not None:
     from flask_socketio import emit, join_room, leave_room
 
-    @socketio.on('connect')
+    @socketio.on("connect")
     def handle_connect():
         """Handle client connection."""
-        connected_clients.add(request.sid if hasattr(request, 'sid') else 'unknown')
-        emit('status', {'connected': True, 'clients': len(connected_clients)})
+        connected_clients.add(request.sid if hasattr(request, "sid") else "unknown")
+        emit("status", {"connected": True, "clients": len(connected_clients)})
 
-    @socketio.on('disconnect')
+    @socketio.on("disconnect")
     def handle_disconnect():
         """Handle client disconnection."""
-        connected_clients.discard(request.sid if hasattr(request, 'sid') else 'unknown')
+        connected_clients.discard(request.sid if hasattr(request, "sid") else "unknown")
 
-    @socketio.on('subscribe')
+    @socketio.on("subscribe")
     def handle_subscribe(data):
         """Subscribe to specific update channels."""
-        channel = data.get('channel', 'all')
+        channel = data.get("channel", "all")
         join_room(channel)
-        emit('subscribed', {'channel': channel})
+        emit("subscribed", {"channel": channel})
 
-    @socketio.on('unsubscribe')
+    @socketio.on("unsubscribe")
     def handle_unsubscribe(data):
         """Unsubscribe from update channels."""
-        channel = data.get('channel', 'all')
+        channel = data.get("channel", "all")
         leave_room(channel)
 
 
 # Functions to broadcast updates (called from data service or main app)
 # These gracefully handle socketio being None
 
+
 def broadcast_device_connected(device_id, device_name):
     """Broadcast device connection event."""
     if socketio is not None:
-        socketio.emit('device_connected', {
-            'device_id': device_id,
-            'device_name': device_name
-        }, room='all')
+        socketio.emit(
+            "device_connected",
+            {"device_id": device_id, "device_name": device_name},
+            room="all",
+        )
 
 
 def broadcast_device_disconnected(device_id):
     """Broadcast device disconnection event."""
     if socketio is not None:
-        socketio.emit('device_disconnected', {
-            'device_id': device_id
-        }, room='all')
+        socketio.emit("device_disconnected", {"device_id": device_id}, room="all")
 
 
 def broadcast_projects_updated(device_id):
     """Broadcast projects sync event."""
     if socketio is not None:
-        socketio.emit('projects_updated', {
-            'device_id': device_id
-        }, room='all')
+        socketio.emit("projects_updated", {"device_id": device_id}, room="all")
 
 
 def broadcast_notes_updated(device_id):
     """Broadcast notes sync event."""
     if socketio is not None:
-        socketio.emit('notes_updated', {
-            'device_id': device_id
-        }, room='all')
+        socketio.emit("notes_updated", {"device_id": device_id}, room="all")
 
 
 def broadcast_sessions_updated(device_id):
     """Broadcast sessions sync event."""
     if socketio is not None:
-        socketio.emit('sessions_updated', {
-            'device_id': device_id
-        }, room='all')
+        socketio.emit("sessions_updated", {"device_id": device_id}, room="all")
 
 
 def broadcast_session_message(session_id, message, is_update=False):
     """Broadcast a session message (supports streaming updates)."""
     if socketio is not None:
-        socketio.emit('session_message', {
-            'session_id': session_id,
-            'message': message,
-            'is_update': bool(is_update)
-        }, room='all')
+        socketio.emit(
+            "session_message",
+            {
+                "session_id": session_id,
+                "message": message,
+                "is_update": bool(is_update),
+            },
+            room="all",
+        )
 
 
 def broadcast_automation_status(automation_id, status, result=None):
     """Broadcast automation status change."""
     if socketio is not None:
-        socketio.emit('automation_status', {
-            'automation_id': automation_id,
-            'status': status,
-            'result': result
-        }, room='all')
+        socketio.emit(
+            "automation_status",
+            {"automation_id": automation_id, "status": status, "result": result},
+            room="all",
+        )
 
+    def broadcast_agent_status(agent_id, status, task=None):
+        """Broadcast agent status change."""
+        if socketio is not None:
+            socketio.emit(
+                "agent_status",
+                {"device_id": agent_id, "status": status, "task": task},
+                room="all",
+            )
 
-def broadcast_agent_status(agent_id, status, task=None):
-    """Broadcast agent status change."""
-    if socketio is not None:
-        socketio.emit('agent_status', {
-            'agent_id': agent_id,
-            'status': status,
-            'task': task
-        }, room='all')
+    def broadcast_cards_updated(device_id):
+        """Broadcast cards sync event."""
+        if socketio is not None:
+            socketio.emit("cards_updated", {"device_id": device_id}, room="all")
+
+    def broadcast_collections_updated(device_id):
+        """Broadcast collections sync event."""
+        if socketio is not None:
+            socketio.emit("collections_updated", {"device_id": device_id}, room="all")

@@ -38,6 +38,8 @@ pip install -r requirements.txt
 python shadow_bridge_gui.py
 ```
 
+For a more native Windows experience you can build the MSI installer via `python setup.py bdist_msi` (see [docs/windows-installer.md](docs/windows-installer.md)). The resulting MSI skips the ~2.5 GB PyTorch + AudioCraft bundle, so follow the manual audio dependency steps in that guide after installing the base app.
+
 ## Ports
 
 | Port | Purpose |
@@ -67,6 +69,13 @@ ShadowBridge includes a relay server for the [claude-shadow](https://github.com/
 - All communication is direct between your devices (local network or via [Tailscale](https://tailscale.com))
 - No data is sent to external servers
 - Works across any network with Tailscale VPN
+
+## App Behavior (Exit & Uninstall)
+
+- **Upon Exit**: Closing the application or choosing **Exit** from the system tray stops all background services (Discovery, Data Receiver, Web Dashboard, and Companion Relay). Your settings and data (projects, notes, and session logs) are saved locally in `%USERPROFILE%\.shadowai`.
+- **Upon Uninstall**: Using the Windows "Uninstall a program" feature removes the application files from `Program Files` and the desktop shortcut.
+  - **Persistence**: To prevent accidental data loss, the `%USERPROFILE%\.shadowai` directory (containing your notes and project metadata) and the registered SSH keys are **not removed** automatically.
+  - **Cleanup**: To perform a full cleanup after uninstalling, manually delete the `%USERPROFILE%\.shadowai` and `%APPDATA%\ShadowBridge` folders.
 
 ## License
 

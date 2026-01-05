@@ -8,9 +8,6 @@
 <section class="section">
     <div class="section-header">
         <h2>Connection Status</h2>
-        <button class="btn btn-small btn-secondary" onclick="refreshStatus()" title="Refresh status">
-            <span class="material-symbols-outlined refresh-icon">refresh</span> Refresh
-        </button>
     </div>
     <div class="status-cards">
         <div class="status-card">
@@ -1060,12 +1057,6 @@ async function loadStatus() {
     if (status.data_path) {
         document.getElementById('data-path').textContent = status.data_path;
     }
-}
-
-async function refreshStatus() {
-    showToast('Refreshing status...', 'info');
-    await loadStatus();
-    showToast('Status updated', 'success');
 }
 
 async function loadQRCode() {

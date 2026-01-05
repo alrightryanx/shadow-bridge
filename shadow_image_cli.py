@@ -65,6 +65,17 @@ def main():
         "--negative", type=str, default=None, help="Negative prompt"
     )
 
+    # Image-to-Image command
+    i2i_parser = subparsers.add_parser("image-to-image", help="Generate image from image")
+    i2i_parser.add_argument("--image_b64", help="Base64 encoded source image")
+    i2i_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
+    i2i_parser.add_argument("--strength", type=float, default=0.7, help="Transformation strength")
+    i2i_parser.add_argument("--model", default="sd-xl-turbo", help="Model to use")
+    i2i_parser.add_argument("--steps", type=int, default=4, help="Inference steps")
+    i2i_parser.add_argument("--width", type=int, default=1024, help="Width")
+    i2i_parser.add_argument("--height", type=int, default=1024, help="Height")
+    i2i_parser.add_argument("--stdin", action="store_true", help="Read JSON from stdin")
+
     # Inpaint command
     inpaint_parser = subparsers.add_parser("inpaint", help="Inpaint an image")
     inpaint_parser.add_argument(
@@ -162,6 +173,72 @@ def main():
                 guidance_scale=guidance,
                 seed=args.seed,
                 source="cli",
+            )
+            print_json(result)
+
+        elif args.command == "image-to-image":
+            from web.services.image_service import get_image_generation_service
+
+            service = get_image_generation_service()
+
+            if args.stdin:
+                try:
+                    input_data = json_module.load(sys.stdin)
+                    image_b64 = input_data.get("image_b64")
+                    prompt_b64 = input_data.get("prompt_b64")
+                    negative_b64 = input_data.get("negative_b64")
+                    strength = input_data.get("strength", 0.7)
+                    model = input_data.get("model", "sd-xl-turbo")
+                    steps = input_data.get("steps", 4)
+                    width = input_data.get("width", 1024)
+                    height = input_data.get("height", 1024)
+
+                    if not all([image_b64, prompt_b64]):
+                        raise ValueError("Missing required fields in stdin JSON")
+
+                    prompt = base64.b64decode(prompt_b64).decode("utf-8")
+                    negative = (
+                        base64.b64decode(negative_b64).decode("utf-8")
+                        if negative_b64
+                        else None
+                    )
+
+                except Exception as e:
+                    print_json(
+                        {
+                            "success": False,
+                            "error": f"Failed to read stdin input: {str(e)}",
+                        }
+                    )
+                    sys.exit(1)
+            else:
+                if not all([args.image_b64, args.prompt_b64]):
+                    print_json(
+                        {
+                            "success": False,
+                            "error": "Missing required arguments: --image_b64, --prompt_b64",
+                        }
+                    )
+                    sys.exit(1)
+
+                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
+                image_b64 = args.image_b64
+                negative = None
+                strength = args.strength
+                model = args.model
+                steps = args.steps
+                width = args.width
+                height = args.height
+
+            result = service.image_to_image(
+                image_base64=image_b64,
+                prompt=prompt,
+                negative_prompt=negative,
+                strength=strength,
+                model=model,
+                steps=steps,
+                width=width,
+                height=height
             )
             print_json(result)
 

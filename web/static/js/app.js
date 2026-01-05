@@ -17,6 +17,30 @@ function initTheme() {
     document.documentElement.setAttribute('data-theme', savedTheme);
 }
 
+async function fetchWithRetry(url, options = {}, { attempts = 3, delay = 1200 } = {}) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
+                throw lastError;
+            }
+            return response;
+        } catch (error) {
+            lastError = error;
+            if (attempt < attempts) {
+                await new Promise(resolve => setTimeout(resolve, delay * attempt));
+            }
+        }
+    }
+    throw lastError;
+}
+
+if (typeof window !== 'undefined') {
+    window.fetchWithRetry = fetchWithRetry;
+}
+
 function toggleTheme() {
     const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
@@ -82,6 +106,8 @@ function showToast(message, type = 'info', duration = 4000) {
     }
 }
 
+let connectionOfflineToastShown = false;
+
 // ============ Device Selector ============
 
 async function initDeviceSelector() {
@@ -146,7 +172,9 @@ async function refreshData() {
         await updateStatus();
         showToast('Data refreshed', 'success');
     } catch (error) {
-        showToast('Failed to refresh: ' + error.message, 'error');
+        if (api.isOnline) {
+            showToast('Failed to refresh: ' + error.message, 'error');
+        }
     } finally {
         if (btn) {
             btn.classList.remove('spinning');
@@ -164,12 +192,22 @@ async function updateStatus() {
         const dot = indicator.querySelector('.status-dot');
         const text = indicator.querySelector('.status-text');
 
-        if (status.devices_connected > 0) {
+        // Check both API reachability AND device connections for accurate status
+        const isApiReachable = api.isOnline;
+        const hasConnectedDevices = status.devices_connected > 0;
+
+        if (isApiReachable && hasConnectedDevices) {
+            // Full system online
             dot.className = 'status-dot online';
             text.textContent = status.devices_connected + ' online';
-        } else {
+        } else if (isApiReachable && !hasConnectedDevices) {
+            // Bridge reachable but no devices connected
+            dot.className = 'status-dot idle';
+            text.textContent = 'No devices connected';
+        } else if (!isApiReachable) {
+            // Bridge unreachable
             dot.className = 'status-dot offline';
-            text.textContent = 'Offline';
+            text.textContent = 'Offline (cached)';
         }
     }
 
@@ -199,7 +237,9 @@ async function updateSidebarCounts() {
 async function openProject(id) {
     const result = await api.openProject(id);
     if (result.error) {
-        showToast('Error opening project: ' + result.error, 'error');
+        if (!result._offline) {
+            showToast('Error opening project: ' + result.error, 'error');
+        }
     } else {
         showToast('Opening project...', 'success');
         // Track activity for context window (AGI-Readiness)
@@ -228,7 +268,9 @@ async function openNote(id) {
     if (result.error) {
         title.textContent = 'Error';
         content.innerHTML = '<div class="error-message">' + escapeHtml(result.error) + '</div>';
-        showToast('Failed to load note: ' + result.error, 'error');
+        if (!result._offline) {
+            showToast('Failed to load note: ' + result.error, 'error');
+        }
         currentNoteContent = null;
         currentNoteTitle = null;
     } else {
@@ -330,7 +372,9 @@ async function saveNote() {
     const result = await api.updateNoteContent(currentNoteId, newContent, currentNoteTitle);
 
     if (result.error) {
-        showToast('Failed to save: ' + result.error, 'error');
+        if (!result._offline) {
+            showToast('Failed to save: ' + result.error, 'error');
+        }
         if (saveBtn) {
             saveBtn.disabled = false;
             saveBtn.textContent = 'Save';
@@ -372,7 +416,9 @@ async function exportNote() {
 
     const result = await api.exportNote(currentNoteId);
     if (result.error) {
-        showToast('Export failed: ' + result.error, 'error');
+        if (!result._offline) {
+            showToast('Export failed: ' + result.error, 'error');
+        }
     } else {
         showToast('Note exported to: ' + result.path, 'success');
     }
@@ -634,5 +680,15 @@ function updateConnectionStatus() {
         dot.className = 'status-dot offline';
         text.textContent = 'Offline (cached)';
         indicator.title = 'Using cached data - connection unavailable';
+
+        if (!connectionOfflineToastShown) {
+            showToast('ShadowBridge is unreachable. Working with cached data.', 'warning', 6000);
+            connectionOfflineToastShown = true;
+        }
+    } else {
+        if (connectionOfflineToastShown) {
+            showToast('ShadowBridge connection restored', 'success', 3000);
+            connectionOfflineToastShown = false;
+        }
     }
 }

@@ -1,6 +1,7 @@
 """
 REST API endpoints for Shadow Web Dashboard
 """
+
 from flask import Blueprint, jsonify, request, send_file
 import subprocess
 import socket
@@ -8,6 +9,7 @@ import json
 import os
 import time
 import logging
+import urllib.request
 from functools import lru_cache, wraps
 from threading import Lock
 from collections import defaultdict
@@ -17,41 +19,91 @@ from ..services.data_service import (
     save_note_content,
     decrypt_note_content,
     encrypt_note_content,
-    get_devices, get_device,
-    get_projects, get_project, update_project,
-    get_notes, get_note,
-    get_sessions, get_session, upsert_session, append_session_message,
-    get_automations, get_automation, get_automation_logs,
-    get_agents, get_agent, get_agent_metrics, add_agent, update_agent, delete_agent,
-    get_teams, get_team, create_team, update_team, delete_team, get_team_metrics,
-    get_tasks, get_task, create_task, update_task, delete_task,
-    get_workflows, start_workflow, cancel_workflow,
-    get_audits, get_audit_entry, get_audit_stats, get_audit_traces, export_audit_report,
-    get_favorites, toggle_favorite,
+    get_devices,
+    get_device,
+    get_projects,
+    get_project,
+    update_project,
+    get_notes,
+    get_note,
+    get_sessions,
+    get_session,
+    upsert_session,
+    append_session_message,
+    get_automations,
+    get_automation,
+    get_automation_logs,
+    get_agents,
+    get_agent,
+    get_agent_metrics,
+    add_agent,
+    update_agent,
+    delete_agent,
+    get_teams,
+    get_team,
+    create_team,
+    update_team,
+    delete_team,
+    get_team_metrics,
+    get_tasks,
+    get_task,
+    create_task,
+    update_task,
+    delete_task,
+    get_workflows,
+    start_workflow,
+    cancel_workflow,
+    get_audits,
+    get_audit_entry,
+    get_audit_stats,
+    get_audit_traces,
+    export_audit_report,
+    get_favorites,
+    toggle_favorite,
     search_all,
-    get_privacy_score, get_token_usage, get_category_breakdown,
-    get_usage_stats, get_backend_usage, get_activity_timeline,
+    get_privacy_score,
+    get_token_usage,
+    get_category_breakdown,
+    get_usage_stats,
+    get_backend_usage,
+    get_activity_timeline,
     get_status,
     # Ownership & Sharing
-    share_note, unshare_note, share_project, unshare_project,
-    get_shared_content_for_device, get_permission_level,
+    share_note,
+    unshare_note,
+    share_project,
+    unshare_project,
+    get_shared_content_for_device,
+    get_permission_level,
     # Email Verification
-    request_email_verification, verify_email_code,
-    get_verified_email, get_all_verified_emails, remove_verified_email,
-    get_devices_by_email, set_email_config,
+    request_email_verification,
+    verify_email_code,
+    get_verified_email,
+    get_all_verified_emails,
+    remove_verified_email,
+    get_devices_by_email,
+    set_email_config,
     # Team Membership
-    invite_team_member, accept_team_invitation, get_pending_invitations,
-    remove_team_member, get_teams_for_email, update_team_member_role,
+    invite_team_member,
+    accept_team_invitation,
+    get_pending_invitations,
+    remove_team_member,
+    get_teams_for_email,
+    update_team_member_role,
     # Unified Memory (AGI-readiness)
-    get_memory_stats, get_memory_search_results
+    get_memory_stats,
+    get_memory_search_results,
 )
+from ..services.task_service import get_task_service
+from ..services.adb_service import get_adb_service
 
-api_bp = Blueprint('api', __name__)
+api_bp = Blueprint("api", __name__)
 
 # Logger for API errors
 logger = logging.getLogger(__name__)
 
 # ============ Rate Limiting ============
+
 
 class RateLimiter:
     """Simple in-memory rate limiter using sliding window."""
@@ -94,23 +146,23 @@ _rate_limiter = RateLimiter(requests_per_minute=120)
 
 def rate_limit(f):
     """Decorator to apply rate limiting to an endpoint."""
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Use client IP as rate limit key
         client_ip = request.remote_addr or "unknown"
 
         if not _rate_limiter.is_allowed(client_ip):
-            return jsonify({
-                "error": "Rate limit exceeded",
-                "retry_after": 60
-            }), 429
+            return jsonify({"error": "Rate limit exceeded", "retry_after": 60}), 429
 
         return f(*args, **kwargs)
+
     return decorated_function
 
 
 def api_error_handler(f):
     """Decorator to provide consistent error handling for API endpoints."""
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         try:
@@ -130,6 +182,7 @@ def api_error_handler(f):
         except Exception as e:
             logger.exception(f"Unexpected error in {f.__name__}")
             return jsonify({"error": "Internal server error"}), 500
+
     return decorated_function
 
 
@@ -140,6 +193,7 @@ def api_error_handler(f):
 _note_content_cache = {}
 _note_cache_lock = Lock()
 NOTE_CACHE_TTL_SECONDS = 300  # Cache for 5 minutes
+
 
 def _get_cached_note_content(note_id: str) -> dict | None:
     """Get cached note content if available and not expired."""
@@ -152,6 +206,7 @@ def _get_cached_note_content(note_id: str) -> dict | None:
                 del _note_content_cache[note_id]
     return None
 
+
 def _cache_note_content(note_id: str, content: dict):
     """Cache note content with current timestamp."""
     with _note_cache_lock:
@@ -163,10 +218,12 @@ def _cache_note_content(note_id: str, content: dict):
             for old_id, _ in sorted_items[:20]:
                 del _note_content_cache[old_id]
 
+
 def _invalidate_note_cache(note_id: str):
     """Remove a note from cache (after update)."""
     with _note_cache_lock:
         _note_content_cache.pop(note_id, None)
+
 
 DEFAULT_NOTE_CONTENT_PORT = 19285
 FALLBACK_NOTE_CONTENT_PORTS = [
@@ -195,7 +252,9 @@ def _send_note_request(host: str, port: int, payload: dict, timeout_s: int) -> d
     with socket.create_connection((host, port), timeout=timeout_s) as sock:
         sock.settimeout(timeout_s)
         # Set larger socket buffer for better performance
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)  # 256KB receive buffer
+        sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_RCVBUF, 262144
+        )  # 256KB receive buffer
 
         request_data = json.dumps(payload).encode("utf-8")
         sock.sendall(len(request_data).to_bytes(4, "big") + request_data)
@@ -216,7 +275,9 @@ def _send_note_request(host: str, port: int, payload: dict, timeout_s: int) -> d
         return json.loads(response_data.decode("utf-8"))
 
 
-def _try_note_request(device_ips: list[str], port: int, payload: dict, timeout_s: int, retries: int) -> dict:
+def _try_note_request(
+    device_ips: list[str], port: int, payload: dict, timeout_s: int, retries: int
+) -> dict:
     """Try multiple device IPs with retries, return first successful response."""
     last_error: Exception | None = None
     for host in device_ips:
@@ -266,11 +327,7 @@ def _build_note_ports(note_port: object) -> list[int]:
 
 
 def _try_note_request_ports(
-    device_ips: list[str],
-    ports: list[int],
-    payload: dict,
-    timeout_s: int,
-    retries: int
+    device_ips: list[str], ports: list[int], payload: dict, timeout_s: int, retries: int
 ) -> dict:
     last_error: Exception | None = None
     for port in ports:
@@ -286,11 +343,7 @@ def _try_note_request_ports(
 def _try_note_sync(device_ips: list[str], ports: list[int]) -> bool:
     try:
         response = _try_note_request_ports(
-            device_ips,
-            ports,
-            {"action": "sync_notes"},
-            timeout_s=6,
-            retries=1
+            device_ips, ports, {"action": "sync_notes"}, timeout_s=6, retries=1
         )
         return bool(response.get("success", True))
     except Exception:
@@ -299,13 +352,14 @@ def _try_note_sync(device_ips: list[str], ports: list[int]) -> bool:
 
 # ============ Devices ============
 
-@api_bp.route('/devices')
+
+@api_bp.route("/devices")
 def api_devices():
     """List all devices with status."""
     return jsonify(get_devices())
 
 
-@api_bp.route('/devices/<device_id>')
+@api_bp.route("/devices/<device_id>")
 def api_device(device_id):
     """Get device details."""
     device = get_device(device_id)
@@ -316,17 +370,19 @@ def api_device(device_id):
 
 # ============ Projects ============
 
-@api_bp.route('/projects')
+
+@api_bp.route("/projects")
 def api_projects():
     """List all projects."""
-    device_id = request.args.get('device_id')
+    device_id = request.args.get("device_id")
     return jsonify(get_projects(device_id))
 
 
-@api_bp.route('/projects', methods=['POST'])
+@api_bp.route("/projects", methods=["POST"])
 def api_create_project():
     """Create a new project."""
     from ..services.data_service import create_project
+
     data = request.get_json()
     if not data or not data.get("name"):
         return jsonify({"error": "Name is required"}), 400
@@ -335,7 +391,7 @@ def api_create_project():
     return jsonify(result)
 
 
-@api_bp.route('/projects/<project_id>')
+@api_bp.route("/projects/<project_id>")
 def api_project(project_id):
     """Get project details."""
     project = get_project(project_id)
@@ -344,7 +400,7 @@ def api_project(project_id):
     return jsonify({"error": "Project not found"}), 404
 
 
-@api_bp.route('/projects/<project_id>/open', methods=['POST'])
+@api_bp.route("/projects/<project_id>/open", methods=["POST"])
 def api_open_project(project_id):
     """Open project in editor."""
     project = get_project(project_id)
@@ -357,6 +413,7 @@ def api_open_project(project_id):
 
     # Validate path - must be absolute and exist
     import os
+
     path = os.path.abspath(path)
     if not os.path.exists(path):
         return jsonify({"error": "Path does not exist"}), 400
@@ -375,7 +432,7 @@ def api_open_project(project_id):
             return jsonify({"error": "Failed to open editor"}), 500
 
 
-@api_bp.route('/projects/sync', methods=['POST'])
+@api_bp.route("/projects/sync", methods=["POST"])
 def api_projects_sync():
     """
     Receive projects sync notification and broadcast to WebSocket clients.
@@ -385,7 +442,7 @@ def api_projects_sync():
         from .websocket import broadcast_projects_updated
 
         data = request.get_json() or {}
-        device_id = data.get('device_id', 'unknown')
+        device_id = data.get("device_id", "unknown")
 
         # Broadcast to all connected WebSocket clients
         broadcast_projects_updated(device_id)
@@ -397,18 +454,20 @@ def api_projects_sync():
 
 # ============ Notes ============
 
-@api_bp.route('/notes')
+
+@api_bp.route("/notes")
 def api_notes():
     """List all note titles."""
-    device_id = request.args.get('device_id')
-    search = request.args.get('search')
+    device_id = request.args.get("device_id")
+    search = request.args.get("search")
     return jsonify(get_notes(device_id, search))
 
 
-@api_bp.route('/notes', methods=['POST'])
+@api_bp.route("/notes", methods=["POST"])
 def api_create_note():
     """Create a new note."""
     from ..services.data_service import create_note
+
     data = request.get_json()
     if not data or not data.get("title"):
         return jsonify({"error": "Title is required"}), 400
@@ -417,7 +476,7 @@ def api_create_note():
     return jsonify(result)
 
 
-@api_bp.route('/notes/<note_id>')
+@api_bp.route("/notes/<note_id>")
 def api_note(note_id):
     """Get note metadata."""
     note = get_note(note_id)
@@ -426,7 +485,7 @@ def api_note(note_id):
     return jsonify({"error": "Note not found"}), 404
 
 
-@api_bp.route('/notes/<note_id>/content')
+@api_bp.route("/notes/<note_id>/content")
 def api_note_content(note_id):
     """Fetch note content from device, with caching for performance."""
     # Check in-memory cache first (for repeated requests in same session)
@@ -474,15 +533,14 @@ def api_note_content(note_id):
 
     # Fetch content from Android device
     try:
-        request = {
-            "action": "fetch_note",
-            "note_id": note_id
-        }
+        request = {"action": "fetch_note", "note_id": note_id}
         response = _try_note_request(device_ips, port, request, timeout_s=15, retries=2)
         if response.get("success"):
             # Decrypt content if encrypted (SYNC_ENC:... format)
             raw_content = response.get("content", "")
-            is_encrypted = response.get("encrypted", False) or raw_content.startswith("SYNC_ENC:")
+            is_encrypted = response.get("encrypted", False) or raw_content.startswith(
+                "SYNC_ENC:"
+            )
             if is_encrypted and device_id:
                 content = decrypt_note_content(raw_content, device_id)
             else:
@@ -492,30 +550,33 @@ def api_note_content(note_id):
                 "id": response.get("id"),
                 "title": response.get("title"),
                 "content": content,
-                "updated_at": response.get("updatedAt")
+                "updated_at": response.get("updatedAt"),
             }
             # Cache in memory for faster subsequent access
             _cache_note_content(note_id, result)
             # Also save to local file cache for offline access (save decrypted)
             save_note_content(
-                note_id,
-                result.get("title", ""),
-                content,
-                result.get("updated_at", 0)
+                note_id, result.get("title", ""), content, result.get("updated_at", 0)
             )
             return jsonify(result)
         else:
             return jsonify({"error": response.get("error", "Unknown error")}), 500
 
     except socket.timeout:
-        return jsonify({"error": f"Device connection timeout (tried: {', '.join(device_ips)})"}), 504
+        return jsonify(
+            {"error": f"Device connection timeout (tried: {', '.join(device_ips)})"}
+        ), 504
     except ConnectionRefusedError:
-        return jsonify({"error": f"Device not accepting connections (tried: {', '.join(device_ips)})"}), 503
+        return jsonify(
+            {
+                "error": f"Device not accepting connections (tried: {', '.join(device_ips)})"
+            }
+        ), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/notes/<note_id>/content', methods=['PUT'])
+@api_bp.route("/notes/<note_id>/content", methods=["PUT"])
 def api_update_note_content(note_id):
     """Update note content on device."""
     note = get_note(note_id)
@@ -569,43 +630,57 @@ def api_update_note_content(note_id):
         update_request = {
             "action": "update_note",
             "note_id": note_id,
-            "content": content_to_send
+            "content": content_to_send,
         }
         # Only include title if provided and non-empty (preserves existing title otherwise)
         if new_title:
             update_request["title"] = new_title
-        response = _try_note_request(device_ips, port, update_request, timeout_s=12, retries=2)
+        response = _try_note_request(
+            device_ips, port, update_request, timeout_s=12, retries=2
+        )
         if response.get("success"):
             # Invalidate cache so next fetch gets fresh content
             _invalidate_note_cache(note_id)
 
             # Save to local cache for immediate access
-            save_note_content(note_id, new_title or note.get("title", "Untitled"), new_content, int(time.time() * 1000))
+            save_note_content(
+                note_id,
+                new_title or note.get("title", "Untitled"),
+                new_content,
+                int(time.time() * 1000),
+            )
 
             # Broadcast update to all connected web clients
             try:
                 from .websocket import broadcast_notes_updated
+
                 broadcast_notes_updated(device_id or "web")
             except Exception as e:
                 logger.warning(f"Failed to broadcast note update: {e}")
 
-            return jsonify({
-                "success": True,
-                "id": note_id,
-                "message": "Note updated successfully"
-            })
+            return jsonify(
+                {"success": True, "id": note_id, "message": "Note updated successfully"}
+            )
         else:
-            return jsonify({"error": response.get("error", "Failed to update note")}), 500
+            return jsonify(
+                {"error": response.get("error", "Failed to update note")}
+            ), 500
 
     except socket.timeout:
-        return jsonify({"error": f"Device connection timeout (tried: {', '.join(device_ips)})"}), 504
+        return jsonify(
+            {"error": f"Device connection timeout (tried: {', '.join(device_ips)})"}
+        ), 504
     except ConnectionRefusedError:
-        return jsonify({"error": f"Device not accepting connections (tried: {', '.join(device_ips)})"}), 503
+        return jsonify(
+            {
+                "error": f"Device not accepting connections (tried: {', '.join(device_ips)})"
+            }
+        ), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/notes/<note_id>', methods=['DELETE'])
+@api_bp.route("/notes/<note_id>", methods=["DELETE"])
 def api_delete_note(note_id):
     """Delete a note from the device and local cache."""
     from ..services.data_service import delete_note
@@ -647,11 +722,10 @@ def api_delete_note(note_id):
     device_error = None
     if device_ips:
         try:
-            delete_request = {
-                "action": "delete_note",
-                "note_id": note_id
-            }
-            response = _try_note_request(device_ips, port, delete_request, timeout_s=10, retries=2)
+            delete_request = {"action": "delete_note", "note_id": note_id}
+            response = _try_note_request(
+                device_ips, port, delete_request, timeout_s=10, retries=2
+            )
             if response.get("success"):
                 device_deleted = True
             else:
@@ -667,22 +741,23 @@ def api_delete_note(note_id):
     local_result = delete_note(note_id)
 
     if device_deleted:
-        return jsonify({
-            "success": True,
-            "message": "Note deleted from device and dashboard"
-        })
+        return jsonify(
+            {"success": True, "message": "Note deleted from device and dashboard"}
+        )
     elif local_result.get("success"):
         # Local delete worked but device failed - warn user
-        return jsonify({
-            "success": True,
-            "warning": f"Deleted from dashboard. Device: {device_error or 'unreachable'}",
-            "message": "Note deleted from dashboard (device may be offline)"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "warning": f"Deleted from dashboard. Device: {device_error or 'unreachable'}",
+                "message": "Note deleted from dashboard (device may be offline)",
+            }
+        )
     else:
         return jsonify({"error": "Failed to delete note"}), 500
 
 
-@api_bp.route('/notes/<note_id>/export', methods=['POST'])
+@api_bp.route("/notes/<note_id>/export", methods=["POST"])
 def api_export_note(note_id):
     """Export note to file."""
     import os
@@ -726,20 +801,22 @@ def api_export_note(note_id):
             port,
             {"action": "fetch_note", "note_id": note_id},
             timeout_s=12,
-            retries=2
+            retries=2,
         )
-        if not response.get('success'):
-            return jsonify({"error": response.get('message', 'Failed to fetch note')}), 502
+        if not response.get("success"):
+            return jsonify(
+                {"error": response.get("message", "Failed to fetch note")}
+            ), 502
 
-        content = response.get('content', '')
-        title = response.get('title', note.get('title', 'Untitled'))
+        content = response.get("content", "")
+        title = response.get("title", note.get("title", "Untitled"))
 
         # Create export directory
         export_dir = Path.home() / "Downloads" / "Shadow_Notes"
         export_dir.mkdir(parents=True, exist_ok=True)
 
         # Sanitize filename
-        safe_title = "".join(c for c in title if c.isalnum() or c in ' -_').strip()[:50]
+        safe_title = "".join(c for c in title if c.isalnum() or c in " -_").strip()[:50]
         if not safe_title:
             safe_title = "note"
 
@@ -750,15 +827,13 @@ def api_export_note(note_id):
             file_path = export_dir / f"{safe_title}_{counter}.md"
             counter += 1
 
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(f"# {title}\n\n")
             f.write(content)
 
-        return jsonify({
-            "success": True,
-            "path": str(file_path),
-            "filename": file_path.name
-        })
+        return jsonify(
+            {"success": True, "path": str(file_path), "filename": file_path.name}
+        )
 
     except socket.timeout:
         return jsonify({"error": "Device connection timeout"}), 504
@@ -768,7 +843,7 @@ def api_export_note(note_id):
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/notes/sync', methods=['POST'])
+@api_bp.route("/notes/sync", methods=["POST"])
 def api_notes_sync():
     """
     Receive notes sync notification and broadcast to WebSocket clients.
@@ -778,7 +853,7 @@ def api_notes_sync():
         from .websocket import broadcast_notes_updated
 
         data = request.get_json() or {}
-        device_id = data.get('device_id', 'unknown')
+        device_id = data.get("device_id", "unknown")
 
         # Broadcast to all connected WebSocket clients
         broadcast_notes_updated(device_id)
@@ -790,35 +865,39 @@ def api_notes_sync():
 
 # ============ Sessions ============
 
-@api_bp.route('/sessions')
+
+@api_bp.route("/sessions")
 def api_sessions():
     """List sessions with metadata."""
-    device_id = request.args.get('device_id')
-    project_id = request.args.get('project_id')
-    limit_raw = request.args.get('limit')
+    device_id = request.args.get("device_id")
+    project_id = request.args.get("project_id")
+    limit_raw = request.args.get("limit")
     limit = None
     if limit_raw:
         try:
             limit = int(limit_raw)
         except ValueError:
             limit = None
-    return jsonify(get_sessions(device_id=device_id, project_id=project_id, limit=limit))
+    return jsonify(
+        get_sessions(device_id=device_id, project_id=project_id, limit=limit)
+    )
 
 
-@api_bp.route('/sessions', methods=['POST'])
+@api_bp.route("/sessions", methods=["POST"])
 def api_upsert_session():
     """Create or update a session."""
     data = request.get_json() or {}
     session = upsert_session(data)
     try:
         from .websocket import broadcast_sessions_updated
+
         broadcast_sessions_updated(session.get("device_id") or "web")
     except Exception:
         pass
     return jsonify(session)
 
 
-@api_bp.route('/sessions/<session_id>')
+@api_bp.route("/sessions/<session_id>")
 def api_session(session_id):
     """Get full session with messages."""
     session = get_session(session_id)
@@ -827,7 +906,7 @@ def api_session(session_id):
     return jsonify({"error": "Session not found"}), 404
 
 
-@api_bp.route('/sessions/<session_id>/messages', methods=['POST'])
+@api_bp.route("/sessions/<session_id>/messages", methods=["POST"])
 def api_session_message(session_id):
     """Append or update a session message (supports streaming)."""
     data = request.get_json() or {}
@@ -841,22 +920,31 @@ def api_session_message(session_id):
         message=message if isinstance(message, dict) else {},
         delta=delta if isinstance(delta, str) else None,
         is_final=is_final,
-        session_meta=session_meta if isinstance(session_meta, dict) else None
+        session_meta=session_meta if isinstance(session_meta, dict) else None,
     )
 
     try:
         from .websocket import broadcast_session_message, broadcast_sessions_updated
+
         is_update = bool(data.get("is_update")) or bool(delta)
-        broadcast_session_message(session_id, result.get("message"), is_update=is_update)
+        broadcast_session_message(
+            session_id, result.get("message"), is_update=is_update
+        )
         device_id = result.get("session", {}).get("device_id") or "web"
         broadcast_sessions_updated(device_id)
     except Exception:
         pass
 
-    return jsonify({"success": True, "session": result.get("session"), "message": result.get("message")})
+    return jsonify(
+        {
+            "success": True,
+            "session": result.get("session"),
+            "message": result.get("message"),
+        }
+    )
 
 
-@api_bp.route('/sessions/message', methods=['POST'])
+@api_bp.route("/sessions/message", methods=["POST"])
 def api_session_message_shortcut():
     """Append a session message with session_id in payload."""
     data = request.get_json() or {}
@@ -865,39 +953,75 @@ def api_session_message_shortcut():
         return jsonify({"error": "session_id is required"}), 400
     return api_session_message(session_id)
 
+    @api_bp.route("/sessions/sync", methods=["POST"])
+    def api_sessions_sync():
+        """
+        Receive sessions sync notification and broadcast to WebSocket clients.
+        Called by ShadowBridge after syncing sessions from Android app.
+        """
+        try:
+            from .websocket import broadcast_sessions_updated
 
-@api_bp.route('/sessions/sync', methods=['POST'])
-def api_sessions_sync():
-    """
-    Receive sessions sync notification and broadcast to WebSocket clients.
-    Called by ShadowBridge after syncing sessions from Android app.
-    """
-    try:
-        from .websocket import broadcast_sessions_updated
+            data = request.get_json() or {}
+            device_id = data.get("device_id", "unknown")
 
-        data = request.get_json() or {}
-        device_id = data.get('device_id', 'unknown')
+            broadcast_sessions_updated(device_id)
 
-        broadcast_sessions_updated(device_id)
+            return jsonify({"success": True, "message": "Sessions sync broadcasted"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
-        return jsonify({"success": True, "message": "Sessions sync broadcasted"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    @api_bp.route("/cards/sync", methods=["POST"])
+    def api_cards_sync():
+        """
+        Receive cards sync notification and broadcast to WebSocket clients.
+        Called by ShadowBridge after syncing cards from Android app.
+        """
+        try:
+            from .websocket import broadcast_cards_updated
+
+            data = request.get_json() or {}
+            device_id = data.get("device_id", "unknown")
+
+            broadcast_cards_updated(device_id)
+
+            return jsonify({"success": True, "message": "Cards sync broadcasted"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @api_bp.route("/collections/sync", methods=["POST"])
+    def api_collections_sync():
+        """
+        Receive collections sync notification and broadcast to WebSocket clients.
+        Called by ShadowBridge after syncing collections from Android app.
+        """
+        try:
+            from .websocket import broadcast_collections_updated
+
+            data = request.get_json() or {}
+            device_id = data.get("device_id", "unknown")
+
+            broadcast_collections_updated(device_id)
+
+            return jsonify({"success": True, "message": "Collections sync broadcasted"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    # ============ Automations ============
 
 
-# ============ Automations ============
-
-@api_bp.route('/automations')
+@api_bp.route("/automations")
 def api_automations():
     """List all automations."""
-    device_id = request.args.get('device_id')
+    device_id = request.args.get("device_id")
     return jsonify(get_automations(device_id))
 
 
-@api_bp.route('/automations', methods=['POST'])
+@api_bp.route("/automations", methods=["POST"])
 def api_create_automation():
     """Create a new automation."""
     from ..services.data_service import create_automation
+
     data = request.get_json()
     if not data or not data.get("name"):
         return jsonify({"error": "Name is required"}), 400
@@ -906,20 +1030,22 @@ def api_create_automation():
     return jsonify(result)
 
 
-@api_bp.route('/automations/<automation_id>')
+@api_bp.route("/automations/<automation_id>")
 def api_automation(automation_id):
     """Get automation details."""
     from ..services.data_service import get_full_automation
+
     auto = get_full_automation(automation_id)
     if auto:
         return jsonify(auto)
     return jsonify({"error": "Automation not found"}), 404
 
 
-@api_bp.route('/automations/<automation_id>', methods=['PUT'])
+@api_bp.route("/automations/<automation_id>", methods=["PUT"])
 def api_update_automation(automation_id):
     """Update an existing automation."""
     from ..services.data_service import update_automation
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
@@ -929,34 +1055,36 @@ def api_update_automation(automation_id):
     return jsonify(result), 404
 
 
-@api_bp.route('/automations/<automation_id>', methods=['DELETE'])
+@api_bp.route("/automations/<automation_id>", methods=["DELETE"])
 def api_delete_automation(automation_id):
     """Delete an automation."""
     from ..services.data_service import delete_automation
+
     result = delete_automation(automation_id)
     if result.get("success"):
         return jsonify(result)
     return jsonify(result), 404
 
 
-@api_bp.route('/automations/<automation_id>/toggle', methods=['POST'])
+@api_bp.route("/automations/<automation_id>/toggle", methods=["POST"])
 def api_toggle_automation(automation_id):
     """Toggle automation enabled status."""
     from ..services.data_service import toggle_automation_enabled
+
     result = toggle_automation_enabled(automation_id)
     if result.get("success"):
         return jsonify(result)
     return jsonify(result), 404
 
 
-@api_bp.route('/automations/<automation_id>/logs')
+@api_bp.route("/automations/<automation_id>/logs")
 def api_automation_logs(automation_id):
     """Get automation execution logs."""
     logs = get_automation_logs(automation_id)
     return jsonify(logs)
 
 
-@api_bp.route('/automations/<automation_id>/run', methods=['POST'])
+@api_bp.route("/automations/<automation_id>/run", methods=["POST"])
 def api_run_automation(automation_id):
     """Trigger manual automation run."""
     auto = get_automation(automation_id)
@@ -969,14 +1097,15 @@ def api_run_automation(automation_id):
 
 # ============ Agents ============
 
-@api_bp.route('/agents')
+
+@api_bp.route("/agents")
 def api_agents():
     """List all agents."""
-    device_id = request.args.get('device_id')
+    device_id = request.args.get("device_id")
     return jsonify(get_agents(device_id))
 
 
-@api_bp.route('/agents/<agent_id>')
+@api_bp.route("/agents/<agent_id>")
 def api_agent(agent_id):
     """Get agent details."""
     agent = get_agent(agent_id)
@@ -985,14 +1114,14 @@ def api_agent(agent_id):
     return jsonify({"error": "Agent not found"}), 404
 
 
-@api_bp.route('/agents/<agent_id>/tasks')
+@api_bp.route("/agents/<agent_id>/tasks")
 def api_agent_tasks(agent_id):
     """Get agent's task history."""
     # TODO: Implement task history
     return jsonify([])
 
 
-@api_bp.route('/agents/metrics')
+@api_bp.route("/agents/metrics")
 def api_agent_metrics():
     """Get aggregate agent metrics."""
     return jsonify(get_agent_metrics())
@@ -1005,89 +1134,298 @@ _agent_activity_log = []
 _activity_log_lock = Lock()
 MAX_ACTIVITY_ITEMS = 100
 
+
 def _add_activity(event_type: str, message: str, icon: str = None):
     """Add an activity event to the log."""
     with _activity_log_lock:
-        _agent_activity_log.insert(0, {
-            "type": event_type,
-            "message": message,
-            "icon": icon or event_type,
-            "timestamp": int(time.time() * 1000)
-        })
+        _agent_activity_log.insert(
+            0,
+            {
+                "type": event_type,
+                "message": message,
+                "icon": icon or event_type,
+                "timestamp": int(time.time() * 1000),
+            },
+        )
         # Trim old items
         while len(_agent_activity_log) > MAX_ACTIVITY_ITEMS:
             _agent_activity_log.pop()
 
 
-@api_bp.route('/agents/activity')
+@api_bp.route("/agents/activity")
 def api_agent_activity():
     """Get recent agent activity for real-time feed."""
-    since = request.args.get('since', 0, type=int)
+    since = request.args.get("since", 0, type=int)
     with _activity_log_lock:
-        events = [e for e in _agent_activity_log if e['timestamp'] > since]
-    return jsonify({
-        "events": events[:20],  # Max 20 events per poll
-        "timestamp": int(time.time() * 1000)
-    })
+        events = [e for e in _agent_activity_log if e["timestamp"] > since]
+    return jsonify(
+        {
+            "events": events[:20],  # Max 20 events per poll
+            "timestamp": int(time.time() * 1000),
+        }
+    )
 
 
-@api_bp.route('/agents/pause', methods=['POST'])
+@api_bp.route("/agents/pause", methods=["POST"])
 def api_pause_agents():
     """Pause all agent execution."""
-    _add_activity('system', 'All agents paused', 'pause')
+    _add_activity("system", "All agents paused", "pause")
     # TODO: Send pause command to Android device
     return jsonify({"success": True, "message": "Pause command sent"})
 
 
-@api_bp.route('/agents/resume', methods=['POST'])
+@api_bp.route("/agents/resume", methods=["POST"])
 def api_resume_agents():
     """Resume all agent execution."""
-    _add_activity('system', 'All agents resumed', 'play')
+    _add_activity("system", "All agents resumed", "play")
     # TODO: Send resume command to Android device
     return jsonify({"success": True, "message": "Resume command sent"})
 
 
-@api_bp.route('/agents/kill-all', methods=['POST'])
+@api_bp.route("/agents/kill-all", methods=["POST"])
 def api_kill_all_agents():
     """Emergency kill switch for all agents."""
-    _add_activity('kill', 'KILL ALL command executed', 'cancel')
+    _add_activity("kill", "KILL ALL command executed", "cancel")
     # TODO: Send kill command to Android device
     return jsonify({"success": True, "message": "Kill all command sent"})
 
 
-@api_bp.route('/agents/<agent_id>/kill', methods=['POST'])
+@api_bp.route("/agents/<agent_id>/kill", methods=["POST"])
 def api_kill_agent(agent_id):
     """Kill a specific agent."""
     agent = get_agent(agent_id)
-    agent_name = agent.get('name', agent_id) if agent else agent_id
-    _add_activity('kill', f'Agent {agent_name} terminated', 'cancel')
+    agent_name = agent.get("name", agent_id) if agent else agent_id
+    _add_activity("kill", f"Agent {agent_name} terminated", "cancel")
     # TODO: Send kill command to Android device for specific agent
-    return jsonify({"success": True, "message": f"Kill command sent for agent {agent_id}"})
+    return jsonify(
+        {"success": True, "message": f"Kill command sent for agent {agent_id}"}
+    )
 
 
-@api_bp.route('/tasks/<task_id>/cancel', methods=['POST'])
+def notify_companion_relay(task):
+    """Send task completion message to companion relay."""
+    try:
+        # Build message
+        message = {
+            "type": "task_complete",
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "task_id": task.id,
+                "task_name": " ".join(task.command),
+                "status": task.status.value,
+                "exit_code": task.exit_code,
+                "hostname": socket.gethostname(),
+            },
+        }
+
+        # Internal relay payload
+        relay_payload = {"type": "relay_message", "message": message}
+
+        # Deliver via TCP socket to companion relay on loopback
+        # ShadowBridge GUI app is listening on port 19286
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            s.connect(("127.0.0.1", 19286))
+
+            # Protocol: Handshake first so we're identified
+            handshake = {"type": "handshake", "deviceId": "task_service", "version": 1}
+            h_data = json.dumps(handshake).encode("utf-8")
+            s.sendall(len(h_data).to_bytes(4, "big") + h_data)
+
+            # Wait a tiny bit for handshake processing
+            time.sleep(0.1)
+
+            # Now send the actual relay request
+            r_data = json.dumps(relay_payload).encode("utf-8")
+            s.sendall(len(r_data).to_bytes(4, "big") + r_data)
+
+        logger.info(f"Task {task.id} complete - relay message sent to localhost:19286")
+    except Exception as e:
+        logger.error(f"Failed to relay task completion: {e}")
+
+
+# Register callback
+get_task_service().set_on_complete_callback(notify_companion_relay)
+
+
+@api_bp.route("/tasks/start", methods=["POST"])
+@api_error_handler
+def api_start_task():
+    """Start a new supervised background task."""
+    data = request.get_json()
+    if not data or not data.get("command"):
+        return jsonify({"error": "Command is required"}), 400
+
+    command = data.get("command")
+    if isinstance(command, str):
+        # Convert string command to list for safer execution
+        import shlex
+
+        command = shlex.split(command)
+
+    cwd = data.get("cwd")
+    if cwd:
+        cwd = os.path.abspath(cwd)
+        if not os.path.exists(cwd):
+            return jsonify({"error": f"Path does not exist: {cwd}"}), 400
+
+    task_id = get_task_service().start_task(command, cwd)
+    _add_activity(
+        "task", f"Started supervised task: {' '.join(command)[:50]}...", "play"
+    )
+
+    return jsonify(
+        {"success": True, "task_id": task_id, "message": "Task started successfully"}
+    )
+
+
+@api_bp.route("/tasks/<task_id>/status")
+@api_error_handler
+def api_task_status(task_id):
+    """Get status and metadata for a supervised task."""
+    task = get_task_service().get_task(task_id)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+
+    return jsonify(task.to_dict())
+
+
+@api_bp.route("/tasks/<task_id>/output")
+@api_error_handler
+def api_task_output(task_id):
+    """Get buffered output for a supervised task."""
+    task = get_task_service().get_task(task_id)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+
+    try:
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        offset = 0
+
+    output = task.get_output(offset)
+    return jsonify(
+        {
+            "task_id": task_id,
+            "output": output,
+            "count": len(output),
+            "next_offset": offset + len(output),
+        }
+    )
+
+
+@api_bp.route("/tasks/<task_id>/stop", methods=["POST"])
+@api_error_handler
+def api_stop_task(task_id):
+    """Stop a running supervised task."""
+    success = get_task_service().stop_task(task_id)
+    if success:
+        _add_activity("task", f"Stopped task {task_id}", "stop")
+        return jsonify({"success": True, "message": "Task stop command sent"})
+    return jsonify({"error": "Task not found or could not be stopped"}), 404
+
+
+@api_bp.route("/tasks/<task_id>/cancel", methods=["POST"])
 def api_cancel_task(task_id):
-    """Cancel a running task."""
-    _add_activity('kill', f'Task {task_id} cancelled', 'stop')
-    # TODO: Send cancel command to Android device
-    return jsonify({"success": True, "message": f"Cancel command sent for task {task_id}"})
+    """Alias for stop_task for backward compatibility."""
+    return api_stop_task(task_id)
+
+
+# ============ Git Workflow ============
+
+
+@api_bp.route("/git/status")
+@api_error_handler
+def api_git_status():
+    """Get git status and staged diff for a project."""
+    path = request.args.get("path")
+    if not path:
+        return jsonify({"error": "Path is required"}), 400
+
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return jsonify({"error": "Path does not exist"}), 404
+
+    try:
+        # Get status
+        status = subprocess.check_output(
+            ["git", "status", "--short"], cwd=path, text=True
+        )
+        # Get staged diff
+        diff = subprocess.check_output(["git", "diff", "--staged"], cwd=path, text=True)
+        # Get branch
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path, text=True
+        ).strip()
+
+        return jsonify(
+            {
+                "success": True,
+                "branch": branch,
+                "status": status,
+                "diff": diff,
+                "has_staged_changes": len(diff) > 0,
+            }
+        )
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": f"Git command failed: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api_bp.route("/git/commit", methods=["POST"])
+@api_error_handler
+def api_git_commit():
+    """Perform git commit and push."""
+    data = request.get_json()
+    path = data.get("path")
+    message = data.get("message")
+    push = data.get("push", True)
+
+    if not path or not message:
+        return jsonify({"error": "Path and message are required"}), 400
+
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return jsonify({"error": "Path does not exist"}), 404
+
+    try:
+        # Commit
+        subprocess.check_call(["git", "commit", "-m", message], cwd=path)
+
+        result_msg = "Committed successfully"
+        if push:
+            # Push
+            subprocess.check_call(["git", "push"], cwd=path)
+            result_msg += " and pushed"
+
+        _add_activity(
+            "git", f"Git commit in {os.path.basename(path)}: {message[:50]}...", "check"
+        )
+
+        return jsonify({"success": True, "message": result_msg})
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": f"Git operation failed: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ============ Analytics ============
 
-@api_bp.route('/analytics/usage')
+
+@api_bp.route("/analytics/usage")
 def api_usage():
     """Get message usage stats."""
     return jsonify(get_usage_stats())
 
 
-@api_bp.route('/analytics/backends')
+@api_bp.route("/analytics/backends")
 def api_backends():
     """Get backend usage breakdown."""
     return jsonify(get_backend_usage())
 
 
-@api_bp.route('/analytics/activity')
+@api_bp.route("/analytics/activity")
 def api_activity():
     """Get activity timeline."""
     return jsonify(get_activity_timeline())
@@ -1095,13 +1433,14 @@ def api_activity():
 
 # ============ Status ============
 
-@api_bp.route('/status')
+
+@api_bp.route("/status")
 def api_status():
     """Get system status."""
     return jsonify(get_status())
 
 
-@api_bp.route('/qr')
+@api_bp.route("/qr")
 def api_qr():
     """Get QR code image for device setup."""
     import socket
@@ -1137,35 +1476,40 @@ def api_qr():
 
         # Convert to base64
         buffer = io.BytesIO()
-        img.save(buffer, format='PNG')
+        img.save(buffer, format="PNG")
         buffer.seek(0)
-        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-        return jsonify({
-            "image": f"data:image/png;base64,{img_base64}",
-            "data": qr_data,
-            "host": local_ip,
-            "port": 19284,
-            "instruction": "Scan with Shadow app to connect"
-        })
+        return jsonify(
+            {
+                "image": f"data:image/png;base64,{img_base64}",
+                "data": qr_data,
+                "host": local_ip,
+                "port": 19284,
+                "instruction": "Scan with Shadow app to connect",
+            }
+        )
     except ImportError:
-        return jsonify({
-            "error": "QR code library not available",
-            "data": "shadowai://connect?port=19284",
-            "instruction": "Install qrcode library for QR display"
-        })
+        return jsonify(
+            {
+                "error": "QR code library not available",
+                "data": "shadowai://connect?port=19284",
+                "instruction": "Install qrcode library for QR display",
+            }
+        )
 
 
 # ============ Teams ============
 
-@api_bp.route('/teams')
+
+@api_bp.route("/teams")
 def api_teams():
     """List all teams."""
-    device_id = request.args.get('device_id')
+    device_id = request.args.get("device_id")
     return jsonify(get_teams(device_id))
 
 
-@api_bp.route('/teams/<team_id>')
+@api_bp.route("/teams/<team_id>")
 def api_team(team_id):
     """Get team details."""
     team = get_team(team_id)
@@ -1174,19 +1518,19 @@ def api_team(team_id):
     return jsonify({"error": "Team not found"}), 404
 
 
-@api_bp.route('/teams', methods=['POST'])
+@api_bp.route("/teams", methods=["POST"])
 def api_create_team():
     """Create a new team."""
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
-    owner_email = data.pop('owner_email', None)
-    owner_device = data.pop('owner_device', None)
+    owner_email = data.pop("owner_email", None)
+    owner_device = data.pop("owner_device", None)
     result = create_team(data, owner_email=owner_email, owner_device=owner_device)
     return jsonify(result)
 
 
-@api_bp.route('/teams/<team_id>', methods=['PUT'])
+@api_bp.route("/teams/<team_id>", methods=["PUT"])
 def api_update_team(team_id):
     """Update team details."""
     data = request.get_json()
@@ -1196,14 +1540,14 @@ def api_update_team(team_id):
     return jsonify(result)
 
 
-@api_bp.route('/teams/<team_id>', methods=['DELETE'])
+@api_bp.route("/teams/<team_id>", methods=["DELETE"])
 def api_delete_team(team_id):
     """Delete a team."""
     result = delete_team(team_id)
     return jsonify(result)
 
 
-@api_bp.route('/teams/metrics')
+@api_bp.route("/teams/metrics")
 def api_team_metrics():
     """Get team metrics summary."""
     return jsonify(get_team_metrics())
@@ -1211,14 +1555,15 @@ def api_team_metrics():
 
 # ============ Tasks ============
 
-@api_bp.route('/tasks')
+
+@api_bp.route("/tasks")
 def api_tasks():
     """List all tasks."""
-    device_id = request.args.get('device_id')
+    device_id = request.args.get("device_id")
     return jsonify(get_tasks(device_id))
 
 
-@api_bp.route('/tasks/<task_id>')
+@api_bp.route("/tasks/<task_id>")
 def api_task(task_id):
     """Get task details."""
     task = get_task(task_id)
@@ -1227,7 +1572,7 @@ def api_task(task_id):
     return jsonify({"error": "Task not found"}), 404
 
 
-@api_bp.route('/tasks', methods=['POST'])
+@api_bp.route("/tasks", methods=["POST"])
 def api_create_task():
     """Create a new task."""
     data = request.get_json()
@@ -1237,7 +1582,7 @@ def api_create_task():
     return jsonify(result)
 
 
-@api_bp.route('/tasks/<task_id>', methods=['PUT'])
+@api_bp.route("/tasks/<task_id>", methods=["PUT"])
 def api_update_task(task_id):
     """Update task details."""
     data = request.get_json()
@@ -1247,7 +1592,7 @@ def api_update_task(task_id):
     return jsonify(result)
 
 
-@api_bp.route('/tasks/<task_id>', methods=['DELETE'])
+@api_bp.route("/tasks/<task_id>", methods=["DELETE"])
 def api_delete_task(task_id):
     """Delete a task."""
     result = delete_task(task_id)
@@ -1256,17 +1601,20 @@ def api_delete_task(task_id):
 
 # ============ Project Todos ============
 
-@api_bp.route('/projects/<project_id>/todos')
+
+@api_bp.route("/projects/<project_id>/todos")
 def api_project_todos(project_id):
     """List all todos for a project."""
     from ..services.data_service import get_project_todos
+
     return jsonify(get_project_todos(project_id))
 
 
-@api_bp.route('/projects/<project_id>/todos', methods=['POST'])
+@api_bp.route("/projects/<project_id>/todos", methods=["POST"])
 def api_create_project_todo(project_id):
     """Create a new todo for a project."""
     from ..services.data_service import create_project_todo
+
     data = request.get_json()
     if not data or not data.get("content"):
         return jsonify({"error": "Content is required"}), 400
@@ -1274,10 +1622,11 @@ def api_create_project_todo(project_id):
     return jsonify(result)
 
 
-@api_bp.route('/projects/<project_id>/todos/<todo_id>', methods=['PUT'])
+@api_bp.route("/projects/<project_id>/todos/<todo_id>", methods=["PUT"])
 def api_update_project_todo(project_id, todo_id):
     """Update a todo."""
     from ..services.data_service import update_project_todo
+
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
@@ -1287,20 +1636,22 @@ def api_update_project_todo(project_id, todo_id):
     return jsonify(result)
 
 
-@api_bp.route('/projects/<project_id>/todos/<todo_id>', methods=['DELETE'])
+@api_bp.route("/projects/<project_id>/todos/<todo_id>", methods=["DELETE"])
 def api_delete_project_todo(project_id, todo_id):
     """Delete a todo."""
     from ..services.data_service import delete_project_todo
+
     result = delete_project_todo(project_id, todo_id)
     if "error" in result:
         return jsonify(result), 404
     return jsonify(result)
 
 
-@api_bp.route('/projects/<project_id>/todos/reorder', methods=['POST'])
+@api_bp.route("/projects/<project_id>/todos/reorder", methods=["POST"])
 def api_reorder_project_todos(project_id):
     """Reorder todos by providing list of todo IDs in desired order."""
     from ..services.data_service import reorder_project_todos
+
     data = request.get_json()
     if not data or not data.get("todo_ids"):
         return jsonify({"error": "todo_ids list is required"}), 400
@@ -1310,7 +1661,8 @@ def api_reorder_project_todos(project_id):
 
 # ============ CLI Launch ============
 
-@api_bp.route('/projects/<project_id>/launch-cli', methods=['POST'])
+
+@api_bp.route("/projects/<project_id>/launch-cli", methods=["POST"])
 def api_launch_cli(project_id):
     """Launch Claude Code CLI in project directory."""
     project = get_project(project_id)
@@ -1323,6 +1675,7 @@ def api_launch_cli(project_id):
 
     # SECURITY: Validate and normalize path
     import os
+
     path = os.path.normpath(os.path.abspath(path))
     if not os.path.exists(path):
         return jsonify({"error": f"Path does not exist: {path}"}), 400
@@ -1332,27 +1685,21 @@ def api_launch_cli(project_id):
     try:
         # SECURITY: Use array form without shell=True to prevent command injection
         subprocess.Popen(
-            ['wt', '-d', path, 'claude'],
-            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+            ["wt", "-d", path, "claude"],
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
         )
-        return jsonify({
-            "success": True,
-            "path": path,
-            "command": "claude"
-        })
+        return jsonify({"success": True, "path": path, "command": "claude"})
     except FileNotFoundError:
         # Fallback: try cmd with claude (use array form for safety)
         try:
             # SECURITY: Use array form - no shell=True with user input
             subprocess.Popen(
-                ['cmd', '/c', 'start', 'cmd', '/k', f'cd /d "{path}" && claude'],
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                ["cmd", "/c", "start", "cmd", "/k", f'cd /d "{path}" && claude'],
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
-            return jsonify({
-                "success": True,
-                "path": path,
-                "command": "claude (via cmd)"
-            })
+            return jsonify(
+                {"success": True, "path": path, "command": "claude (via cmd)"}
+            )
         except Exception as e:
             return jsonify({"error": f"Failed to launch CLI: {str(e)}"}), 500
     except Exception as e:
@@ -1361,7 +1708,8 @@ def api_launch_cli(project_id):
 
 # ============ Agent Management ============
 
-@api_bp.route('/agents', methods=['POST'])
+
+@api_bp.route("/agents", methods=["POST"])
 def api_add_agent():
     """Add a new agent."""
     data = request.get_json()
@@ -1371,7 +1719,7 @@ def api_add_agent():
     return jsonify(result)
 
 
-@api_bp.route('/agents/<agent_id>', methods=['PUT'])
+@api_bp.route("/agents/<agent_id>", methods=["PUT"])
 def api_update_agent(agent_id):
     """Update agent details."""
     data = request.get_json()
@@ -1381,7 +1729,7 @@ def api_update_agent(agent_id):
     return jsonify(result)
 
 
-@api_bp.route('/agents/<agent_id>', methods=['DELETE'])
+@api_bp.route("/agents/<agent_id>", methods=["DELETE"])
 def api_delete_agent(agent_id):
     """Delete an agent."""
     result = delete_agent(agent_id)
@@ -1390,7 +1738,8 @@ def api_delete_agent(agent_id):
 
 # ============ Agent Evolution (AGI-Readiness) ============
 
-@api_bp.route('/agents/<agent_id>/evolve', methods=['POST'])
+
+@api_bp.route("/agents/<agent_id>/evolve", methods=["POST"])
 def api_agent_evolve(agent_id):
     """
     Manually trigger evolution analysis for an agent.
@@ -1398,39 +1747,37 @@ def api_agent_evolve(agent_id):
     try:
         from ..services.agent_evolution import get_evolution_service
         from ..services.agent_protocol import AgentId, Task, TaskResult
-        
+
         data = request.get_json() or {}
-        
+
         # Mocking a successful task for evolution demo
         mock_task = Task.create(
             title=data.get("title", "Complex Code Optimization"),
             description=data.get("description", "Optimized memory usage in core loops"),
-            required_capabilities=[]
+            required_capabilities=[],
         )
-        
+
         mock_result = TaskResult(
             task_id=mock_task.id,
             success=True,
             output="Memory reduced by 40%",
             artifacts=[{"type": "profiling"}, {"type": "refactor"}],
             execution_time_ms=3500,
-            metrics={"improvement": 0.4}
+            metrics={"improvement": 0.4},
         )
-        
+
         evol_service = get_evolution_service()
         new_cap = evol_service.analyze_task_completion(
             agent_id=AgentId.from_dict({"id": agent_id, "namespace": "shadowai"}),
             task=mock_task,
-            result=mock_result
+            result=mock_result,
         )
-        
+
         if new_cap:
-            return jsonify({
-                "success": True, 
-                "evolved": True,
-                "capability": new_cap.to_dict()
-            })
-        
+            return jsonify(
+                {"success": True, "evolved": True, "capability": new_cap.to_dict()}
+            )
+
         return jsonify({"success": True, "evolved": False})
     except Exception as e:
         logger.error(f"Evolution error: {e}")
@@ -1439,24 +1786,25 @@ def api_agent_evolve(agent_id):
 
 # ============ Workflows ============
 
-@api_bp.route('/workflows')
+
+@api_bp.route("/workflows")
 def api_workflows():
     """List all workflows."""
     return jsonify(get_workflows())
 
 
-@api_bp.route('/workflows', methods=['POST'])
+@api_bp.route("/workflows", methods=["POST"])
 def api_start_workflow():
     """Start a new workflow."""
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
-    workflow_type = data.get('type', 'qa_pipeline')
+    workflow_type = data.get("type", "qa_pipeline")
     result = start_workflow(workflow_type, data)
     return jsonify(result)
 
 
-@api_bp.route('/workflows/<workflow_id>/cancel', methods=['POST'])
+@api_bp.route("/workflows/<workflow_id>/cancel", methods=["POST"])
 def api_cancel_workflow(workflow_id):
     """Cancel a workflow."""
     result = cancel_workflow(workflow_id)
@@ -1465,15 +1813,16 @@ def api_cancel_workflow(workflow_id):
 
 # ============ Audits ============
 
-@api_bp.route('/audits')
+
+@api_bp.route("/audits")
 def api_audits():
     """List audit entries."""
-    period = request.args.get('period', '7D')
-    device_id = request.args.get('device_id')
+    period = request.args.get("period", "7D")
+    device_id = request.args.get("device_id")
     return jsonify(get_audits(period, device_id))
 
 
-@api_bp.route('/audits/<audit_id>')
+@api_bp.route("/audits/<audit_id>")
 def api_audit_entry(audit_id):
     """Get audit entry details."""
     entry = get_audit_entry(audit_id)
@@ -1482,32 +1831,33 @@ def api_audit_entry(audit_id):
     return jsonify({"error": "Audit entry not found"}), 404
 
 
-@api_bp.route('/audits/stats')
+@api_bp.route("/audits/stats")
 def api_audit_stats():
     """Get audit statistics."""
-    period = request.args.get('period', '7D')
+    period = request.args.get("period", "7D")
     return jsonify(get_audit_stats(period))
 
 
-@api_bp.route('/audits/<audit_id>/traces')
+@api_bp.route("/audits/<audit_id>/traces")
 def api_audit_traces(audit_id):
     """Get AI decision traces for an audit entry."""
     traces = get_audit_traces(audit_id)
     return jsonify(traces)
 
 
-@api_bp.route('/audits/export', methods=['POST'])
+@api_bp.route("/audits/export", methods=["POST"])
 def api_export_audit():
     """Export audit report."""
-    format = request.args.get('format', 'json')
-    period = request.args.get('period', '30D')
+    format = request.args.get("format", "json")
+    period = request.args.get("period", "30D")
     result = export_audit_report(format, period)
     return jsonify(result)
 
 
 # ============ Unified Memory (AGI-Readiness) ============
 
-@api_bp.route('/memory/stats')
+
+@api_bp.route("/memory/stats")
 def api_memory_stats():
     """
     Get unified memory statistics across all data stores.
@@ -1522,7 +1872,7 @@ def api_memory_stats():
     return jsonify(get_memory_stats())
 
 
-@api_bp.route('/memory/search')
+@api_bp.route("/memory/search")
 def api_memory_search():
     """
     Unified search across memory scopes.
@@ -1536,22 +1886,87 @@ def api_memory_search():
     Currently uses keyword search. Will upgrade to semantic/vector search
     when ChromaDB is integrated (Phase 2).
     """
-    query = request.args.get('q', '')
+    query = request.args.get("q", "")
     if not query:
         return jsonify({"error": "Query parameter 'q' is required"}), 400
 
-    scopes_param = request.args.get('scopes', '')
-    scopes = [s.strip().upper() for s in scopes_param.split(',') if s.strip()] if scopes_param else None
+    scopes_param = request.args.get("scopes", "")
+    scopes = (
+        [s.strip().upper() for s in scopes_param.split(",") if s.strip()]
+        if scopes_param
+        else None
+    )
 
     try:
-        limit = min(int(request.args.get('limit', 20)), 100)
+        limit = min(int(request.args.get("limit", 20)), 100)
     except ValueError:
         limit = 20
 
     return jsonify(get_memory_search_results(query, scopes, limit))
 
 
-@api_bp.route('/memory/recent')
+# ========== ADB & File Transfer ==========
+
+@api_bp.route("/adb/devices", methods=["GET"])
+def api_adb_devices():
+    """List connected Android devices via ADB."""
+    adb = get_adb_service()
+    devices = adb.get_devices()
+    return jsonify({"devices": devices})
+
+
+@api_bp.route("/adb/push", methods=["POST"])
+def api_adb_push():
+    """Push a local file to a connected Android device."""
+    data = request.json
+    local_path = data.get("local_path")
+    remote_path = data.get("remote_path", "/sdcard/Download/")
+    device_id = data.get("device_id")
+
+    if not local_path:
+        return jsonify({"error": "local_path is required"}), 400
+
+    adb = get_adb_service()
+    # If remote_path is a directory, append filename
+    if remote_path.endswith("/"):
+        filename = os.path.basename(local_path)
+        remote_path = remote_path + filename
+
+    result, success = adb.push_file(local_path, remote_path, device_id)
+    return jsonify({"result": result, "success": success})
+
+
+@api_bp.route("/adb/install", methods=["POST"])
+def api_adb_install():
+    """Install an APK on a connected Android device."""
+    data = request.json
+    apk_path = data.get("apk_path")
+    device_id = data.get("device_id")
+
+    if not apk_path:
+        return jsonify({"error": "apk_path is required"}), 400
+
+    adb = get_adb_service()
+    result, success = adb.install_apk(apk_path, device_id)
+    return jsonify({"result": result, "success": success})
+
+
+@api_bp.route("/adb/shell", methods=["POST"])
+def api_adb_shell():
+    """Run a shell command on a connected Android device."""
+    data = request.json
+    command = data.get("command")
+    device_id = data.get("device_id")
+
+    if not command:
+        return jsonify({"error": "command is required"}), 400
+
+    adb = get_adb_service()
+    result, success = adb.shell(command, device_id)
+    return jsonify({"result": result, "success": success})
+
+
+@api_bp.route("/memory/recent")
 def api_memory_recent():
     """
     Get recent items from memory.
@@ -1562,11 +1977,15 @@ def api_memory_recent():
 
     Returns most recently modified/created items across scopes.
     """
-    scopes_param = request.args.get('scopes', '')
-    scopes = [s.strip().upper() for s in scopes_param.split(',') if s.strip()] if scopes_param else None
+    scopes_param = request.args.get("scopes", "")
+    scopes = (
+        [s.strip().upper() for s in scopes_param.split(",") if s.strip()]
+        if scopes_param
+        else None
+    )
 
     try:
-        limit = min(int(request.args.get('limit', 10)), 50)
+        limit = min(int(request.args.get("limit", 10)), 50)
     except ValueError:
         limit = 10
 
@@ -1578,10 +1997,12 @@ def api_memory_recent():
     # Sort by timestamp descending (newest first)
     items.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
 
-    return jsonify({
-        "items": items[:limit],
-        "scopes_searched": scopes or ["NOTES", "PROJECTS", "AGENTS", "AUTOMATIONS"]
-    })
+    return jsonify(
+        {
+            "items": items[:limit],
+            "scopes_searched": scopes or ["NOTES", "PROJECTS", "AGENTS", "AUTOMATIONS"],
+        }
+    )
 
 
 # ============ Vector Store / Semantic Search ============
@@ -1589,31 +2010,35 @@ def api_memory_recent():
 # Lazy import to handle missing dependencies gracefully
 _vector_store = None
 
+
 def get_vector_store():
     """Lazy load vector store module."""
     global _vector_store
     if _vector_store is None:
         try:
             from ..services import vector_store
+
             _vector_store = vector_store
         except ImportError:
             _vector_store = False
     return _vector_store if _vector_store else None
 
 
-@api_bp.route('/vector/status')
+@api_bp.route("/vector/status")
 def api_vector_status():
     """Get vector store status and statistics."""
     vs = get_vector_store()
     if not vs:
-        return jsonify({
-            "available": False,
-            "error": "Vector store module not loaded. Install: pip install chromadb sentence-transformers"
-        })
+        return jsonify(
+            {
+                "available": False,
+                "error": "Vector store module not loaded. Install: pip install chromadb sentence-transformers",
+            }
+        )
     return jsonify(vs.get_stats())
 
 
-@api_bp.route('/vector/search')
+@api_bp.route("/vector/search")
 def api_vector_search():
     """
     Perform semantic search using vector embeddings.
@@ -1627,35 +2052,43 @@ def api_vector_search():
     """
     vs = get_vector_store()
     if not vs or not vs.is_available():
-        return jsonify({
-            "error": "Vector store not available",
-            "results": [],
-            "search_type": "unavailable"
-        })
+        return jsonify(
+            {
+                "error": "Vector store not available",
+                "results": [],
+                "search_type": "unavailable",
+            }
+        )
 
-    query = request.args.get('q', '')
+    query = request.args.get("q", "")
     if not query:
         return jsonify({"error": "Query parameter 'q' is required"}), 400
 
-    types_param = request.args.get('types', '')
-    source_types = [t.strip().lower() for t in types_param.split(',') if t.strip()] if types_param else None
+    types_param = request.args.get("types", "")
+    source_types = (
+        [t.strip().lower() for t in types_param.split(",") if t.strip()]
+        if types_param
+        else None
+    )
 
     try:
-        limit = min(int(request.args.get('limit', 10)), 50)
+        limit = min(int(request.args.get("limit", 10)), 50)
     except ValueError:
         limit = 10
 
     results = vs.semantic_search(query, source_types, limit)
 
-    return jsonify({
-        "results": results,
-        "query": query,
-        "search_type": "semantic",
-        "total_found": len(results)
-    })
+    return jsonify(
+        {
+            "results": results,
+            "query": query,
+            "search_type": "semantic",
+            "total_found": len(results),
+        }
+    )
 
 
-@api_bp.route('/vector/index', methods=['POST'])
+@api_bp.route("/vector/index", methods=["POST"])
 def api_vector_index():
     """
     Index a single document.
@@ -1685,13 +2118,13 @@ def api_vector_index():
         source_id=data["source_id"],
         title=data["title"],
         content=data["content"],
-        metadata=data.get("metadata")
+        metadata=data.get("metadata"),
     )
 
     return jsonify({"success": success})
 
 
-@api_bp.route('/vector/reindex', methods=['POST'])
+@api_bp.route("/vector/reindex", methods=["POST"])
 def api_vector_reindex():
     """
     Reindex all content from data stores.
@@ -1707,13 +2140,10 @@ def api_vector_reindex():
     from ..services import data_service
 
     counts = vs.reindex_all(data_service)
-    return jsonify({
-        "success": "error" not in counts,
-        "indexed": counts
-    })
+    return jsonify({"success": "error" not in counts, "indexed": counts})
 
 
-@api_bp.route('/vector/clear', methods=['POST'])
+@api_bp.route("/vector/clear", methods=["POST"])
 def api_vector_clear():
     """Clear the entire vector index."""
     vs = get_vector_store()
@@ -1729,16 +2159,17 @@ def api_vector_clear():
 # Lazy import for context window service
 _context_service = None
 
+
 def get_context_service():
     """Lazy load context window service."""
     global _context_service
     if _context_service is None:
         try:
             from ..services import context_window, data_service
+
             vs = get_vector_store()
             _context_service = context_window.get_context_service(
-                data_service=data_service,
-                vector_store=vs
+                data_service=data_service, vector_store=vs
             )
         except Exception as e:
             logger.error(f"Failed to load context service: {e}")
@@ -1746,7 +2177,7 @@ def get_context_service():
     return _context_service if _context_service else None
 
 
-@api_bp.route('/context/track', methods=['POST'])
+@api_bp.route("/context/track", methods=["POST"])
 def api_context_track():
     """
     Track a user activity event for context building.
@@ -1776,7 +2207,7 @@ def api_context_track():
         resource_type=data["resource_type"],
         resource_id=data["resource_id"],
         resource_title=data["resource_title"],
-        metadata=data.get("metadata")
+        metadata=data.get("metadata"),
     )
 
     # AGI-Readiness: Predictive Context Pre-loading
@@ -1785,23 +2216,29 @@ def api_context_track():
     try:
         ps = get_preference_service()
         if ps:
-            prediction = ps.predict_next_action(data["event_type"], data["resource_type"])
+            prediction = ps.predict_next_action(
+                data["event_type"], data["resource_type"]
+            )
             if prediction:
                 pred_action, pred_type, conf = prediction
                 if conf > 0.4:  # Low threshold for prototype
-                    logger.info(f"🧠 Predictive Engine: Expecting {pred_action}:{pred_type} (conf: {conf:.2f})")
-                    
-                    # Heuristic: If we predict user will use a type, they likely want 
+                    logger.info(
+                        f"🧠 Predictive Engine: Expecting {pred_action}:{pred_type} (conf: {conf:.2f})"
+                    )
+
+                    # Heuristic: If we predict user will use a type, they likely want
                     # the most recently used item of that type.
                     recent = cs.get_recent_activity(resource_types=[pred_type], limit=1)
                     if recent:
                         target_id = recent[0].resource_id
-                        logger.info(f"🚀 Pre-loading context for {pred_type}:{target_id}")
+                        logger.info(
+                            f"🚀 Pre-loading context for {pred_type}:{target_id}"
+                        )
                         # Run in background to not block response
                         import threading
+
                         threading.Thread(
-                            target=cs.preload_context,
-                            args=(pred_type, target_id)
+                            target=cs.preload_context, args=(pred_type, target_id)
                         ).start()
     except Exception as e:
         logger.warning(f"Prediction failed: {e}")
@@ -1809,7 +2246,7 @@ def api_context_track():
     return jsonify({"success": True})
 
 
-@api_bp.route('/context/window')
+@api_bp.route("/context/window")
 def api_context_window():
     """
     Build a context window for AI queries.
@@ -1830,24 +2267,22 @@ def api_context_window():
     if not cs:
         return jsonify({"error": "Context service not available"}), 503
 
-    query = request.args.get('q', None)
-    include_semantic = request.args.get('include_semantic', 'true').lower() == 'true'
+    query = request.args.get("q", None)
+    include_semantic = request.args.get("include_semantic", "true").lower() == "true"
 
     try:
-        max_tokens = min(int(request.args.get('max_tokens', 4000)), 16000)
+        max_tokens = min(int(request.args.get("max_tokens", 4000)), 16000)
     except ValueError:
         max_tokens = 4000
 
     context = cs.build_context_window(
-        query=query,
-        include_semantic=include_semantic,
-        max_tokens=max_tokens
+        query=query, include_semantic=include_semantic, max_tokens=max_tokens
     )
 
     return jsonify(context.to_dict())
 
 
-@api_bp.route('/context/prompt')
+@api_bp.route("/context/prompt")
 def api_context_prompt():
     """
     Get context formatted for AI prompt injection.
@@ -1861,16 +2296,18 @@ def api_context_prompt():
     if not cs:
         return jsonify({"error": "Context service not available"}), 503
 
-    query = request.args.get('q', None)
+    query = request.args.get("q", None)
     context = cs.build_context_window(query=query)
 
-    return jsonify({
-        "context": context.to_prompt_context(),
-        "token_estimate": context.token_estimate
-    })
+    return jsonify(
+        {
+            "context": context.to_prompt_context(),
+            "token_estimate": context.token_estimate,
+        }
+    )
 
 
-@api_bp.route('/context/recent')
+@api_bp.route("/context/recent")
 def api_context_recent():
     """
     Get recent activity events.
@@ -1886,35 +2323,40 @@ def api_context_recent():
         return jsonify({"error": "Context service not available"}), 503
 
     try:
-        minutes = int(request.args.get('minutes', 30))
+        minutes = int(request.args.get("minutes", 30))
     except ValueError:
         minutes = 30
 
     try:
-        limit = min(int(request.args.get('limit', 10)), 50)
+        limit = min(int(request.args.get("limit", 10)), 50)
     except ValueError:
         limit = 10
 
-    event_types_param = request.args.get('event_types', '')
-    event_types = [t.strip() for t in event_types_param.split(',') if t.strip()] if event_types_param else None
+    event_types_param = request.args.get("event_types", "")
+    event_types = (
+        [t.strip() for t in event_types_param.split(",") if t.strip()]
+        if event_types_param
+        else None
+    )
 
-    resource_types_param = request.args.get('resource_types', '')
-    resource_types = [t.strip() for t in resource_types_param.split(',') if t.strip()] if resource_types_param else None
+    resource_types_param = request.args.get("resource_types", "")
+    resource_types = (
+        [t.strip() for t in resource_types_param.split(",") if t.strip()]
+        if resource_types_param
+        else None
+    )
 
     events = cs.get_recent_activity(
         minutes=minutes,
         event_types=event_types,
         resource_types=resource_types,
-        limit=limit
+        limit=limit,
     )
 
-    return jsonify({
-        "events": [e.to_dict() for e in events],
-        "total": len(events)
-    })
+    return jsonify({"events": [e.to_dict() for e in events], "total": len(events)})
 
 
-@api_bp.route('/context/stats')
+@api_bp.route("/context/stats")
 def api_context_stats():
     """Get context window service statistics."""
     cs = get_context_service()
@@ -1924,7 +2366,7 @@ def api_context_stats():
     return jsonify(cs.get_stats())
 
 
-@api_bp.route('/context/topic', methods=['POST'])
+@api_bp.route("/context/topic", methods=["POST"])
 def api_context_topic():
     """
     Record a topic discussed in this session.
@@ -1937,14 +2379,14 @@ def api_context_topic():
         return jsonify({"error": "Context service not available"}), 503
 
     data = request.get_json()
-    if not data or 'topic' not in data:
+    if not data or "topic" not in data:
         return jsonify({"error": "Missing 'topic' field"}), 400
 
-    cs.record_topic(data['topic'])
+    cs.record_topic(data["topic"])
     return jsonify({"success": True})
 
 
-@api_bp.route('/context/clear', methods=['POST'])
+@api_bp.route("/context/clear", methods=["POST"])
 def api_context_clear():
     """Clear the context session state."""
     cs = get_context_service()
@@ -1957,24 +2399,22 @@ def api_context_clear():
 
 # ============ Metacognition (AGI-Readiness) ============
 
-@api_bp.route('/metacognition/assess', methods=['POST'])
+
+@api_bp.route("/metacognition/assess", methods=["POST"])
 def api_metacognition_assess():
     """
     Assess a query for risk, ambiguity, and confidence.
     """
     try:
         from ..services.metacognition import get_metacognitive_layer
-        
+
         data = request.get_json()
-        if not data or 'query' not in data:
+        if not data or "query" not in data:
             return jsonify({"error": "Missing 'query' field"}), 400
-            
+
         meta = get_metacognitive_layer()
-        assessment = meta.assess_query(
-            query=data['query'],
-            context=data.get('context')
-        )
-        
+        assessment = meta.assess_query(query=data["query"], context=data.get("context"))
+
         return jsonify(assessment.to_dict())
     except ImportError:
         return jsonify({"error": "Metacognition service not available"}), 503
@@ -1985,39 +2425,38 @@ def api_metacognition_assess():
 
 # ============ Multi-Model Debate (AGI-Readiness) ============
 
-@api_bp.route('/reasoning/debate', methods=['POST'])
+
+@api_bp.route("/reasoning/debate", methods=["POST"])
 async def api_reasoning_debate():
     """
     Start a multi-model debate on a topic.
     """
     try:
         from ..services.debate_system import get_debate_system
-        
+
         data = request.get_json()
-        if not data or 'topic' not in data:
+        if not data or "topic" not in data:
             return jsonify({"error": "Missing 'topic' field"}), 400
-            
-        rounds = data.get('rounds', 2)
+
+        rounds = data.get("rounds", 2)
         debate_sys = get_debate_system()
-        
+
         # Start debate asynchronously
-        session = await debate_sys.conduct_debate(
-            topic=data['topic'],
-            rounds=rounds
-        )
-        
+        session = await debate_sys.conduct_debate(topic=data["topic"], rounds=rounds)
+
         return jsonify(session.to_dict())
     except Exception as e:
         logger.error(f"Debate system error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/reasoning/debate/<session_id>', methods=['GET'])
+@api_bp.route("/reasoning/debate/<session_id>", methods=["GET"])
 def api_get_debate(session_id):
     """
     Get a specific debate session.
     """
     from ..services.debate_system import get_debate_system
+
     session = get_debate_system().get_session(session_id)
     if session:
         return jsonify(session.to_dict())
@@ -2026,26 +2465,26 @@ def api_get_debate(session_id):
 
 # ============ Cognitive Orchestrator (AGI-Readiness) ============
 
-@api_bp.route('/cognitive/process', methods=['POST'])
+
+@api_bp.route("/cognitive/process", methods=["POST"])
 async def api_cognitive_process():
     """
     Process a query through the full cognitive architecture.
     """
     try:
         from ..services.cognitive_orchestrator import get_cognitive_orchestrator
-        
+
         data = request.get_json()
-        if not data or 'query' not in data:
+        if not data or "query" not in data:
             return jsonify({"error": "Missing 'query' field"}), 400
-            
+
         orchestrator = get_cognitive_orchestrator()
-        
+
         # Process asynchronously
         plan = await orchestrator.process_query(
-            query=data['query'],
-            client_context=data.get('context')
+            query=data["query"], client_context=data.get("context")
         )
-        
+
         return jsonify(plan.to_dict())
     except Exception as e:
         logger.error(f"Cognitive Orchestrator error: {e}")
@@ -2054,7 +2493,8 @@ async def api_cognitive_process():
 
 # ============ Swarm Intelligence (AGI-Readiness) ============
 
-@api_bp.route('/swarm/execute', methods=['POST'])
+
+@api_bp.route("/swarm/execute", methods=["POST"])
 async def api_swarm_execute():
     """
     Execute a task using an emergent agent swarm.
@@ -2062,22 +2502,22 @@ async def api_swarm_execute():
     try:
         from ..services.swarm_intelligence import get_swarm_orchestrator
         from ..services.agent_protocol import Task, CapabilityCategory
-        
+
         data = request.get_json()
-        if not data or 'title' not in data:
+        if not data or "title" not in data:
             return jsonify({"error": "Missing 'title' field"}), 400
-            
+
         task = Task.create(
-            title=data['title'],
-            description=data.get('description', ''),
-            required_capabilities=[CapabilityCategory.RESEARCH]
+            title=data["title"],
+            description=data.get("description", ""),
+            required_capabilities=[CapabilityCategory.RESEARCH],
         )
-        
-        agent_count = data.get('agent_count', 3)
+
+        agent_count = data.get("agent_count", 3)
         swarm_orch = get_swarm_orchestrator()
-        
+
         result = await swarm_orch.execute_swarm_task(task, agent_count)
-        
+
         return jsonify(result)
     except Exception as e:
         logger.error(f"Swarm error: {e}")
@@ -2086,39 +2526,43 @@ async def api_swarm_execute():
 
 # ============ Recursive Reasoning (AGI-Readiness) ============
 
-@api_bp.route('/reasoning/recurse', methods=['POST'])
+
+@api_bp.route("/reasoning/recurse", methods=["POST"])
 async def api_reasoning_recurse():
     """
     Refine a solution recursively until optimal.
     """
     try:
         from ..services.recursive_reasoning import get_recursive_engine
-        
+
         data = request.get_json()
-        if not data or 'problem' not in data:
+        if not data or "problem" not in data:
             return jsonify({"error": "Missing 'problem' field"}), 400
-            
-        problem = data['problem']
-        initial = data.get('initial_solution', f"Initial thought on {problem}")
-        
+
+        problem = data["problem"]
+        initial = data.get("initial_solution", f"Initial thought on {problem}")
+
         engine = get_recursive_engine()
         result = await engine.recurse_until_optimal(problem, initial)
-        
+
         # Convert to dict manually as result is a dataclass with nested objects
-        return jsonify({
-            "final_solution": result.final_solution,
-            "total_iterations": result.total_iterations,
-            "converged": result.converged,
-            "final_confidence": result.final_confidence,
-            "iterations": [
-                {
-                    "depth": i.depth,
-                    "confidence": i.confidence,
-                    "improvement": i.improvement,
-                    "solution_preview": i.solution[:100]
-                } for i in result.iterations
-            ]
-        })
+        return jsonify(
+            {
+                "final_solution": result.final_solution,
+                "total_iterations": result.total_iterations,
+                "converged": result.converged,
+                "final_confidence": result.final_confidence,
+                "iterations": [
+                    {
+                        "depth": i.depth,
+                        "confidence": i.confidence,
+                        "improvement": i.improvement,
+                        "solution_preview": i.solution[:100],
+                    }
+                    for i in result.iterations
+                ],
+            }
+        )
     except Exception as e:
         logger.error(f"Recursive reasoning error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -2129,12 +2573,14 @@ async def api_reasoning_recurse():
 # Lazy import for preference service
 _preference_service = None
 
+
 def get_preference_service():
     """Lazy load preference learning service."""
     global _preference_service
     if _preference_service is None:
         try:
             from ..services import preference_learning
+
             _preference_service = preference_learning.get_preference_service()
         except Exception as e:
             logger.error(f"Failed to load preference service: {e}")
@@ -2142,7 +2588,7 @@ def get_preference_service():
     return _preference_service if _preference_service else None
 
 
-@api_bp.route('/preferences')
+@api_bp.route("/preferences")
 def api_preferences():
     """Get current user preferences."""
     ps = get_preference_service()
@@ -2152,7 +2598,7 @@ def api_preferences():
     return jsonify(ps.get_preferences().to_dict())
 
 
-@api_bp.route('/preferences/observe', methods=['POST'])
+@api_bp.route("/preferences/observe", methods=["POST"])
 def api_preferences_observe():
     """
     Observe a user action to learn preferences.
@@ -2170,19 +2616,19 @@ def api_preferences_observe():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    if 'action' not in data or 'resource_type' not in data:
+    if "action" not in data or "resource_type" not in data:
         return jsonify({"error": "Missing required fields: action, resource_type"}), 400
 
     ps.observe_action(
-        action=data['action'],
-        resource_type=data['resource_type'],
-        metadata=data.get('metadata')
+        action=data["action"],
+        resource_type=data["resource_type"],
+        metadata=data.get("metadata"),
     )
 
     return jsonify({"success": True})
 
 
-@api_bp.route('/preferences/feedback', methods=['POST'])
+@api_bp.route("/preferences/feedback", methods=["POST"])
 def api_preferences_feedback():
     """
     Learn from explicit user feedback.
@@ -2200,21 +2646,21 @@ def api_preferences_feedback():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    required = ['category', 'value', 'is_positive']
+    required = ["category", "value", "is_positive"]
     for field in required:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
 
     ps.learn_from_feedback(
-        category=data['category'],
-        value=data['value'],
-        is_positive=bool(data['is_positive'])
+        category=data["category"],
+        value=data["value"],
+        is_positive=bool(data["is_positive"]),
     )
 
     return jsonify({"success": True})
 
 
-@api_bp.route('/preferences/ai-context')
+@api_bp.route("/preferences/ai-context")
 def api_preferences_ai_context():
     """Get preferences formatted for AI context injection."""
     ps = get_preference_service()
@@ -2224,7 +2670,7 @@ def api_preferences_ai_context():
     return jsonify(ps.get_context_for_ai())
 
 
-@api_bp.route('/preferences/stats')
+@api_bp.route("/preferences/stats")
 def api_preferences_stats():
     """Get preference learning statistics."""
     ps = get_preference_service()
@@ -2234,7 +2680,7 @@ def api_preferences_stats():
     return jsonify(ps.get_stats())
 
 
-@api_bp.route('/preferences/reset', methods=['POST'])
+@api_bp.route("/preferences/reset", methods=["POST"])
 def api_preferences_reset():
     """Reset all learned preferences."""
     ps = get_preference_service()
@@ -2250,12 +2696,14 @@ def api_preferences_reset():
 # Lazy import for agent registry
 _agent_registry = None
 
+
 def get_agent_registry():
     """Lazy load agent registry."""
     global _agent_registry
     if _agent_registry is None:
         try:
             from ..services import agent_registry
+
             _agent_registry = agent_registry.get_registry()
         except Exception as e:
             logger.error(f"Failed to load agent registry: {e}")
@@ -2263,20 +2711,19 @@ def get_agent_registry():
     return _agent_registry if _agent_registry else None
 
 
-@api_bp.route('/registry/agents')
+@api_bp.route("/registry/agents")
 def api_registry_agents():
     """Get all registered agents with details."""
     registry = get_agent_registry()
     if not registry:
         return jsonify({"error": "Agent registry not available"}), 503
 
-    return jsonify({
-        "agents": registry.get_agent_details(),
-        "stats": registry.get_stats()
-    })
+    return jsonify(
+        {"agents": registry.get_agent_details(), "stats": registry.get_stats()}
+    )
 
 
-@api_bp.route('/registry/agents/<agent_id>')
+@api_bp.route("/registry/agents/<agent_id>")
 def api_registry_agent(agent_id):
     """Get a specific agent by ID."""
     registry = get_agent_registry()
@@ -2284,19 +2731,17 @@ def api_registry_agent(agent_id):
         return jsonify({"error": "Agent registry not available"}), 503
 
     from ..services.agent_protocol import AgentId
+
     agent = registry.get(AgentId(id=agent_id))
 
     if not agent:
         return jsonify({"error": "Agent not found"}), 404
 
     state = registry.get_state(agent.id)
-    return jsonify({
-        **agent.to_dict(),
-        "state": state.to_dict() if state else None
-    })
+    return jsonify({**agent.to_dict(), "state": state.to_dict() if state else None})
 
 
-@api_bp.route('/registry/register', methods=['POST'])
+@api_bp.route("/registry/register", methods=["POST"])
 def api_registry_register():
     """
     Register a new agent.
@@ -2314,28 +2759,26 @@ def api_registry_register():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    if 'name' not in data or 'agent_type' not in data:
+    if "name" not in data or "agent_type" not in data:
         return jsonify({"error": "Missing required fields: name, agent_type"}), 400
 
     from ..services.agent_protocol import create_standard_agent
 
     try:
         agent = create_standard_agent(
-            agent_type=data['agent_type'],
-            name=data['name'],
-            backend=data.get('backend')
+            agent_type=data["agent_type"],
+            name=data["name"],
+            backend=data.get("backend"),
         )
         agent_id = registry.register(agent)
-        return jsonify({
-            "success": True,
-            "agent_id": agent_id.to_dict(),
-            "agent": agent.to_dict()
-        })
+        return jsonify(
+            {"success": True, "agent_id": agent_id.to_dict(), "agent": agent.to_dict()}
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
 
-@api_bp.route('/registry/unregister/<agent_id>', methods=['POST'])
+@api_bp.route("/registry/unregister/<agent_id>", methods=["POST"])
 def api_registry_unregister(agent_id):
     """Unregister an agent."""
     registry = get_agent_registry()
@@ -2343,12 +2786,13 @@ def api_registry_unregister(agent_id):
         return jsonify({"error": "Agent registry not available"}), 503
 
     from ..services.agent_protocol import AgentId
+
     success = registry.unregister(AgentId(id=agent_id))
 
     return jsonify({"success": success})
 
 
-@api_bp.route('/registry/discover')
+@api_bp.route("/registry/discover")
 def api_registry_discover():
     """
     Discover agents by capability.
@@ -2363,7 +2807,7 @@ def api_registry_discover():
 
     from ..services.agent_protocol import CapabilityCategory
 
-    capability_str = request.args.get('capability', '')
+    capability_str = request.args.get("capability", "")
     if not capability_str:
         return jsonify({"error": "capability parameter required"}), 400
 
@@ -2374,20 +2818,22 @@ def api_registry_discover():
         return jsonify({"error": f"Invalid capability. Valid: {valid}"}), 400
 
     try:
-        min_confidence = float(request.args.get('min_confidence', 0.5))
+        min_confidence = float(request.args.get("min_confidence", 0.5))
     except ValueError:
         min_confidence = 0.5
 
     agents = registry.discover(capability, min_confidence)
 
-    return jsonify({
-        "capability": capability.value,
-        "agents": [a.to_dict() for a in agents],
-        "total": len(agents)
-    })
+    return jsonify(
+        {
+            "capability": capability.value,
+            "agents": [a.to_dict() for a in agents],
+            "total": len(agents),
+        }
+    )
 
 
-@api_bp.route('/registry/best-for-task', methods=['POST'])
+@api_bp.route("/registry/best-for-task", methods=["POST"])
 def api_registry_best_for_task():
     """
     Find the best agent for a task.
@@ -2409,8 +2855,7 @@ def api_registry_best_for_task():
 
     try:
         capabilities = [
-            CapabilityCategory(c.lower())
-            for c in data.get('required_capabilities', [])
+            CapabilityCategory(c.lower()) for c in data.get("required_capabilities", [])
         ]
     except ValueError as e:
         return jsonify({"error": f"Invalid capability: {e}"}), 400
@@ -2419,27 +2864,22 @@ def api_registry_best_for_task():
         return jsonify({"error": "At least one capability required"}), 400
 
     task = Task.create(
-        title=data.get('title', 'Untitled'),
-        description=data.get('description', ''),
-        required_capabilities=capabilities
+        title=data.get("title", "Untitled"),
+        description=data.get("description", ""),
+        required_capabilities=capabilities,
     )
 
     best_agent = registry.find_best_for_task(task)
 
     if not best_agent:
-        return jsonify({
-            "found": False,
-            "message": "No suitable agent found"
-        })
+        return jsonify({"found": False, "message": "No suitable agent found"})
 
-    return jsonify({
-        "found": True,
-        "agent": best_agent.to_dict(),
-        "task": task.to_dict()
-    })
+    return jsonify(
+        {"found": True, "agent": best_agent.to_dict(), "task": task.to_dict()}
+    )
 
 
-@api_bp.route('/registry/heartbeat/<agent_id>', methods=['POST'])
+@api_bp.route("/registry/heartbeat/<agent_id>", methods=["POST"])
 def api_registry_heartbeat(agent_id):
     """Record a heartbeat from an agent."""
     registry = get_agent_registry()
@@ -2447,12 +2887,13 @@ def api_registry_heartbeat(agent_id):
         return jsonify({"error": "Agent registry not available"}), 503
 
     from ..services.agent_protocol import AgentId
+
     registry.heartbeat(AgentId(id=agent_id))
 
     return jsonify({"success": True})
 
 
-@api_bp.route('/registry/stats')
+@api_bp.route("/registry/stats")
 def api_registry_stats():
     """Get registry statistics."""
     registry = get_agent_registry()
@@ -2462,7 +2903,7 @@ def api_registry_stats():
     return jsonify(registry.get_stats())
 
 
-@api_bp.route('/registry/create-team', methods=['POST'])
+@api_bp.route("/registry/create-team", methods=["POST"])
 def api_registry_create_team():
     """Create a standard team of agents."""
     registry = get_agent_registry()
@@ -2471,28 +2912,32 @@ def api_registry_create_team():
 
     agent_ids = registry.create_standard_team()
 
-    return jsonify({
-        "success": True,
-        "agents_created": len(agent_ids),
-        "agent_ids": [aid.to_dict() for aid in agent_ids]
-    })
+    return jsonify(
+        {
+            "success": True,
+            "agents_created": len(agent_ids),
+            "agent_ids": [aid.to_dict() for aid in agent_ids],
+        }
+    )
 
 
-@api_bp.route('/registry/capabilities')
+@api_bp.route("/registry/capabilities")
 def api_registry_capabilities():
     """List all available capability categories."""
     from ..services.agent_protocol import CapabilityCategory, STANDARD_AGENT_TYPES
 
-    return jsonify({
-        "capabilities": [c.value for c in CapabilityCategory],
-        "agent_types": {
-            k: {
-                "capabilities": [c.value for c in v["capabilities"]],
-                "description": v["description"]
-            }
-            for k, v in STANDARD_AGENT_TYPES.items()
+    return jsonify(
+        {
+            "capabilities": [c.value for c in CapabilityCategory],
+            "agent_types": {
+                k: {
+                    "capabilities": [c.value for c in v["capabilities"]],
+                    "description": v["description"],
+                }
+                for k, v in STANDARD_AGENT_TYPES.items()
+            },
         }
-    })
+    )
 
 
 # ============ Message Bus (AGI-Readiness Phase 3) ============
@@ -2500,12 +2945,14 @@ def api_registry_capabilities():
 # Lazy import for message bus
 _message_bus = None
 
+
 def get_message_bus():
     """Lazy load message bus."""
     global _message_bus
     if _message_bus is None:
         try:
             from ..services import message_bus
+
             _message_bus = message_bus.get_message_bus()
         except Exception as e:
             logger.error(f"Failed to load message bus: {e}")
@@ -2513,7 +2960,7 @@ def get_message_bus():
     return _message_bus if _message_bus else None
 
 
-@api_bp.route('/messages/send', methods=['POST'])
+@api_bp.route("/messages/send", methods=["POST"])
 def api_messages_send():
     """
     Send a message between agents.
@@ -2533,7 +2980,7 @@ def api_messages_send():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    required = ['from_agent_id', 'to_agent_id', 'message_type', 'payload']
+    required = ["from_agent_id", "to_agent_id", "message_type", "payload"]
     for field in required:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -2541,28 +2988,25 @@ def api_messages_send():
     from ..services.agent_protocol import AgentId, AgentMessage, MessageType
 
     try:
-        message_type = MessageType(data['message_type'])
+        message_type = MessageType(data["message_type"])
     except ValueError:
         valid = [t.value for t in MessageType]
         return jsonify({"error": f"Invalid message_type. Valid: {valid}"}), 400
 
     message = AgentMessage.create(
         message_type=message_type,
-        from_agent=AgentId(id=data['from_agent_id']),
-        to_agent=AgentId(id=data['to_agent_id']),
-        payload=data['payload'],
-        priority=data.get('priority', 5)
+        from_agent=AgentId(id=data["from_agent_id"]),
+        to_agent=AgentId(id=data["to_agent_id"]),
+        payload=data["payload"],
+        priority=data.get("priority", 5),
     )
 
     success = bus.send(message)
 
-    return jsonify({
-        "success": success,
-        "message_id": message.id
-    })
+    return jsonify({"success": success, "message_id": message.id})
 
 
-@api_bp.route('/messages/broadcast', methods=['POST'])
+@api_bp.route("/messages/broadcast", methods=["POST"])
 def api_messages_broadcast():
     """
     Broadcast a message to all agents.
@@ -2583,27 +3027,23 @@ def api_messages_broadcast():
     from ..services.agent_protocol import AgentId, AgentMessage, MessageType
 
     try:
-        message_type = MessageType(data['message_type'])
+        message_type = MessageType(data["message_type"])
     except ValueError:
         return jsonify({"error": "Invalid message_type"}), 400
 
     message = AgentMessage.create(
         message_type=message_type,
-        from_agent=AgentId(id=data['from_agent_id']),
+        from_agent=AgentId(id=data["from_agent_id"]),
         to_agent=None,
-        payload=data['payload']
+        payload=data["payload"],
     )
 
     count = bus.broadcast(message)
 
-    return jsonify({
-        "success": True,
-        "message_id": message.id,
-        "delivered_to": count
-    })
+    return jsonify({"success": True, "message_id": message.id, "delivered_to": count})
 
 
-@api_bp.route('/messages/receive/<agent_id>')
+@api_bp.route("/messages/receive/<agent_id>")
 def api_messages_receive(agent_id):
     """Receive pending messages for an agent."""
     bus = get_message_bus()
@@ -2613,19 +3053,18 @@ def api_messages_receive(agent_id):
     from ..services.agent_protocol import AgentId
 
     try:
-        limit = int(request.args.get('limit', 10))
+        limit = int(request.args.get("limit", 10))
     except ValueError:
         limit = 10
 
     messages = bus.receive_all(AgentId(id=agent_id), max_messages=limit)
 
-    return jsonify({
-        "messages": [m.to_dict() for m in messages],
-        "count": len(messages)
-    })
+    return jsonify(
+        {"messages": [m.to_dict() for m in messages], "count": len(messages)}
+    )
 
 
-@api_bp.route('/messages/history')
+@api_bp.route("/messages/history")
 def api_messages_history():
     """
     Get message history.
@@ -2642,30 +3081,29 @@ def api_messages_history():
     from ..services.agent_protocol import AgentId, MessageType
 
     agent_id = None
-    if request.args.get('agent_id'):
-        agent_id = AgentId(id=request.args.get('agent_id'))
+    if request.args.get("agent_id"):
+        agent_id = AgentId(id=request.args.get("agent_id"))
 
     message_type = None
-    if request.args.get('message_type'):
+    if request.args.get("message_type"):
         try:
-            message_type = MessageType(request.args.get('message_type'))
+            message_type = MessageType(request.args.get("message_type"))
         except ValueError:
             pass
 
     try:
-        limit = int(request.args.get('limit', 100))
+        limit = int(request.args.get("limit", 100))
     except ValueError:
         limit = 100
 
     messages = bus.get_message_history(agent_id, message_type, limit)
 
-    return jsonify({
-        "messages": [m.to_dict() for m in messages],
-        "count": len(messages)
-    })
+    return jsonify(
+        {"messages": [m.to_dict() for m in messages], "count": len(messages)}
+    )
 
 
-@api_bp.route('/messages/stats')
+@api_bp.route("/messages/stats")
 def api_messages_stats():
     """Get message bus statistics."""
     bus = get_message_bus()
@@ -2675,7 +3113,7 @@ def api_messages_stats():
     return jsonify(bus.get_stats())
 
 
-@api_bp.route('/messages/dead-letters')
+@api_bp.route("/messages/dead-letters")
 def api_messages_dead_letters():
     """Get failed/expired messages."""
     bus = get_message_bus()
@@ -2683,16 +3121,15 @@ def api_messages_dead_letters():
         return jsonify({"error": "Message bus not available"}), 503
 
     try:
-        limit = int(request.args.get('limit', 50))
+        limit = int(request.args.get("limit", 50))
     except ValueError:
         limit = 50
 
     messages = bus.get_dead_letters(limit)
 
-    return jsonify({
-        "dead_letters": [m.to_dict() for m in messages],
-        "count": len(messages)
-    })
+    return jsonify(
+        {"dead_letters": [m.to_dict() for m in messages], "count": len(messages)}
+    )
 
 
 # ============ Translation Layer (AGI-Readiness Phase 3) ============
@@ -2700,12 +3137,14 @@ def api_messages_dead_letters():
 # Lazy import for translation layer
 _translation_layer = None
 
+
 def get_translation_layer():
     """Lazy load translation layer."""
     global _translation_layer
     if _translation_layer is None:
         try:
             from ..services import translation_layer
+
             _translation_layer = translation_layer.get_translation_layer()
         except Exception as e:
             logger.error(f"Failed to load translation layer: {e}")
@@ -2713,7 +3152,7 @@ def get_translation_layer():
     return _translation_layer if _translation_layer else None
 
 
-@api_bp.route('/translate/message', methods=['POST'])
+@api_bp.route("/translate/message", methods=["POST"])
 def api_translate_message():
     """
     Translate an agent message to human-readable format.
@@ -2726,20 +3165,20 @@ def api_translate_message():
         return jsonify({"error": "Translation layer not available"}), 503
 
     data = request.get_json()
-    if not data or 'message' not in data:
+    if not data or "message" not in data:
         return jsonify({"error": "Missing 'message' field"}), 400
 
     from ..services.agent_protocol import AgentMessage
 
     try:
-        message = AgentMessage.from_dict(data['message'])
+        message = AgentMessage.from_dict(data["message"])
         translated = tl.translate(message)
         return jsonify(translated.to_dict())
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 
-@api_bp.route('/translate/activity-summary', methods=['POST'])
+@api_bp.route("/translate/activity-summary", methods=["POST"])
 def api_translate_activity_summary():
     """
     Get a human-readable summary of recent agent activity.
@@ -2753,21 +3192,21 @@ def api_translate_activity_summary():
         return jsonify({"error": "Translation layer not available"}), 503
 
     data = request.get_json()
-    if not data or 'messages' not in data:
+    if not data or "messages" not in data:
         return jsonify({"error": "Missing 'messages' field"}), 400
 
     from ..services.agent_protocol import AgentMessage
 
     try:
-        messages = [AgentMessage.from_dict(m) for m in data['messages']]
-        time_window = data.get('time_window_minutes', 60)
+        messages = [AgentMessage.from_dict(m) for m in data["messages"]]
+        time_window = data.get("time_window_minutes", 60)
         summary = tl.summarize_activity(messages, time_window)
         return jsonify(summary.to_dict())
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 
-@api_bp.route('/translate/agent-name/<agent_type>')
+@api_bp.route("/translate/agent-name/<agent_type>")
 def api_translate_agent_name(agent_type):
     """Get a friendly name for an agent type."""
     tl = get_translation_layer()
@@ -2778,7 +3217,7 @@ def api_translate_agent_name(agent_type):
     return jsonify({"agent_type": agent_type, "friendly_name": friendly_name})
 
 
-@api_bp.route('/translate/recent')
+@api_bp.route("/translate/recent")
 def api_translate_recent():
     """Get translated recent messages from the message bus."""
     bus = get_message_bus()
@@ -2788,44 +3227,43 @@ def api_translate_recent():
         return jsonify({"error": "Services not available"}), 503
 
     try:
-        limit = int(request.args.get('limit', 20))
+        limit = int(request.args.get("limit", 20))
     except ValueError:
         limit = 20
 
     messages = bus.get_message_history(limit=limit)
     translated = [tl.translate(m).to_dict() for m in messages]
 
-    return jsonify({
-        "messages": translated,
-        "count": len(translated)
-    })
+    return jsonify({"messages": translated, "count": len(translated)})
 
 
 # ============ Favorites ============
 
-@api_bp.route('/favorites')
+
+@api_bp.route("/favorites")
 def api_favorites():
     """Get all favorites."""
     return jsonify(get_favorites())
 
 
-@api_bp.route('/projects/<project_id>/favorite', methods=['POST'])
+@api_bp.route("/projects/<project_id>/favorite", methods=["POST"])
 def api_toggle_project_favorite(project_id):
     """Toggle project favorite status."""
-    result = toggle_favorite('project', project_id)
+    result = toggle_favorite("project", project_id)
     return jsonify(result)
 
 
-@api_bp.route('/notes/<note_id>/favorite', methods=['POST'])
+@api_bp.route("/notes/<note_id>/favorite", methods=["POST"])
 def api_toggle_note_favorite(note_id):
     """Toggle note favorite status."""
-    result = toggle_favorite('note', note_id)
+    result = toggle_favorite("note", note_id)
     return jsonify(result)
 
 
 # ============ Project Update ============
 
-@api_bp.route('/projects/<project_id>', methods=['PUT'])
+
+@api_bp.route("/projects/<project_id>", methods=["PUT"])
 def api_update_project(project_id):
     """Update project details."""
     data = request.get_json()
@@ -2835,10 +3273,11 @@ def api_update_project(project_id):
     return jsonify(result)
 
 
-@api_bp.route('/projects/<project_id>', methods=['DELETE'])
+@api_bp.route("/projects/<project_id>", methods=["DELETE"])
 def api_delete_project(project_id):
     """Delete a project."""
     from ..services.data_service import delete_project
+
     result = delete_project(project_id)
     if "error" in result:
         return jsonify(result), 404
@@ -2847,11 +3286,17 @@ def api_delete_project(project_id):
 
 # ============ Global Search ============
 
-@api_bp.route('/search')
+
+@api_bp.route("/search")
 def api_search():
     """Search across all content types."""
-    query = request.args.get('q', '')
-    types = request.args.getlist('type') or ['projects', 'notes', 'automations', 'agents']
+    query = request.args.get("q", "")
+    types = request.args.getlist("type") or [
+        "projects",
+        "notes",
+        "automations",
+        "agents",
+    ]
     if not query:
         return jsonify({"items": []})
     results = search_all(query, types)
@@ -2860,28 +3305,30 @@ def api_search():
 
 # ============ Enhanced Analytics ============
 
-@api_bp.route('/analytics/privacy')
+
+@api_bp.route("/analytics/privacy")
 def api_privacy_score():
     """Get privacy score and compliance data."""
     return jsonify(get_privacy_score())
 
 
-@api_bp.route('/analytics/tokens')
+@api_bp.route("/analytics/tokens")
 def api_token_usage():
     """Get token usage statistics."""
     return jsonify(get_token_usage())
 
 
-@api_bp.route('/analytics/categories')
+@api_bp.route("/analytics/categories")
 def api_category_breakdown():
     """Get audit category breakdown."""
-    period = request.args.get('period', '7D')
+    period = request.args.get("period", "7D")
     return jsonify(get_category_breakdown(period))
 
 
 # ============ Sharing & Permissions ============
 
-@api_bp.route('/notes/<note_id>/share', methods=['POST'])
+
+@api_bp.route("/notes/<note_id>/share", methods=["POST"])
 def api_share_note(note_id):
     """Share a note with another device.
 
@@ -2896,9 +3343,9 @@ def api_share_note(note_id):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    owner_device = data.get('owner_device')
-    target_device = data.get('target_device')
-    permission = data.get('permission', 'view')
+    owner_device = data.get("owner_device")
+    target_device = data.get("target_device")
+    permission = data.get("permission", "view")
 
     if not owner_device or not target_device:
         return jsonify({"error": "owner_device and target_device are required"}), 400
@@ -2909,7 +3356,7 @@ def api_share_note(note_id):
     return jsonify(result)
 
 
-@api_bp.route('/notes/<note_id>/share', methods=['DELETE'])
+@api_bp.route("/notes/<note_id>/share", methods=["DELETE"])
 def api_unshare_note(note_id):
     """Remove sharing for a note.
 
@@ -2923,8 +3370,8 @@ def api_unshare_note(note_id):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    owner_device = data.get('owner_device')
-    target_device = data.get('target_device')
+    owner_device = data.get("owner_device")
+    target_device = data.get("target_device")
 
     if not owner_device or not target_device:
         return jsonify({"error": "owner_device and target_device are required"}), 400
@@ -2935,7 +3382,7 @@ def api_unshare_note(note_id):
     return jsonify(result)
 
 
-@api_bp.route('/projects/<project_id>/share', methods=['POST'])
+@api_bp.route("/projects/<project_id>/share", methods=["POST"])
 def api_share_project(project_id):
     """Share a project with another device.
 
@@ -2950,9 +3397,9 @@ def api_share_project(project_id):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    owner_device = data.get('owner_device')
-    target_device = data.get('target_device')
-    permission = data.get('permission', 'view')
+    owner_device = data.get("owner_device")
+    target_device = data.get("target_device")
+    permission = data.get("permission", "view")
 
     if not owner_device or not target_device:
         return jsonify({"error": "owner_device and target_device are required"}), 400
@@ -2963,15 +3410,15 @@ def api_share_project(project_id):
     return jsonify(result)
 
 
-@api_bp.route('/projects/<project_id>/share', methods=['DELETE'])
+@api_bp.route("/projects/<project_id>/share", methods=["DELETE"])
 def api_unshare_project(project_id):
     """Remove sharing for a project."""
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    owner_device = data.get('owner_device')
-    target_device = data.get('target_device')
+    owner_device = data.get("owner_device")
+    target_device = data.get("target_device")
 
     if not owner_device or not target_device:
         return jsonify({"error": "owner_device and target_device are required"}), 400
@@ -2982,7 +3429,7 @@ def api_unshare_project(project_id):
     return jsonify(result)
 
 
-@api_bp.route('/devices/<device_id>/shared')
+@api_bp.route("/devices/<device_id>/shared")
 def api_get_shared_with_device(device_id):
     """Get all content shared with a device.
 
@@ -2992,14 +3439,14 @@ def api_get_shared_with_device(device_id):
     return jsonify(result)
 
 
-@api_bp.route('/notes/<note_id>/permissions')
+@api_bp.route("/notes/<note_id>/permissions")
 def api_get_note_permissions(note_id):
     """Get permissions info for a note.
 
     Query params:
     - device_id: The device to check permissions for
     """
-    device_id = request.args.get('device_id')
+    device_id = request.args.get("device_id")
     if not device_id:
         return jsonify({"error": "device_id is required"}), 400
 
@@ -3009,31 +3456,34 @@ def api_get_note_permissions(note_id):
 
     # Get the full note data to check permissions
     from ..services.data_service import _read_json_file, NOTES_FILE
+
     data = _read_json_file(NOTES_FILE)
     if data:
         for dev_id, device_info in data.get("devices", {}).items():
             for n in device_info.get("notes", []):
                 if n.get("id") == note_id:
                     permission = get_permission_level(n, device_id)
-                    return jsonify({
-                        "note_id": note_id,
-                        "device_id": device_id,
-                        "permission": permission,
-                        "can_view": permission in ("owner", "full", "edit", "view"),
-                        "can_edit": permission in ("owner", "full", "edit"),
-                        "can_delete": permission in ("owner", "full"),
-                        "can_share": permission == "owner",
-                        "owner_device": n.get("owner_device"),
-                        "shared_with": n.get("shared_with", [])
-                    })
+                    return jsonify(
+                        {
+                            "note_id": note_id,
+                            "device_id": device_id,
+                            "permission": permission,
+                            "can_view": permission in ("owner", "full", "edit", "view"),
+                            "can_edit": permission in ("owner", "full", "edit"),
+                            "can_delete": permission in ("owner", "full"),
+                            "can_share": permission == "owner",
+                            "owner_device": n.get("owner_device"),
+                            "shared_with": n.get("shared_with", []),
+                        }
+                    )
 
     return jsonify({"error": "Note not found"}), 404
 
 
-@api_bp.route('/projects/<project_id>/permissions')
+@api_bp.route("/projects/<project_id>/permissions")
 def api_get_project_permissions(project_id):
     """Get permissions info for a project."""
-    device_id = request.args.get('device_id')
+    device_id = request.args.get("device_id")
     if not device_id:
         return jsonify({"error": "device_id is required"}), 400
 
@@ -3042,30 +3492,34 @@ def api_get_project_permissions(project_id):
         return jsonify({"error": "Project not found"}), 404
 
     from ..services.data_service import _read_json_file, PROJECTS_FILE
+
     data = _read_json_file(PROJECTS_FILE)
     if data:
         for dev_id, device_info in data.get("devices", {}).items():
             for p in device_info.get("projects", []):
                 if p.get("id") == project_id or p.get("path") == project_id:
                     permission = get_permission_level(p, device_id)
-                    return jsonify({
-                        "project_id": project_id,
-                        "device_id": device_id,
-                        "permission": permission,
-                        "can_view": permission in ("owner", "full", "edit", "view"),
-                        "can_edit": permission in ("owner", "full", "edit"),
-                        "can_delete": permission in ("owner", "full"),
-                        "can_share": permission == "owner",
-                        "owner_device": p.get("owner_device"),
-                        "shared_with": p.get("shared_with", [])
-                    })
+                    return jsonify(
+                        {
+                            "project_id": project_id,
+                            "device_id": device_id,
+                            "permission": permission,
+                            "can_view": permission in ("owner", "full", "edit", "view"),
+                            "can_edit": permission in ("owner", "full", "edit"),
+                            "can_delete": permission in ("owner", "full"),
+                            "can_share": permission == "owner",
+                            "owner_device": p.get("owner_device"),
+                            "shared_with": p.get("shared_with", []),
+                        }
+                    )
 
     return jsonify({"error": "Project not found"}), 404
 
 
 # ============ Email Verification ============
 
-@api_bp.route('/email/verify/request', methods=['POST'])
+
+@api_bp.route("/email/verify/request", methods=["POST"])
 def api_request_email_verification():
     """Request email verification - sends code to email.
 
@@ -3079,8 +3533,8 @@ def api_request_email_verification():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    email = data.get('email')
-    device_id = data.get('device_id')
+    email = data.get("email")
+    device_id = data.get("device_id")
 
     if not email:
         return jsonify({"error": "email is required"}), 400
@@ -3093,7 +3547,7 @@ def api_request_email_verification():
     return jsonify(result)
 
 
-@api_bp.route('/email/verify/confirm', methods=['POST'])
+@api_bp.route("/email/verify/confirm", methods=["POST"])
 def api_verify_email_code():
     """Verify the email code.
 
@@ -3108,9 +3562,9 @@ def api_verify_email_code():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    email = data.get('email')
-    code = data.get('code')
-    device_id = data.get('device_id')
+    email = data.get("email")
+    code = data.get("code")
+    device_id = data.get("device_id")
 
     if not email or not code or not device_id:
         return jsonify({"error": "email, code, and device_id are required"}), 400
@@ -3121,13 +3575,13 @@ def api_verify_email_code():
     return jsonify(result)
 
 
-@api_bp.route('/email/verified')
+@api_bp.route("/email/verified")
 def api_get_all_verified_emails():
     """Get all verified emails."""
     return jsonify({"emails": get_all_verified_emails()})
 
 
-@api_bp.route('/email/verified/<device_id>')
+@api_bp.route("/email/verified/<device_id>")
 def api_get_verified_email(device_id):
     """Get verified email for a specific device."""
     email = get_verified_email(device_id)
@@ -3136,7 +3590,7 @@ def api_get_verified_email(device_id):
     return jsonify({"device_id": device_id, "email": None})
 
 
-@api_bp.route('/email/verified/<device_id>', methods=['DELETE'])
+@api_bp.route("/email/verified/<device_id>", methods=["DELETE"])
 def api_remove_verified_email(device_id):
     """Remove verified email for a device."""
     result = remove_verified_email(device_id)
@@ -3145,14 +3599,14 @@ def api_remove_verified_email(device_id):
     return jsonify(result)
 
 
-@api_bp.route('/email/devices')
+@api_bp.route("/email/devices")
 def api_get_devices_by_email():
     """Get all devices that have verified a specific email.
 
     Query params:
     - email: The email address to look up
     """
-    email = request.args.get('email')
+    email = request.args.get("email")
     if not email:
         return jsonify({"error": "email is required"}), 400
 
@@ -3160,7 +3614,7 @@ def api_get_devices_by_email():
     return jsonify({"email": email, "devices": devices})
 
 
-@api_bp.route('/email/config', methods=['POST'])
+@api_bp.route("/email/config", methods=["POST"])
 def api_set_email_config():
     """Configure SMTP settings for sending emails.
 
@@ -3177,17 +3631,17 @@ def api_set_email_config():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    required = ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'from_email']
+    required = ["smtp_host", "smtp_port", "smtp_user", "smtp_password", "from_email"]
     for field in required:
         if field not in data:
             return jsonify({"error": f"{field} is required"}), 400
 
     result = set_email_config(
-        data['smtp_host'],
-        data['smtp_port'],
-        data['smtp_user'],
-        data['smtp_password'],
-        data['from_email']
+        data["smtp_host"],
+        data["smtp_port"],
+        data["smtp_user"],
+        data["smtp_password"],
+        data["from_email"],
     )
     if "error" in result:
         return jsonify(result), 400
@@ -3196,7 +3650,8 @@ def api_set_email_config():
 
 # ============ Team Membership ============
 
-@api_bp.route('/teams/<team_id>/invite', methods=['POST'])
+
+@api_bp.route("/teams/<team_id>/invite", methods=["POST"])
 def api_invite_team_member(team_id):
     """Invite a user to a team by email.
 
@@ -3211,9 +3666,9 @@ def api_invite_team_member(team_id):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    inviter_email = data.get('inviter_email')
-    invitee_email = data.get('invitee_email')
-    role = data.get('role', 'member')
+    inviter_email = data.get("inviter_email")
+    invitee_email = data.get("invitee_email")
+    role = data.get("role", "member")
 
     if not inviter_email or not invitee_email:
         return jsonify({"error": "inviter_email and invitee_email are required"}), 400
@@ -3224,7 +3679,7 @@ def api_invite_team_member(team_id):
     return jsonify(result)
 
 
-@api_bp.route('/teams/invitations/accept', methods=['POST'])
+@api_bp.route("/teams/invitations/accept", methods=["POST"])
 def api_accept_team_invitation():
     """Accept a team invitation.
 
@@ -3239,9 +3694,9 @@ def api_accept_team_invitation():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    code = data.get('invitation_code')
-    email = data.get('email')
-    device_id = data.get('device_id')
+    code = data.get("invitation_code")
+    email = data.get("email")
+    device_id = data.get("device_id")
 
     if not code or not email:
         return jsonify({"error": "invitation_code and email are required"}), 400
@@ -3252,14 +3707,14 @@ def api_accept_team_invitation():
     return jsonify(result)
 
 
-@api_bp.route('/teams/invitations/pending')
+@api_bp.route("/teams/invitations/pending")
 def api_get_pending_invitations():
     """Get pending team invitations for an email.
 
     Query params:
     - email: The email to check for invitations
     """
-    email = request.args.get('email')
+    email = request.args.get("email")
     if not email:
         return jsonify({"error": "email is required"}), 400
 
@@ -3267,14 +3722,14 @@ def api_get_pending_invitations():
     return jsonify({"invitations": invitations})
 
 
-@api_bp.route('/teams/<team_id>/members/<member_email>', methods=['DELETE'])
+@api_bp.route("/teams/<team_id>/members/<member_email>", methods=["DELETE"])
 def api_remove_team_member(team_id, member_email):
     """Remove a member from a team.
 
     Query params:
     - remover_email: Email of the person removing (must be owner/admin)
     """
-    remover_email = request.args.get('remover_email')
+    remover_email = request.args.get("remover_email")
     if not remover_email:
         return jsonify({"error": "remover_email is required"}), 400
 
@@ -3284,7 +3739,7 @@ def api_remove_team_member(team_id, member_email):
     return jsonify(result)
 
 
-@api_bp.route('/teams/<team_id>/members/<member_email>/role', methods=['PUT'])
+@api_bp.route("/teams/<team_id>/members/<member_email>/role", methods=["PUT"])
 def api_update_member_role(team_id, member_email):
     """Update a team member's role.
 
@@ -3298,8 +3753,8 @@ def api_update_member_role(team_id, member_email):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    updater_email = data.get('updater_email')
-    new_role = data.get('new_role')
+    updater_email = data.get("updater_email")
+    new_role = data.get("new_role")
 
     if not updater_email or not new_role:
         return jsonify({"error": "updater_email and new_role are required"}), 400
@@ -3310,14 +3765,14 @@ def api_update_member_role(team_id, member_email):
     return jsonify(result)
 
 
-@api_bp.route('/teams/my-teams')
+@api_bp.route("/teams/my-teams")
 def api_get_my_teams():
     """Get all teams the user is a member of.
 
     Query params:
     - email: The user's email
     """
-    email = request.args.get('email')
+    email = request.args.get("email")
     if not email:
         return jsonify({"error": "email is required"}), 400
 
@@ -3330,12 +3785,14 @@ def api_get_my_teams():
 # Lazy import for human override system
 _override_system = None
 
+
 def get_override_system():
     """Lazy load human override system."""
     global _override_system
     if _override_system is None:
         try:
             from ..services import human_override
+
             _override_system = human_override.get_override_system()
         except Exception as e:
             logger.error(f"Failed to load override system: {e}")
@@ -3343,21 +3800,23 @@ def get_override_system():
     return _override_system if _override_system else None
 
 
-@api_bp.route('/override/status')
+@api_bp.route("/override/status")
 def api_override_status():
     """Get current override system status."""
     ov = get_override_system()
     if not ov:
         return jsonify({"error": "Override system not available"}), 503
 
-    return jsonify({
-        "stats": ov.get_stats(),
-        "kill_switch": ov.get_kill_switch_status(),
-        "active_pauses": [p.to_dict() for p in ov.get_active_pauses()]
-    })
+    return jsonify(
+        {
+            "stats": ov.get_stats(),
+            "kill_switch": ov.get_kill_switch_status(),
+            "active_pauses": [p.to_dict() for p in ov.get_active_pauses()],
+        }
+    )
 
 
-@api_bp.route('/override/pause', methods=['POST'])
+@api_bp.route("/override/pause", methods=["POST"])
 def api_override_pause():
     """
     Pause agent(s).
@@ -3379,7 +3838,7 @@ def api_override_pause():
 
     from ..services.human_override import OverrideScope
 
-    scope_str = data.get('scope', 'all_agents')
+    scope_str = data.get("scope", "all_agents")
     try:
         scope = OverrideScope(scope_str)
     except ValueError:
@@ -3388,22 +3847,19 @@ def api_override_pause():
 
     token = ov.pause(
         scope=scope,
-        target=data.get('target'),
-        reason=data.get('reason', ''),
-        paused_by=data.get('paused_by', 'user'),
-        duration_minutes=data.get('duration_minutes')
+        target=data.get("target"),
+        reason=data.get("reason", ""),
+        paused_by=data.get("paused_by", "user"),
+        duration_minutes=data.get("duration_minutes"),
     )
 
     # Also add to activity log
-    _add_activity('pause', f'Pause issued: {scope.value}', 'pause')
+    _add_activity("pause", f"Pause issued: {scope.value}", "pause")
 
-    return jsonify({
-        "success": True,
-        "pause_token": token.to_dict()
-    })
+    return jsonify({"success": True, "pause_token": token.to_dict()})
 
 
-@api_bp.route('/override/resume', methods=['POST'])
+@api_bp.route("/override/resume", methods=["POST"])
 def api_override_resume():
     """
     Resume from a pause.
@@ -3416,18 +3872,18 @@ def api_override_resume():
         return jsonify({"error": "Override system not available"}), 503
 
     data = request.get_json()
-    if not data or 'token_id' not in data:
+    if not data or "token_id" not in data:
         return jsonify({"error": "token_id is required"}), 400
 
-    success = ov.resume(data['token_id'])
+    success = ov.resume(data["token_id"])
 
     if success:
-        _add_activity('play', 'Agents resumed', 'play')
+        _add_activity("play", "Agents resumed", "play")
 
     return jsonify({"success": success})
 
 
-@api_bp.route('/override/is-paused')
+@api_bp.route("/override/is-paused")
 def api_override_is_paused():
     """
     Check if an agent or the system is paused.
@@ -3439,22 +3895,20 @@ def api_override_is_paused():
     if not ov:
         return jsonify({"error": "Override system not available"}), 503
 
-    agent_id_str = request.args.get('agent_id')
+    agent_id_str = request.args.get("agent_id")
     agent_id = None
 
     if agent_id_str:
         from ..services.agent_protocol import AgentId
+
         agent_id = AgentId(id=agent_id_str)
 
     is_paused = ov.is_paused(agent_id)
 
-    return jsonify({
-        "paused": is_paused,
-        "agent_id": agent_id_str
-    })
+    return jsonify({"paused": is_paused, "agent_id": agent_id_str})
 
 
-@api_bp.route('/override/kill-switch', methods=['POST'])
+@api_bp.route("/override/kill-switch", methods=["POST"])
 def api_override_kill_switch():
     """
     Activate the emergency kill switch.
@@ -3467,20 +3921,24 @@ def api_override_kill_switch():
         return jsonify({"error": "Override system not available"}), 503
 
     data = request.get_json() or {}
-    reason = data.get('reason', 'Emergency stop')
+    reason = data.get("reason", "Emergency stop")
 
     success = ov.activate_kill_switch(reason)
 
     if success:
-        _add_activity('kill', f'KILL SWITCH ACTIVATED: {reason}', 'cancel')
+        _add_activity("kill", f"KILL SWITCH ACTIVATED: {reason}", "cancel")
 
-    return jsonify({
-        "success": success,
-        "message": "Kill switch activated" if success else "Kill switch already active"
-    })
+    return jsonify(
+        {
+            "success": success,
+            "message": "Kill switch activated"
+            if success
+            else "Kill switch already active",
+        }
+    )
 
 
-@api_bp.route('/override/kill-switch/deactivate', methods=['POST'])
+@api_bp.route("/override/kill-switch/deactivate", methods=["POST"])
 def api_override_deactivate_kill_switch():
     """
     Deactivate the kill switch.
@@ -3493,24 +3951,28 @@ def api_override_deactivate_kill_switch():
         return jsonify({"error": "Override system not available"}), 503
 
     data = request.get_json()
-    if not data or 'confirmation' not in data:
-        return jsonify({
-            "error": "confirmation is required",
-            "hint": "Set confirmation to 'CONFIRM_DEACTIVATE' to proceed"
-        }), 400
+    if not data or "confirmation" not in data:
+        return jsonify(
+            {
+                "error": "confirmation is required",
+                "hint": "Set confirmation to 'CONFIRM_DEACTIVATE' to proceed",
+            }
+        ), 400
 
-    success = ov.deactivate_kill_switch(data['confirmation'])
+    success = ov.deactivate_kill_switch(data["confirmation"])
 
     if success:
-        _add_activity('system', 'Kill switch deactivated', 'play')
+        _add_activity("system", "Kill switch deactivated", "play")
 
-    return jsonify({
-        "success": success,
-        "message": "Kill switch deactivated" if success else "Invalid confirmation"
-    })
+    return jsonify(
+        {
+            "success": success,
+            "message": "Kill switch deactivated" if success else "Invalid confirmation",
+        }
+    )
 
 
-@api_bp.route('/override/decision', methods=['POST'])
+@api_bp.route("/override/decision", methods=["POST"])
 def api_override_request_decision():
     """
     Request human approval for a decision.
@@ -3531,7 +3993,7 @@ def api_override_request_decision():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    required = ['agent_id', 'decision_type', 'action']
+    required = ["agent_id", "decision_type", "action"]
     for field in required:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -3540,29 +4002,26 @@ def api_override_request_decision():
     from ..services.human_override import DecisionType
 
     try:
-        decision_type = DecisionType(data['decision_type'])
+        decision_type = DecisionType(data["decision_type"])
     except ValueError:
         valid = [d.value for d in DecisionType]
         return jsonify({"error": f"Invalid decision_type. Valid: {valid}"}), 400
 
     decision = ov.request_decision(
-        agent_id=AgentId(id=data['agent_id']),
+        agent_id=AgentId(id=data["agent_id"]),
         decision_type=decision_type,
-        action=data['action'],
-        context=data.get('context', {}),
-        risk_level=data.get('risk_level', 'medium'),
-        timeout_minutes=data.get('timeout_minutes', 30)
+        action=data["action"],
+        context=data.get("context", {}),
+        risk_level=data.get("risk_level", "medium"),
+        timeout_minutes=data.get("timeout_minutes", 30),
     )
 
-    _add_activity('question', f'Decision requested: {data["action"][:50]}', 'help')
+    _add_activity("question", f"Decision requested: {data['action'][:50]}", "help")
 
-    return jsonify({
-        "success": True,
-        "decision": decision.to_dict()
-    })
+    return jsonify({"success": True, "decision": decision.to_dict()})
 
 
-@api_bp.route('/override/decisions')
+@api_bp.route("/override/decisions")
 def api_override_pending_decisions():
     """
     Get pending decisions.
@@ -3579,25 +4038,24 @@ def api_override_pending_decisions():
     from ..services.human_override import DecisionType
 
     agent_id = None
-    if request.args.get('agent_id'):
-        agent_id = AgentId(id=request.args.get('agent_id'))
+    if request.args.get("agent_id"):
+        agent_id = AgentId(id=request.args.get("agent_id"))
 
     decision_type = None
-    if request.args.get('decision_type'):
+    if request.args.get("decision_type"):
         try:
-            decision_type = DecisionType(request.args.get('decision_type'))
+            decision_type = DecisionType(request.args.get("decision_type"))
         except ValueError:
             pass
 
     decisions = ov.get_pending_decisions(agent_id, decision_type)
 
-    return jsonify({
-        "decisions": [d.to_dict() for d in decisions],
-        "count": len(decisions)
-    })
+    return jsonify(
+        {"decisions": [d.to_dict() for d in decisions], "count": len(decisions)}
+    )
 
 
-@api_bp.route('/override/decisions/<decision_id>')
+@api_bp.route("/override/decisions/<decision_id>")
 def api_override_decision_status(decision_id):
     """Get the status of a specific decision."""
     ov = get_override_system()
@@ -3612,7 +4070,7 @@ def api_override_decision_status(decision_id):
     return jsonify(decision.to_dict())
 
 
-@api_bp.route('/override/decisions/<decision_id>/approve', methods=['POST'])
+@api_bp.route("/override/decisions/<decision_id>/approve", methods=["POST"])
 def api_override_approve_decision(decision_id):
     """
     Approve a pending decision.
@@ -3629,17 +4087,17 @@ def api_override_approve_decision(decision_id):
 
     success = ov.approve_decision(
         decision_id=decision_id,
-        approved_by=data.get('approved_by', 'user'),
-        reason=data.get('reason')
+        approved_by=data.get("approved_by", "user"),
+        reason=data.get("reason"),
     )
 
     if success:
-        _add_activity('check', f'Decision {decision_id} approved', 'check')
+        _add_activity("check", f"Decision {decision_id} approved", "check")
 
     return jsonify({"success": success})
 
 
-@api_bp.route('/override/decisions/<decision_id>/deny', methods=['POST'])
+@api_bp.route("/override/decisions/<decision_id>/deny", methods=["POST"])
 def api_override_deny_decision(decision_id):
     """
     Deny a pending decision.
@@ -3656,17 +4114,17 @@ def api_override_deny_decision(decision_id):
 
     success = ov.deny_decision(
         decision_id=decision_id,
-        denied_by=data.get('denied_by', 'user'),
-        reason=data.get('reason')
+        denied_by=data.get("denied_by", "user"),
+        reason=data.get("reason"),
     )
 
     if success:
-        _add_activity('cancel', f'Decision {decision_id} denied', 'cancel')
+        _add_activity("cancel", f"Decision {decision_id} denied", "cancel")
 
     return jsonify({"success": success})
 
 
-@api_bp.route('/override/inspect/<agent_id>')
+@api_bp.route("/override/inspect/<agent_id>")
 def api_override_inspect(agent_id):
     """Get detailed inspection of an agent."""
     ov = get_override_system()
@@ -3679,15 +4137,13 @@ def api_override_inspect(agent_id):
     bus = get_message_bus()
 
     inspection = ov.inspect(
-        agent_id=AgentId(id=agent_id),
-        registry=registry,
-        message_bus=bus
+        agent_id=AgentId(id=agent_id), registry=registry, message_bus=bus
     )
 
     return jsonify(inspection.to_dict())
 
 
-@api_bp.route('/override/action', methods=['POST'])
+@api_bp.route("/override/action", methods=["POST"])
 def api_override_record_action():
     """
     Record an agent action for inspection history.
@@ -3705,7 +4161,7 @@ def api_override_record_action():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    required = ['agent_id', 'action', 'details']
+    required = ["agent_id", "action", "details"]
     for field in required:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -3713,9 +4169,9 @@ def api_override_record_action():
     from ..services.agent_protocol import AgentId
 
     ov.record_action(
-        agent_id=AgentId(id=data['agent_id']),
-        action=data['action'],
-        details=data['details']
+        agent_id=AgentId(id=data["agent_id"]),
+        action=data["action"],
+        details=data["details"],
     )
 
     return jsonify({"success": True})
@@ -3726,12 +4182,14 @@ def api_override_record_action():
 # Lazy import for permission policy
 _permission_policy = None
 
+
 def get_permission_policy():
     """Lazy load permission policy."""
     global _permission_policy
     if _permission_policy is None:
         try:
             from ..services import permission_policy
+
             _permission_policy = permission_policy.get_permission_policy()
         except Exception as e:
             logger.error(f"Failed to load permission policy: {e}")
@@ -3739,7 +4197,7 @@ def get_permission_policy():
     return _permission_policy if _permission_policy else None
 
 
-@api_bp.route('/permissions/check', methods=['POST'])
+@api_bp.route("/permissions/check", methods=["POST"])
 def api_permissions_check():
     """
     Check if an agent has permission to perform an action.
@@ -3759,7 +4217,7 @@ def api_permissions_check():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    required = ['agent_id', 'action', 'resource']
+    required = ["agent_id", "action", "resource"]
     for field in required:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -3768,23 +4226,23 @@ def api_permissions_check():
     from ..services.permission_policy import ActionCategory
 
     try:
-        action = ActionCategory(data['action'])
+        action = ActionCategory(data["action"])
     except ValueError:
         valid = [a.value for a in ActionCategory]
         return jsonify({"error": f"Invalid action. Valid: {valid}"}), 400
 
     result = pp.check_permission(
-        agent_id=AgentId(id=data['agent_id']),
+        agent_id=AgentId(id=data["agent_id"]),
         action=action,
-        resource=data['resource'],
-        resource_type=data.get('resource_type', 'file'),
-        context=data.get('context')
+        resource=data["resource"],
+        resource_type=data.get("resource_type", "file"),
+        context=data.get("context"),
     )
 
     return jsonify(result.to_dict())
 
 
-@api_bp.route('/permissions/rules')
+@api_bp.route("/permissions/rules")
 def api_permissions_rules():
     """List all permission rules."""
     pp = get_permission_policy()
@@ -3792,13 +4250,10 @@ def api_permissions_rules():
         return jsonify({"error": "Permission policy not available"}), 503
 
     rules = pp.list_rules()
-    return jsonify({
-        "rules": [r.to_dict() for r in rules],
-        "count": len(rules)
-    })
+    return jsonify({"rules": [r.to_dict() for r in rules], "count": len(rules)})
 
 
-@api_bp.route('/permissions/rules/<rule_id>')
+@api_bp.route("/permissions/rules/<rule_id>")
 def api_permissions_rule(rule_id):
     """Get a specific permission rule."""
     pp = get_permission_policy()
@@ -3812,7 +4267,7 @@ def api_permissions_rule(rule_id):
     return jsonify(rule.to_dict())
 
 
-@api_bp.route('/permissions/rules/<rule_id>', methods=['DELETE'])
+@api_bp.route("/permissions/rules/<rule_id>", methods=["DELETE"])
 def api_permissions_delete_rule(rule_id):
     """Delete a permission rule."""
     pp = get_permission_policy()
@@ -3823,7 +4278,7 @@ def api_permissions_delete_rule(rule_id):
     return jsonify({"success": success})
 
 
-@api_bp.route('/permissions/trust', methods=['POST'])
+@api_bp.route("/permissions/trust", methods=["POST"])
 def api_permissions_set_trust():
     """
     Set trust level for an agent.
@@ -3840,13 +4295,13 @@ def api_permissions_set_trust():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    if 'agent_id' not in data or 'trust_level' not in data:
+    if "agent_id" not in data or "trust_level" not in data:
         return jsonify({"error": "agent_id and trust_level are required"}), 400
 
     from ..services.agent_protocol import AgentId
     from ..services.permission_policy import TrustLevel
 
-    trust_input = data['trust_level']
+    trust_input = data["trust_level"]
     try:
         if isinstance(trust_input, int):
             trust_level = TrustLevel(trust_input)
@@ -3856,16 +4311,14 @@ def api_permissions_set_trust():
         valid = [f"{t.name} ({t.value})" for t in TrustLevel]
         return jsonify({"error": f"Invalid trust_level. Valid: {valid}"}), 400
 
-    pp.set_trust_level(AgentId(id=data['agent_id']), trust_level)
+    pp.set_trust_level(AgentId(id=data["agent_id"]), trust_level)
 
-    return jsonify({
-        "success": True,
-        "agent_id": data['agent_id'],
-        "trust_level": trust_level.name
-    })
+    return jsonify(
+        {"success": True, "agent_id": data["agent_id"], "trust_level": trust_level.name}
+    )
 
 
-@api_bp.route('/permissions/trust/<agent_id>')
+@api_bp.route("/permissions/trust/<agent_id>")
 def api_permissions_get_trust(agent_id):
     """Get trust level for an agent."""
     pp = get_permission_policy()
@@ -3876,14 +4329,12 @@ def api_permissions_get_trust(agent_id):
 
     level = pp.get_trust_level(AgentId(id=agent_id))
 
-    return jsonify({
-        "agent_id": agent_id,
-        "trust_level": level.name,
-        "trust_value": level.value
-    })
+    return jsonify(
+        {"agent_id": agent_id, "trust_level": level.name, "trust_value": level.value}
+    )
 
 
-@api_bp.route('/permissions/history')
+@api_bp.route("/permissions/history")
 def api_permissions_history():
     """Get permission check history."""
     pp = get_permission_policy()
@@ -3891,19 +4342,16 @@ def api_permissions_history():
         return jsonify({"error": "Permission policy not available"}), 503
 
     try:
-        limit = int(request.args.get('limit', 100))
+        limit = int(request.args.get("limit", 100))
     except ValueError:
         limit = 100
 
     history = pp.get_check_history(limit)
 
-    return jsonify({
-        "history": history,
-        "count": len(history)
-    })
+    return jsonify({"history": history, "count": len(history)})
 
 
-@api_bp.route('/permissions/stats')
+@api_bp.route("/permissions/stats")
 def api_permissions_stats():
     """Get permission policy statistics."""
     pp = get_permission_policy()
@@ -3913,18 +4361,17 @@ def api_permissions_stats():
     return jsonify(pp.get_stats())
 
 
-@api_bp.route('/permissions/action-categories')
+@api_bp.route("/permissions/action-categories")
 def api_permissions_action_categories():
     """List all available action categories."""
     from ..services.permission_policy import ActionCategory, TrustLevel
 
-    return jsonify({
-        "action_categories": [a.value for a in ActionCategory],
-        "trust_levels": [
-            {"name": t.name, "value": t.value}
-            for t in TrustLevel
-        ]
-    })
+    return jsonify(
+        {
+            "action_categories": [a.value for a in ActionCategory],
+            "trust_levels": [{"name": t.name, "value": t.value} for t in TrustLevel],
+        }
+    )
 
 
 # ============ Rate Limiter (AGI-Readiness Phase 4) ============
@@ -3932,12 +4379,14 @@ def api_permissions_action_categories():
 # Lazy import for rate limiter
 _rate_limiter = None
 
+
 def get_rate_limiter():
     """Lazy load rate limiter."""
     global _rate_limiter
     if _rate_limiter is None:
         try:
             from ..services import rate_limiter
+
             _rate_limiter = rate_limiter.get_rate_limiter()
         except Exception as e:
             logger.error(f"Failed to load rate limiter: {e}")
@@ -3945,7 +4394,7 @@ def get_rate_limiter():
     return _rate_limiter if _rate_limiter else None
 
 
-@api_bp.route('/ratelimit/check', methods=['POST'])
+@api_bp.route("/ratelimit/check", methods=["POST"])
 def api_ratelimit_check():
     """
     Check if a request is within rate limits.
@@ -3963,21 +4412,21 @@ def api_ratelimit_check():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    if 'agent_id' not in data or 'action' not in data:
+    if "agent_id" not in data or "action" not in data:
         return jsonify({"error": "agent_id and action are required"}), 400
 
     from ..services.agent_protocol import AgentId
 
     status = rl.check_rate_limit(
-        agent_id=AgentId(id=data['agent_id']),
-        action=data['action'],
-        record=not data.get('dry_run', False)
+        agent_id=AgentId(id=data["agent_id"]),
+        action=data["action"],
+        record=not data.get("dry_run", False),
     )
 
     return jsonify(status.to_dict())
 
 
-@api_bp.route('/ratelimit/configs')
+@api_bp.route("/ratelimit/configs")
 def api_ratelimit_configs():
     """List all rate limit configurations."""
     rl = get_rate_limiter()
@@ -3985,13 +4434,10 @@ def api_ratelimit_configs():
         return jsonify({"error": "Rate limiter not available"}), 503
 
     configs = rl.list_configs()
-    return jsonify({
-        "configs": [c.to_dict() for c in configs],
-        "count": len(configs)
-    })
+    return jsonify({"configs": [c.to_dict() for c in configs], "count": len(configs)})
 
 
-@api_bp.route('/ratelimit/configs/<config_id>')
+@api_bp.route("/ratelimit/configs/<config_id>")
 def api_ratelimit_config(config_id):
     """Get a specific rate limit config."""
     rl = get_rate_limiter()
@@ -4005,7 +4451,7 @@ def api_ratelimit_config(config_id):
     return jsonify(config.to_dict())
 
 
-@api_bp.route('/ratelimit/configs/<config_id>', methods=['DELETE'])
+@api_bp.route("/ratelimit/configs/<config_id>", methods=["DELETE"])
 def api_ratelimit_delete_config(config_id):
     """Delete a rate limit config."""
     rl = get_rate_limiter()
@@ -4016,7 +4462,7 @@ def api_ratelimit_delete_config(config_id):
     return jsonify({"success": success})
 
 
-@api_bp.route('/ratelimit/usage/<agent_id>')
+@api_bp.route("/ratelimit/usage/<agent_id>")
 def api_ratelimit_usage(agent_id):
     """Get usage statistics for an agent."""
     rl = get_rate_limiter()
@@ -4029,7 +4475,7 @@ def api_ratelimit_usage(agent_id):
     return jsonify(usage)
 
 
-@api_bp.route('/ratelimit/reset/<agent_id>', methods=['POST'])
+@api_bp.route("/ratelimit/reset/<agent_id>", methods=["POST"])
 def api_ratelimit_reset(agent_id):
     """Reset rate limits for an agent."""
     rl = get_rate_limiter()
@@ -4042,7 +4488,7 @@ def api_ratelimit_reset(agent_id):
     return jsonify({"success": True})
 
 
-@api_bp.route('/ratelimit/stats')
+@api_bp.route("/ratelimit/stats")
 def api_ratelimit_stats():
     """Get rate limiter statistics."""
     rl = get_rate_limiter()
@@ -4057,12 +4503,14 @@ def api_ratelimit_stats():
 # Lazy import for safety audit
 _safety_audit = None
 
+
 def get_safety_audit():
     """Lazy load safety audit."""
     global _safety_audit
     if _safety_audit is None:
         try:
             from ..services import safety_audit
+
             _safety_audit = safety_audit.get_safety_audit()
         except Exception as e:
             logger.error(f"Failed to load safety audit: {e}")
@@ -4070,7 +4518,7 @@ def get_safety_audit():
     return _safety_audit if _safety_audit else None
 
 
-@api_bp.route('/safety/events')
+@api_bp.route("/safety/events")
 def api_safety_events():
     """
     Get safety events.
@@ -4089,28 +4537,28 @@ def api_safety_events():
     from ..services.safety_audit import SafetyEventType, RiskLevel
 
     event_types = None
-    if request.args.get('event_type'):
+    if request.args.get("event_type"):
         try:
-            event_types = [SafetyEventType(request.args.get('event_type'))]
+            event_types = [SafetyEventType(request.args.get("event_type"))]
         except ValueError:
             pass
 
     risk_levels = None
-    if request.args.get('risk_level'):
+    if request.args.get("risk_level"):
         try:
-            risk_levels = [RiskLevel[request.args.get('risk_level').upper()]]
+            risk_levels = [RiskLevel[request.args.get("risk_level").upper()]]
         except KeyError:
             pass
 
-    agent_id = request.args.get('agent_id')
+    agent_id = request.args.get("agent_id")
 
     try:
-        hours = int(request.args.get('hours', 24))
+        hours = int(request.args.get("hours", 24))
     except ValueError:
         hours = 24
 
     try:
-        limit = int(request.args.get('limit', 100))
+        limit = int(request.args.get("limit", 100))
     except ValueError:
         limit = 100
 
@@ -4121,16 +4569,13 @@ def api_safety_events():
         risk_levels=risk_levels,
         agent_id=agent_id,
         since=since,
-        limit=limit
+        limit=limit,
     )
 
-    return jsonify({
-        "events": [e.to_dict() for e in events],
-        "count": len(events)
-    })
+    return jsonify({"events": [e.to_dict() for e in events], "count": len(events)})
 
 
-@api_bp.route('/safety/event', methods=['POST'])
+@api_bp.route("/safety/event", methods=["POST"])
 def api_safety_log_event():
     """
     Log a safety event.
@@ -4154,21 +4599,21 @@ def api_safety_log_event():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    if 'event_type' not in data:
+    if "event_type" not in data:
         return jsonify({"error": "event_type is required"}), 400
 
     from ..services.safety_audit import SafetyEventType, RiskLevel
 
     try:
-        event_type = SafetyEventType(data['event_type'])
+        event_type = SafetyEventType(data["event_type"])
     except ValueError:
         valid = [e.value for e in SafetyEventType]
         return jsonify({"error": f"Invalid event_type. Valid: {valid}"}), 400
 
     risk_level = RiskLevel.LOW
-    if data.get('risk_level'):
+    if data.get("risk_level"):
         try:
-            risk_level = RiskLevel[data['risk_level'].upper()]
+            risk_level = RiskLevel[data["risk_level"].upper()]
         except KeyError:
             valid = [r.name for r in RiskLevel]
             return jsonify({"error": f"Invalid risk_level. Valid: {valid}"}), 400
@@ -4176,22 +4621,19 @@ def api_safety_log_event():
     event = sa.log_event(
         event_type=event_type,
         risk_level=risk_level,
-        agent_id=data.get('agent_id'),
-        action=data.get('action'),
-        resource=data.get('resource'),
-        decision=data.get('decision'),
-        details=data.get('details'),
-        success=data.get('success', True),
-        error_message=data.get('error_message')
+        agent_id=data.get("agent_id"),
+        action=data.get("action"),
+        resource=data.get("resource"),
+        decision=data.get("decision"),
+        details=data.get("details"),
+        success=data.get("success", True),
+        error_message=data.get("error_message"),
     )
 
-    return jsonify({
-        "success": True,
-        "event": event.to_dict()
-    })
+    return jsonify({"success": True, "event": event.to_dict()})
 
 
-@api_bp.route('/safety/risk-scores')
+@api_bp.route("/safety/risk-scores")
 def api_safety_risk_scores():
     """Get all agent risk scores."""
     sa = get_safety_audit()
@@ -4200,13 +4642,10 @@ def api_safety_risk_scores():
 
     scores = sa.get_all_risk_scores()
 
-    return jsonify({
-        "scores": [s.to_dict() for s in scores],
-        "count": len(scores)
-    })
+    return jsonify({"scores": [s.to_dict() for s in scores], "count": len(scores)})
 
 
-@api_bp.route('/safety/risk-scores/<agent_id>')
+@api_bp.route("/safety/risk-scores/<agent_id>")
 def api_safety_risk_score(agent_id):
     """Get risk score for a specific agent."""
     sa = get_safety_audit()
@@ -4216,16 +4655,18 @@ def api_safety_risk_score(agent_id):
     score = sa.get_risk_score(agent_id)
 
     if not score:
-        return jsonify({
-            "agent_id": agent_id,
-            "current_score": 0.0,
-            "message": "No data for this agent"
-        })
+        return jsonify(
+            {
+                "agent_id": agent_id,
+                "current_score": 0.0,
+                "message": "No data for this agent",
+            }
+        )
 
     return jsonify(score.to_dict())
 
 
-@api_bp.route('/safety/report')
+@api_bp.route("/safety/report")
 def api_safety_report():
     """
     Generate a safety report.
@@ -4238,7 +4679,7 @@ def api_safety_report():
         return jsonify({"error": "Safety audit not available"}), 503
 
     try:
-        hours = int(request.args.get('hours', 24))
+        hours = int(request.args.get("hours", 24))
     except ValueError:
         hours = 24
 
@@ -4247,7 +4688,7 @@ def api_safety_report():
     return jsonify(report.to_dict())
 
 
-@api_bp.route('/safety/stats')
+@api_bp.route("/safety/stats")
 def api_safety_stats():
     """Get safety audit statistics."""
     sa = get_safety_audit()
@@ -4257,23 +4698,23 @@ def api_safety_stats():
     return jsonify(sa.get_stats())
 
 
-@api_bp.route('/safety/event-types')
+@api_bp.route("/safety/event-types")
 def api_safety_event_types():
     """List all available event types and risk levels."""
     from ..services.safety_audit import SafetyEventType, RiskLevel
 
-    return jsonify({
-        "event_types": [e.value for e in SafetyEventType],
-        "risk_levels": [
-            {"name": r.name, "value": r.value}
-            for r in RiskLevel
-        ]
-    })
+    return jsonify(
+        {
+            "event_types": [e.value for e in SafetyEventType],
+            "risk_levels": [{"name": r.name, "value": r.value} for r in RiskLevel],
+        }
+    )
 
 
 # ============ Data Cleanup ============
 
-@api_bp.route('/cleanup/stale', methods=['POST'])
+
+@api_bp.route("/cleanup/stale", methods=["POST"])
 def api_cleanup_stale():
     """
     Remove stale projects, notes, and automations.
@@ -4289,7 +4730,7 @@ def api_cleanup_stale():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/cleanup/devices', methods=['POST'])
+@api_bp.route("/cleanup/devices", methods=["POST"])
 def api_cleanup_devices():
     """
     Reset device history, keeping only the most recent device.
@@ -4306,18 +4747,20 @@ def api_cleanup_devices():
 
 # ============ Image Generation Service ============
 
-@api_bp.route('/image/status')
+
+@api_bp.route("/image/status")
 def api_image_status():
     """Get status of image generation services."""
     try:
         from ..services.image_service import get_image_service_status
+
         return jsonify(get_image_service_status())
     except Exception as e:
         logger.error(f"Image service status error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/image/generate', methods=['POST'])
+@api_bp.route("/image/generate", methods=["POST"])
 @rate_limit
 def api_image_generate():
     """
@@ -4350,19 +4793,19 @@ def api_image_generate():
         from ..services.image_service import get_image_generation_service
 
         data = request.get_json()
-        if not data or 'prompt' not in data:
+        if not data or "prompt" not in data:
             return jsonify({"success": False, "error": "prompt is required"}), 400
 
         service = get_image_generation_service()
         result = service.generate_image(
-            prompt=data['prompt'],
-            negative_prompt=data.get('negative_prompt'),
-            width=data.get('width', 1024),
-            height=data.get('height', 1024),
-            steps=data.get('steps', 20),
-            guidance_scale=data.get('guidance_scale', 7.5),
-            seed=data.get('seed'),
-            model=data.get('model'),
+            prompt=data["prompt"],
+            negative_prompt=data.get("negative_prompt"),
+            width=data.get("width", 1024),
+            height=data.get("height", 1024),
+            steps=data.get("steps", 20),
+            guidance_scale=data.get("guidance_scale", 7.5),
+            seed=data.get("seed"),
+            model=data.get("model"),
             source="api",
         )
 
@@ -4373,31 +4816,33 @@ def api_image_generate():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/setup', methods=['POST'])
+@api_bp.route("/image/setup", methods=["POST"])
 def api_image_setup():
     """Ensure image generation dependencies and models are installed."""
     try:
         from ..services.image_service import start_image_setup
+
         data = request.get_json(silent=True) or {}
-        model_id = data.get('model')
+        model_id = data.get("model")
         return jsonify(start_image_setup(model_id))
     except Exception as e:
         logger.error(f"Image setup error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/image/setup/status')
+@api_bp.route("/image/setup/status")
 def api_image_setup_status():
     """Get status of image generation setup."""
     try:
         from ..services.image_service import get_image_setup_status
+
         return jsonify(get_image_setup_status())
     except Exception as e:
         logger.error(f"Image setup status error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/image/inpaint', methods=['POST'])
+@api_bp.route("/image/inpaint", methods=["POST"])
 @rate_limit
 def api_image_inpaint():
     """
@@ -4427,19 +4872,19 @@ def api_image_inpaint():
         if not data:
             return jsonify({"success": False, "error": "Request body required"}), 400
 
-        required = ['image', 'mask', 'prompt']
+        required = ["image", "mask", "prompt"]
         for field in required:
             if field not in data:
                 return jsonify({"success": False, "error": f"{field} is required"}), 400
 
         service = get_image_generation_service()
         result = service.inpaint_image(
-            image_base64=data['image'],
-            mask_base64=data['mask'],
-            prompt=data['prompt'],
-            negative_prompt=data.get('negative_prompt'),
-            steps=data.get('steps', 20),
-            guidance_scale=data.get('guidance_scale', 7.5)
+            image_base64=data["image"],
+            mask_base64=data["mask"],
+            prompt=data["prompt"],
+            negative_prompt=data.get("negative_prompt"),
+            steps=data.get("steps", 20),
+            guidance_scale=data.get("guidance_scale", 7.5),
         )
 
         return jsonify(result)
@@ -4449,7 +4894,7 @@ def api_image_inpaint():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/remove-background', methods=['POST'])
+@api_bp.route("/image/remove-background", methods=["POST"])
 @rate_limit
 def api_image_remove_background():
     """
@@ -4471,11 +4916,11 @@ def api_image_remove_background():
         from ..services.image_service import get_bg_removal_service
 
         data = request.get_json()
-        if not data or 'image' not in data:
+        if not data or "image" not in data:
             return jsonify({"success": False, "error": "image is required"}), 400
 
         service = get_bg_removal_service()
-        result = service.remove_background(data['image'])
+        result = service.remove_background(data["image"])
 
         return jsonify(result)
 
@@ -4486,7 +4931,8 @@ def api_image_remove_background():
 
 # ============ Batch Image Generation Endpoints ============
 
-@api_bp.route('/image/batch', methods=['POST'])
+
+@api_bp.route("/image/batch", methods=["POST"])
 @rate_limit
 def api_batch_generate():
     """
@@ -4517,20 +4963,20 @@ def api_batch_generate():
         from ..services.image_service import start_batch_generation
 
         data = request.get_json()
-        if not data or 'prompt' not in data:
+        if not data or "prompt" not in data:
             return jsonify({"success": False, "error": "prompt is required"}), 400
 
         result = start_batch_generation(
-            prompt=data['prompt'],
-            count=data.get('count', 1),
-            variation_strength=data.get('variation_strength', 0.3),
-            negative_prompt=data.get('negative_prompt'),
-            model=data.get('model', 'sd-xl-turbo'),
-            width=data.get('width', 1024),
-            height=data.get('height', 1024),
-            steps=data.get('steps'),
-            guidance_scale=data.get('guidance_scale', 7.5),
-            base_seed=data.get('base_seed'),
+            prompt=data["prompt"],
+            count=data.get("count", 1),
+            variation_strength=data.get("variation_strength", 0.3),
+            negative_prompt=data.get("negative_prompt"),
+            model=data.get("model", "sd-xl-turbo"),
+            width=data.get("width", 1024),
+            height=data.get("height", 1024),
+            steps=data.get("steps"),
+            guidance_scale=data.get("guidance_scale", 7.5),
+            base_seed=data.get("base_seed"),
         )
 
         return jsonify(result)
@@ -4540,7 +4986,7 @@ def api_batch_generate():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/batch/<job_id>')
+@api_bp.route("/image/batch/<job_id>")
 def api_batch_status(job_id):
     """Get status of a batch job."""
     try:
@@ -4557,7 +5003,7 @@ def api_batch_status(job_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/batch/<job_id>/results')
+@api_bp.route("/image/batch/<job_id>/results")
 def api_batch_results(job_id):
     """
     Get results of a batch job.
@@ -4568,7 +5014,7 @@ def api_batch_results(job_id):
     try:
         from ..services.image_service import get_batch_results
 
-        include_images = request.args.get('include_images', 'true').lower() == 'true'
+        include_images = request.args.get("include_images", "true").lower() == "true"
         results = get_batch_results(job_id, include_images=include_images)
 
         if results is None:
@@ -4581,14 +5027,14 @@ def api_batch_results(job_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/batch/<job_id>', methods=['DELETE'])
+@api_bp.route("/image/batch/<job_id>", methods=["DELETE"])
 def api_batch_cancel(job_id):
     """Cancel a running batch job."""
     try:
         from ..services.image_service import cancel_batch
 
         result = cancel_batch(job_id)
-        status_code = 200 if result.get('success') else 400
+        status_code = 200 if result.get("success") else 400
         return jsonify(result), status_code
 
     except Exception as e:
@@ -4596,13 +5042,13 @@ def api_batch_cancel(job_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/batch/list')
+@api_bp.route("/image/batch/list")
 def api_batch_list():
     """List recent batch jobs."""
     try:
         from ..services.image_service import list_batch_jobs
 
-        limit = request.args.get('limit', 20, type=int)
+        limit = request.args.get("limit", 20, type=int)
         jobs = list_batch_jobs(limit=limit)
 
         return jsonify({"success": True, "jobs": jobs})
@@ -4612,23 +5058,23 @@ def api_batch_list():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/history')
+@api_bp.route("/image/history")
 def api_image_history():
     """Return recent image generations (single + batch)."""
     try:
-        limit = int(request.args.get('limit', 50))
+        limit = int(request.args.get("limit", 50))
         from ..services.image_service import get_image_history
 
         images = get_image_history(limit=limit)
         for img in images:
-            img['stream_url'] = f"/api/image/file/{img.get('id')}"
+            img["stream_url"] = f"/api/image/file/{img.get('id')}"
         return jsonify({"success": True, "images": images})
     except Exception as e:
         logger.error(f"Image history error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@api_bp.route('/image/file/<image_id>')
+@api_bp.route("/image/file/<image_id>")
 def api_image_file(image_id):
     """Serve a generated image file from local history."""
     try:
@@ -4646,7 +5092,7 @@ def api_image_file(image_id):
         return jsonify({"error": str(e)}), 500
 
 
-@api_bp.route('/image/estimate')
+@api_bp.route("/image/estimate")
 def api_image_estimate():
     """
     Get time estimate for batch generation.
@@ -4659,19 +5105,21 @@ def api_image_estimate():
     try:
         from ..services.image_service import estimate_batch_time
 
-        count = request.args.get('count', 1, type=int)
-        model = request.args.get('model', 'sd-xl-turbo')
-        steps = request.args.get('steps', type=int)
+        count = request.args.get("count", 1, type=int)
+        model = request.args.get("model", "sd-xl-turbo")
+        steps = request.args.get("steps", type=int)
 
         estimated_seconds = estimate_batch_time(count, model, steps)
 
-        return jsonify({
-            "success": True,
-            "count": count,
-            "model": model,
-            "estimated_seconds": round(estimated_seconds, 1),
-            "estimated_minutes": round(estimated_seconds / 60, 2),
-        })
+        return jsonify(
+            {
+                "success": True,
+                "count": count,
+                "model": model,
+                "estimated_seconds": round(estimated_seconds, 1),
+                "estimated_minutes": round(estimated_seconds / 60, 2),
+            }
+        )
 
     except Exception as e:
         logger.error(f"Estimate error: {e}")

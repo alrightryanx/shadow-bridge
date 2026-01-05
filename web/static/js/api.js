@@ -99,6 +99,10 @@ const api = {
         const offlineData = this.getOfflineCache(cacheKey);
         if (offlineData) {
             console.log('Using offline cache for:', endpoint);
+            if (Array.isArray(offlineData)) {
+                offlineData._offline = true;
+                return offlineData;
+            }
             return { ...offlineData, _offline: true };
         }
 

@@ -35,6 +35,15 @@ _setup_status: Dict[str, Any] = {
 # Detect if running from PyInstaller bundle
 IS_FROZEN = getattr(sys, 'frozen', False)
 
+AUDIO_INSTALL_COMMANDS = [
+    "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121",
+    "pip install audiocraft",
+]
+AUDIO_INSTALL_GUIDE_URL = (
+    "https://github.com/ryancartwright/shadow-bridge/blob/main/docs/windows-installer.md#audio-dependencies"
+)
+AUDIO_INSTALL_SIZE_GB = 2.5
+
 try:
     from audiocraft.models import MusicGen, AudioGen
     from audiocraft.data.audio import audio_write
@@ -180,7 +189,7 @@ def get_audio_service_status() -> Dict[str, Any]:
         "gpu_available": False,
         "gpu_name": None,
         "is_frozen": IS_FROZEN,
-        "install_size_gb": 2.5,  # Approximate size of PyTorch + AudioCraft
+        "install_size_gb": AUDIO_INSTALL_SIZE_GB,
     }
 
     if TORCH_AVAILABLE:
@@ -195,10 +204,18 @@ def get_audio_service_status() -> Dict[str, Any]:
     
     # Add helpful message if not ready
     if not status["ready"]:
+        status["install_commands"] = list(AUDIO_INSTALL_COMMANDS)
+        status["install_manual_url"] = AUDIO_INSTALL_GUIDE_URL
         if IS_FROZEN:
-            status["install_note"] = "Running from EXE. Install ShadowBridge from source or use the installer version for audio generation."
+            status["install_note"] = (
+                "Running from portable EXE. Install PyTorch + AudioCraft manually "
+                "(see commands below) or install via the MSI setup."
+            )
         else:
-            status["install_note"] = "Click 'Install Audio' to download PyTorch + AudioCraft (~2.5GB)."
+            status["install_note"] = (
+                "Click 'Install Audio' to download PyTorch + AudioCraft "
+                f"(~{AUDIO_INSTALL_SIZE_GB}GB) or run the commands below."
+            )
     
     return status
 
@@ -227,8 +244,14 @@ def _run_audio_setup() -> None:
         # Cannot pip install when running from frozen EXE
         if IS_FROZEN:
             _set_setup_status(
-                "error", "frozen", 100,
-                "Cannot install dependencies in portable EXE mode. Please run ShadowBridge from source or use the installer version.",
+                "error",
+                "frozen",
+                100,
+                (
+                    "Cannot install dependencies in portable EXE mode. "
+                    "Install PyTorch + AudioCraft manually (see commands below) "
+                    "or use the MSI installer."
+                ),
                 error="Running from frozen executable"
             )
             return

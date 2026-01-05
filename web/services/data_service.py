@@ -1,6 +1,7 @@
 """
 Data Service - Read ~/.shadowai/ JSON files
 """
+
 import json
 import os
 import base64
@@ -16,39 +17,43 @@ _file_lock = threading.Lock()
 
 # Shadow data directory
 SHADOWAI_DIR = Path.home() / ".shadowai"
+CARDS_FILE = SHADOWAI_DIR / "cards.json"
+COLLECTIONS_FILE = SHADOWAI_DIR / "collections.json"
 PROJECTS_FILE = SHADOWAI_DIR / "projects.json"
 NOTES_FILE = SHADOWAI_DIR / "notes.json"
 SESSIONS_FILE = SHADOWAI_DIR / "sessions.json"
-DEVICES_FILE = SHADOWAI_DIR / "devices.json"
 AUTOMATIONS_FILE = SHADOWAI_DIR / "automations.json"
 AGENTS_FILE = SHADOWAI_DIR / "agents.json"
-ANALYTICS_FILE = SHADOWAI_DIR / "analytics.json"
 SYNC_KEYS_FILE = SHADOWAI_DIR / "sync_keys.json"
-EMAILS_FILE = SHADOWAI_DIR / "emails.json"
+ANALYTICS_FILE = SHADOWAI_DIR / "analytics.json"
+EMAILS_FILE = SHADOWAI_DIR / "verified_emails.json"
 
 # Note encryption constants (must match Android SyncEncryption.kt)
 SYNC_ENC_PREFIX = "SYNC_ENC:"
 SALT_FILE = SHADOWAI_DIR / "salt.bin"
+
 
 def _get_or_create_salt() -> bytes:
     """Get the persistent random salt or create it if it doesn't exist."""
     try:
         SHADOWAI_DIR.mkdir(parents=True, exist_ok=True)
         if SALT_FILE.exists():
-            with open(SALT_FILE, 'rb') as f:
+            with open(SALT_FILE, "rb") as f:
                 salt = f.read()
                 if len(salt) == 16:
                     return salt
-        
+
         # Create new random salt
         import secrets
+
         salt = secrets.token_bytes(16)
-        with open(SALT_FILE, 'wb') as f:
+        with open(SALT_FILE, "wb") as f:
             f.write(salt)
         return salt
     except Exception as e:
         print(f"Error managing salt: {e}")
-        return b"ShadowAI_Sync_2024" # Safe fallback
+        return b"ShadowAI_Sync_2024"  # Safe fallback
+
 
 DYNAMIC_SALT = _get_or_create_salt()
 ITERATION_COUNT = 50000
@@ -60,12 +65,13 @@ TAG_LENGTH = 16  # 128 bits in bytes
 def _derive_encryption_key(password: str) -> bytes:
     """Derive AES-256 key using PBKDF2-HMAC-SHA256 (matches Android)."""
     import hashlib
+
     return hashlib.pbkdf2_hmac(
-        'sha256',
-        password.encode('utf-8'),
+        "sha256",
+        password.encode("utf-8"),
         DYNAMIC_SALT,
         ITERATION_COUNT,
-        dklen=KEY_LENGTH
+        dklen=KEY_LENGTH,
     )
 
 
@@ -98,7 +104,7 @@ def decrypt_note_content(content: str, device_id: str) -> str:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         # Parse: SYNC_ENC:[IV]:[Ciphertext]
-        data = content[len(SYNC_ENC_PREFIX):]
+        data = content[len(SYNC_ENC_PREFIX) :]
         parts = data.split(":")
         if len(parts) != 2:
             print(f"Invalid sync encryption format")
@@ -119,7 +125,7 @@ def decrypt_note_content(content: str, device_id: str) -> str:
         aesgcm = AESGCM(key)
         plaintext = aesgcm.decrypt(iv, ciphertext, None)
 
-        return plaintext.decode('utf-8')
+        return plaintext.decode("utf-8")
 
     except ImportError:
         print("cryptography library not installed - cannot decrypt notes")
@@ -154,11 +160,11 @@ def encrypt_note_content(content: str, device_id: str) -> str:
 
         # Encrypt using AES-256-GCM
         aesgcm = AESGCM(key)
-        ciphertext = aesgcm.encrypt(iv, content.encode('utf-8'), None)
+        ciphertext = aesgcm.encrypt(iv, content.encode("utf-8"), None)
 
         # Format: SYNC_ENC:[IV]:[Ciphertext]
-        iv_b64 = base64.b64encode(iv).decode('ascii')
-        ciphertext_b64 = base64.b64encode(ciphertext).decode('ascii')
+        iv_b64 = base64.b64encode(iv).decode("ascii")
+        ciphertext_b64 = base64.b64encode(ciphertext).decode("ascii")
 
         return f"{SYNC_ENC_PREFIX}{iv_b64}:{ciphertext_b64}"
 
@@ -177,7 +183,7 @@ def set_sync_key_for_device(device_id: str, password: str) -> bool:
 
     try:
         SHADOWAI_DIR.mkdir(parents=True, exist_ok=True)
-        with open(SYNC_KEYS_FILE, 'w', encoding='utf-8') as f:
+        with open(SYNC_KEYS_FILE, "w", encoding="utf-8") as f:
             json.dump(keys_data, f)
         return True
     except Exception as e:
@@ -191,7 +197,7 @@ def _read_json_file(filepath: Path) -> Optional[Dict]:
         return None
     try:
         with _file_lock:
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 return json.load(f)
     except (json.JSONDecodeError, IOError) as e:
         print(f"Error reading {filepath}: {e}")
@@ -230,6 +236,7 @@ def _time_ago(ts: int) -> str:
             return "Just now"
     except (ValueError, OSError, OverflowError):
         return "Unknown"
+
 
 def _is_private_ip(ip: str) -> bool:
     return (
@@ -276,7 +283,9 @@ def _collect_device_ips(device_info: Dict) -> List[str]:
     return private_ips + public_ips
 
 
-def _infer_note_content_port(device_id: Optional[str], explicit_port: Any) -> Optional[int]:
+def _infer_note_content_port(
+    device_id: Optional[str], explicit_port: Any
+) -> Optional[int]:
     if isinstance(explicit_port, int) and 1 <= explicit_port <= 65535:
         return explicit_port
     if not device_id:
@@ -292,6 +301,7 @@ def _infer_note_content_port(device_id: Optional[str], explicit_port: Any) -> Op
 
 
 # ============ Devices ============
+
 
 def get_devices() -> List[Dict]:
     """Get all known devices with their status from projects.json."""
@@ -312,14 +322,18 @@ def get_devices() -> List[Dict]:
         # Consider device online if seen within last 5 minutes
         is_online = (now - last_seen) < 300 if last_seen else False
 
-        devices.append({
-            "id": device_id,
-            "name": device_info.get("name", device_id),
-            "status": "online" if is_online else "offline",
-            "ip": device_info.get("ip"),
-            "last_seen": last_seen,
-            "last_seen_formatted": _time_ago(int(last_seen * 1000)) if last_seen else "Never"
-        })
+        devices.append(
+            {
+                "id": device_id,
+                "name": device_info.get("name", device_id),
+                "status": "online" if is_online else "offline",
+                "ip": device_info.get("ip"),
+                "last_seen": last_seen,
+                "last_seen_formatted": _time_ago(int(last_seen * 1000))
+                if last_seen
+                else "Never",
+            }
+        )
     return devices
 
 
@@ -333,6 +347,7 @@ def get_device(device_id: str) -> Optional[Dict]:
 
 
 # ============ Projects ============
+
 
 def get_projects(device_id: Optional[str] = None) -> List[Dict]:
     """Get all projects, optionally filtered by device.
@@ -370,13 +385,15 @@ def get_projects(device_id: Optional[str] = None) -> List[Dict]:
 
             projects_by_id[project_id] = {
                 "id": project_id,
-                "name": project.get("name", os.path.basename(project.get("path", "Unknown"))),
+                "name": project.get(
+                    "name", os.path.basename(project.get("path", "Unknown"))
+                ),
                 "path": project.get("path", ""),
                 "device_id": proj_device_id,
                 "device_name": device_info.get("name", proj_device_id),
                 "updated_at": updated_at,
                 "updated_at_formatted": _format_timestamp(updated_at),
-                "time_ago": _time_ago(updated_at)
+                "time_ago": _time_ago(updated_at),
             }
 
     # Convert to list and sort by updated_at descending
@@ -396,7 +413,10 @@ def get_project(project_id: str) -> Optional[Dict]:
 
 # ============ Notes ============
 
-def get_notes(device_id: Optional[str] = None, search: Optional[str] = None) -> List[Dict]:
+
+def get_notes(
+    device_id: Optional[str] = None, search: Optional[str] = None
+) -> List[Dict]:
     """Get all note titles, optionally filtered by device and search term.
 
     Notes are deduplicated by ID - if the same note exists on multiple device entries
@@ -415,10 +435,12 @@ def get_notes(device_id: Optional[str] = None, search: Optional[str] = None) -> 
 
     # Find the most recently synced device for each base fingerprint
     # This helps identify stale device entries (old format without package suffix)
-    fingerprint_to_latest: Dict[str, tuple] = {}  # base_fingerprint -> (device_id, last_seen)
+    fingerprint_to_latest: Dict[
+        str, tuple
+    ] = {}  # base_fingerprint -> (device_id, last_seen)
     for dev_id, dev_info in devices_data.items():
         # Extract base fingerprint (everything before the optional :package.name suffix)
-        base_fingerprint = dev_id.split(':com.')[0] if ':com.' in dev_id else dev_id
+        base_fingerprint = dev_id.split(":com.")[0] if ":com." in dev_id else dev_id
         last_seen = dev_info.get("last_seen", 0)
 
         current = fingerprint_to_latest.get(base_fingerprint)
@@ -428,7 +450,7 @@ def get_notes(device_id: Optional[str] = None, search: Optional[str] = None) -> 
     # Build set of device IDs to skip (stale entries with same base fingerprint as a newer entry)
     stale_device_ids = set()
     for dev_id in devices_data.keys():
-        base_fingerprint = dev_id.split(':com.')[0] if ':com.' in dev_id else dev_id
+        base_fingerprint = dev_id.split(":com.")[0] if ":com." in dev_id else dev_id
         latest_for_fingerprint = fingerprint_to_latest.get(base_fingerprint)
         if latest_for_fingerprint and latest_for_fingerprint[0] != dev_id:
             # This device entry is NOT the most recent for its fingerprint - mark as stale
@@ -447,7 +469,9 @@ def get_notes(device_id: Optional[str] = None, search: Optional[str] = None) -> 
 
         device_last_seen = device_info.get("last_seen", 0)
         device_ips = _collect_device_ips(device_info)
-        note_content_port = _infer_note_content_port(note_device_id, device_info.get("note_content_port"))
+        note_content_port = _infer_note_content_port(
+            note_device_id, device_info.get("note_content_port")
+        )
 
         for note in device_info.get("notes", []):
             note_id = note.get("id", "")
@@ -477,7 +501,7 @@ def get_notes(device_id: Optional[str] = None, search: Optional[str] = None) -> 
                     "device_last_seen": device_last_seen,
                     "updated_at": updated_at,
                     "updated_at_formatted": _format_timestamp(updated_at),
-                    "time_ago": _time_ago(updated_at)
+                    "time_ago": _time_ago(updated_at),
                 }
             else:
                 # Duplicate note - keep the one from the most recently synced device
@@ -488,13 +512,15 @@ def get_notes(device_id: Optional[str] = None, search: Optional[str] = None) -> 
                         "title": title,
                         "device_id": note_device_id,
                         "device_name": device_info.get("name", note_device_id),
-                        "device_ip": device_ips[0] if device_ips else device_info.get("ip"),
+                        "device_ip": device_ips[0]
+                        if device_ips
+                        else device_info.get("ip"),
                         "device_ips": device_ips,
                         "note_content_port": note_content_port,
                         "device_last_seen": device_last_seen,
                         "updated_at": updated_at,
                         "updated_at_formatted": _format_timestamp(updated_at),
-                        "time_ago": _time_ago(updated_at)
+                        "time_ago": _time_ago(updated_at),
                     }
 
     # Convert to list and remove internal tracking field
@@ -537,12 +563,13 @@ def get_note_content(note_id: str) -> Optional[Dict]:
                         "id": note_id,
                         "title": note.get("title", "Untitled"),
                         "content": content,
-                        "updated_at": note.get("updatedAt", 0)
+                        "updated_at": note.get("updatedAt", 0),
                     }
     return None
 
 
 # ============ Sessions ============
+
 
 def _load_sessions_file() -> Dict[str, Any]:
     """Load sessions data, normalizing legacy shapes."""
@@ -620,7 +647,7 @@ def _session_title(session: Dict[str, Any]) -> str:
 def get_sessions(
     device_id: Optional[str] = None,
     project_id: Optional[str] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Get session metadata list, optionally filtered."""
     data = _load_sessions_file()
@@ -641,21 +668,29 @@ def get_sessions(
         if isinstance(messages, list) and messages:
             last_message = messages[-1] if isinstance(messages[-1], dict) else None
 
-        sessions.append({
-            "id": session.get("id") or session.get("sessionId"),
-            "projectId": _session_project_id(session),
-            "title": _session_title(session),
-            "device_id": _session_device_id(session),
-            "device_name": session.get("device_name") or session.get("deviceName"),
-            "backend_type": session.get("backend_type") or session.get("backendType"),
-            "provider": session.get("provider"),
-            "model": session.get("model"),
-            "lastActivityAt": last_activity,
-            "time_ago": _time_ago(last_activity),
-            "message_count": len(messages) if isinstance(messages, list) else 0,
-            "last_message": (last_message or {}).get("content", "") if last_message else "",
-            "is_running": (datetime.now().timestamp() * 1000 - last_activity) <= 600000 if last_activity else False
-        })
+        sessions.append(
+            {
+                "id": session.get("id") or session.get("sessionId"),
+                "projectId": _session_project_id(session),
+                "title": _session_title(session),
+                "device_id": _session_device_id(session),
+                "device_name": session.get("device_name") or session.get("deviceName"),
+                "backend_type": session.get("backend_type")
+                or session.get("backendType"),
+                "provider": session.get("provider"),
+                "model": session.get("model"),
+                "lastActivityAt": last_activity,
+                "time_ago": _time_ago(last_activity),
+                "message_count": len(messages) if isinstance(messages, list) else 0,
+                "last_message": (last_message or {}).get("content", "")
+                if last_message
+                else "",
+                "is_running": (datetime.now().timestamp() * 1000 - last_activity)
+                <= 600000
+                if last_activity
+                else False,
+            }
+        )
 
     sessions.sort(key=lambda s: s.get("lastActivityAt", 0), reverse=True)
     if isinstance(limit, int) and limit > 0:
@@ -711,7 +746,9 @@ def upsert_session(session: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
-def save_sessions_from_device(device_id: str, device_name: str, sessions: List[Dict[str, Any]]) -> bool:
+def save_sessions_from_device(
+    device_id: str, device_name: str, sessions: List[Dict[str, Any]]
+) -> bool:
     """Merge sessions from a device into the local store."""
     data = _load_sessions_file()
     sessions_map = data.get("sessions", {})
@@ -749,7 +786,7 @@ def append_session_message(
     message: Dict[str, Any],
     delta: Optional[str] = None,
     is_final: bool = False,
-    session_meta: Optional[Dict[str, Any]] = None
+    session_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Append or update a session message (supports streaming updates)."""
     data = _load_sessions_file()
@@ -761,14 +798,23 @@ def append_session_message(
             "id": session_id,
             "projectId": message.get("projectId") or message.get("project_id"),
             "createdAt": int(datetime.now().timestamp() * 1000),
-            "messages": []
+            "messages": [],
         }
 
     if isinstance(session_meta, dict):
         session.update({k: v for k, v in session_meta.items() if v is not None})
 
     if isinstance(message, dict):
-        for key in ("device_id", "deviceId", "device_name", "deviceName", "backend_type", "backendType", "provider", "model"):
+        for key in (
+            "device_id",
+            "deviceId",
+            "device_name",
+            "deviceName",
+            "backend_type",
+            "backendType",
+            "provider",
+            "model",
+        ):
             val = message.get(key)
             if val is not None:
                 session[key] = val
@@ -887,7 +933,7 @@ def save_note_content(note_id: str, title: str, content: str, updated_at: int) -
 
     if updated:
         try:
-            with open(NOTES_FILE, 'w', encoding='utf-8') as f:
+            with open(NOTES_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             return True
         except Exception as e:
@@ -898,6 +944,7 @@ def save_note_content(note_id: str, title: str, content: str, updated_at: int) -
 
 
 # ============ Automations ============
+
 
 def get_automations(device_id: Optional[str] = None) -> List[Dict]:
     """Get all automations."""
@@ -911,17 +958,21 @@ def get_automations(device_id: Optional[str] = None) -> List[Dict]:
             continue
 
         for auto in device_autos.get("automations", []):
-            automations.append({
-                "id": auto.get("id", ""),
-                "name": auto.get("name", "Unnamed"),
-                "description": auto.get("description", ""),
-                "enabled": auto.get("enabled", False),
-                "schedule": auto.get("schedule", ""),
-                "trigger": auto.get("trigger", "manual"),
-                "last_run": auto.get("last_run"),
-                "last_run_formatted": _time_ago(auto.get("last_run", 0)) if auto.get("last_run") else "Never",
-                "device_id": auto_device_id
-            })
+            automations.append(
+                {
+                    "id": auto.get("id", ""),
+                    "name": auto.get("name", "Unnamed"),
+                    "description": auto.get("description", ""),
+                    "enabled": auto.get("enabled", False),
+                    "schedule": auto.get("schedule", ""),
+                    "trigger": auto.get("trigger", "manual"),
+                    "last_run": auto.get("last_run"),
+                    "last_run_formatted": _time_ago(auto.get("last_run", 0))
+                    if auto.get("last_run")
+                    else "Never",
+                    "device_id": auto_device_id,
+                }
+            )
 
     return automations
 
@@ -957,34 +1008,82 @@ def update_automation(automation_id: str, data: Dict, device_id: str = "web") ->
                     "name": data.get("name", auto.get("name", "Unnamed")),
                     "description": data.get("description", auto.get("description", "")),
                     "enabled": data.get("enabled", auto.get("enabled", True)),
-                    "trigger_type": data.get("trigger_type", auto.get("trigger_type", "MANUAL")),
-                    "schedule_expression": data.get("schedule_expression", auto.get("schedule_expression")),
-                    "schedule_timezone": data.get("schedule_timezone", auto.get("schedule_timezone")),
-                    "voice_trigger_phrase": data.get("voice_trigger_phrase", auto.get("voice_trigger_phrase")),
+                    "trigger_type": data.get(
+                        "trigger_type", auto.get("trigger_type", "MANUAL")
+                    ),
+                    "schedule_expression": data.get(
+                        "schedule_expression", auto.get("schedule_expression")
+                    ),
+                    "schedule_timezone": data.get(
+                        "schedule_timezone", auto.get("schedule_timezone")
+                    ),
+                    "voice_trigger_phrase": data.get(
+                        "voice_trigger_phrase", auto.get("voice_trigger_phrase")
+                    ),
                     "ai_command": data.get("ai_command", auto.get("ai_command", "")),
-                    "ai_permission_level": data.get("ai_permission_level", auto.get("ai_permission_level", "FULL")),
-                    "use_note_as_context": data.get("use_note_as_context", auto.get("use_note_as_context", True)),
-                    "max_iterations": data.get("max_iterations", auto.get("max_iterations", 50)),
-                    "timeout_minutes": data.get("timeout_minutes", auto.get("timeout_minutes", 30)),
-                    "allow_autonomous_edits": data.get("allow_autonomous_edits", auto.get("allow_autonomous_edits", False)),
-                    "execution_mode": data.get("execution_mode", auto.get("execution_mode", "SINGLE_SHOT")),
+                    "ai_permission_level": data.get(
+                        "ai_permission_level", auto.get("ai_permission_level", "FULL")
+                    ),
+                    "use_note_as_context": data.get(
+                        "use_note_as_context", auto.get("use_note_as_context", True)
+                    ),
+                    "max_iterations": data.get(
+                        "max_iterations", auto.get("max_iterations", 50)
+                    ),
+                    "timeout_minutes": data.get(
+                        "timeout_minutes", auto.get("timeout_minutes", 30)
+                    ),
+                    "allow_autonomous_edits": data.get(
+                        "allow_autonomous_edits",
+                        auto.get("allow_autonomous_edits", False),
+                    ),
+                    "execution_mode": data.get(
+                        "execution_mode", auto.get("execution_mode", "SINGLE_SHOT")
+                    ),
                     "team_type": data.get("team_type", auto.get("team_type")),
-                    "require_approval_for": data.get("require_approval_for", auto.get("require_approval_for", [])),
-                    "automation_type": data.get("automation_type", auto.get("automation_type", "TEXT")),
-                    "image_provider": data.get("image_provider", auto.get("image_provider")),
-                    "image_quality": data.get("image_quality", auto.get("image_quality")),
-                    "image_width": data.get("image_width", auto.get("image_width", 1024)),
-                    "image_height": data.get("image_height", auto.get("image_height", 1024)),
+                    "require_approval_for": data.get(
+                        "require_approval_for", auto.get("require_approval_for", [])
+                    ),
+                    "automation_type": data.get(
+                        "automation_type", auto.get("automation_type", "TEXT")
+                    ),
+                    "image_provider": data.get(
+                        "image_provider", auto.get("image_provider")
+                    ),
+                    "image_quality": data.get(
+                        "image_quality", auto.get("image_quality")
+                    ),
+                    "image_width": data.get(
+                        "image_width", auto.get("image_width", 1024)
+                    ),
+                    "image_height": data.get(
+                        "image_height", auto.get("image_height", 1024)
+                    ),
                     "image_style": data.get("image_style", auto.get("image_style")),
-                    "n8n_workflow_id": data.get("n8n_workflow_id", auto.get("n8n_workflow_id")),
-                    "n8n_workflow_name": data.get("n8n_workflow_name", auto.get("n8n_workflow_name")),
+                    "n8n_workflow_id": data.get(
+                        "n8n_workflow_id", auto.get("n8n_workflow_id")
+                    ),
+                    "n8n_workflow_name": data.get(
+                        "n8n_workflow_name", auto.get("n8n_workflow_name")
+                    ),
                     "project_id": data.get("project_id", auto.get("project_id")),
                     "note_id": data.get("note_id", auto.get("note_id")),
-                    "output_destination": data.get("output_destination", auto.get("output_destination", "SHOW_DIALOG")),
-                    "output_note_title": data.get("output_note_title", auto.get("output_note_title")),
-                    "output_file_path": data.get("output_file_path", auto.get("output_file_path")),
-                    "file_operations": data.get("file_operations", auto.get("file_operations", [])),
-                    "icon_name": data.get("icon_name", auto.get("icon_name", "ic_automation")),
+                    "output_destination": data.get(
+                        "output_destination",
+                        auto.get("output_destination", "SHOW_DIALOG"),
+                    ),
+                    "output_note_title": data.get(
+                        "output_note_title", auto.get("output_note_title")
+                    ),
+                    "output_file_path": data.get(
+                        "output_file_path", auto.get("output_file_path")
+                    ),
+                    "file_operations": data.get(
+                        "file_operations", auto.get("file_operations", [])
+                    ),
+                    "icon_name": data.get(
+                        "icon_name", auto.get("icon_name", "ic_automation")
+                    ),
                     "color": data.get("color", auto.get("color", "#FF9800")),
                     "created_at": auto.get("created_at"),
                     "last_run_at": auto.get("last_run_at"),
@@ -994,7 +1093,7 @@ def update_automation(automation_id: str, data: Dict, device_id: str = "web") ->
                     "source": auto.get("source", "web"),
                     "pending_sync": True,
                     "synced_at": None,
-                    "updated_at": int(datetime.now().timestamp() * 1000)
+                    "updated_at": int(datetime.now().timestamp() * 1000),
                 }
                 file_data[dev_id]["automations"][i] = updated
                 found = True
@@ -1068,12 +1167,17 @@ def get_full_automation(automation_id: str) -> Optional[Dict]:
         for auto in automations:
             if auto.get("id") == automation_id:
                 auto["device_id"] = dev_id
-                auto["last_run_formatted"] = _time_ago(auto.get("last_run_at", 0)) if auto.get("last_run_at") else "Never"
+                auto["last_run_formatted"] = (
+                    _time_ago(auto.get("last_run_at", 0))
+                    if auto.get("last_run_at")
+                    else "Never"
+                )
                 return auto
     return None
 
 
 # ============ Agents ============
+
 
 def get_agents(device_id: Optional[str] = None) -> List[Dict]:
     """Get all agents with their status."""
@@ -1087,15 +1191,17 @@ def get_agents(device_id: Optional[str] = None) -> List[Dict]:
             continue
 
         for agent in device_agents.get("agents", []):
-            agents.append({
-                "id": agent.get("id", ""),
-                "name": agent.get("name", "Unnamed"),
-                "status": agent.get("status", "offline"),
-                "specialty": agent.get("specialty", ""),
-                "current_task": agent.get("current_task"),
-                "tasks_completed": agent.get("tasks_completed", 0),
-                "device_id": agent_device_id
-            })
+            agents.append(
+                {
+                    "id": agent.get("id", ""),
+                    "name": agent.get("name", "Unnamed"),
+                    "status": agent.get("status", "offline"),
+                    "specialty": agent.get("specialty", ""),
+                    "current_task": agent.get("current_task"),
+                    "tasks_completed": agent.get("tasks_completed", 0),
+                    "device_id": agent_device_id,
+                }
+            )
 
     return agents
 
@@ -1117,11 +1223,12 @@ def get_agent_metrics() -> Dict:
         "active_agents": len([a for a in agents if a["status"] == "busy"]),
         "idle_agents": len([a for a in agents if a["status"] == "idle"]),
         "offline_agents": len([a for a in agents if a["status"] == "offline"]),
-        "total_tasks_completed": sum(a.get("tasks_completed", 0) for a in agents)
+        "total_tasks_completed": sum(a.get("tasks_completed", 0) for a in agents),
     }
 
 
 # ============ Analytics ============
+
 
 def get_usage_stats() -> Dict:
     """Get message usage statistics."""
@@ -1131,7 +1238,7 @@ def get_usage_stats() -> Dict:
             "messages_used": 0,
             "messages_limit": 100,
             "tier": "free",
-            "reset_date": None
+            "reset_date": None,
         }
 
     return {
@@ -1139,7 +1246,11 @@ def get_usage_stats() -> Dict:
         "messages_limit": data.get("messages_limit", 100),
         "tier": data.get("tier", "free"),
         "reset_date": data.get("reset_date"),
-        "usage_percent": min(100, (data.get("messages_used", 0) / max(1, data.get("messages_limit", 100))) * 100)
+        "usage_percent": min(
+            100,
+            (data.get("messages_used", 0) / max(1, data.get("messages_limit", 100)))
+            * 100,
+        ),
     }
 
 
@@ -1153,11 +1264,7 @@ def get_backend_usage() -> List[Dict]:
     total = sum(backends.values()) or 1
 
     return [
-        {
-            "name": name,
-            "count": count,
-            "percent": (count / total) * 100
-        }
+        {"name": name, "count": count, "percent": (count / total) * 100}
         for name, count in backends.items()
     ]
 
@@ -1173,13 +1280,15 @@ def get_activity_timeline() -> List[Dict]:
 
 # ============ Status ============
 
+
 def _check_port_in_use(port: int) -> bool:
     """Check if a port is in use (indicates service is running)."""
     import socket
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.settimeout(0.5)
-            s.connect(('127.0.0.1', port))
+            s.connect(("127.0.0.1", port))
             return True
         except (ConnectionRefusedError, socket.timeout, OSError):
             return False
@@ -1222,7 +1331,7 @@ def get_status() -> Dict:
         "ssh_status": ssh_status,
         "version": "1.031",
         "local_ip": local_ip,
-        "data_path": str(SHADOWAI_DIR)
+        "data_path": str(SHADOWAI_DIR),
     }
 
 
@@ -1247,12 +1356,10 @@ def _write_json_file(filepath: Path, data: Dict) -> bool:
         with _file_lock:
             # Write to temp file first, then atomically replace
             fd, tmp_path = tempfile.mkstemp(
-                suffix='.tmp',
-                prefix=filepath.stem + '_',
-                dir=filepath.parent
+                suffix=".tmp", prefix=filepath.stem + "_", dir=filepath.parent
             )
             try:
-                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
                 # Atomic replace (works on Windows and POSIX)
                 os.replace(tmp_path, filepath)
@@ -1272,10 +1379,12 @@ def _write_json_file(filepath: Path, data: Dict) -> bool:
 def _generate_id() -> str:
     """Generate a unique ID."""
     import uuid
+
     return str(uuid.uuid4())[:8]
 
 
 # ============ Teams ============
+
 
 def get_teams(device_id: Optional[str] = None) -> List[Dict]:
     """Get all teams."""
@@ -1297,7 +1406,9 @@ def get_team(team_id: str) -> Optional[Dict]:
     return None
 
 
-def create_team(data: Dict, owner_email: Optional[str] = None, owner_device: Optional[str] = None) -> Dict:
+def create_team(
+    data: Dict, owner_email: Optional[str] = None, owner_device: Optional[str] = None
+) -> Dict:
     """Create a new team with email-based membership.
 
     Args:
@@ -1328,9 +1439,11 @@ def create_team(data: Dict, owner_email: Optional[str] = None, owner_device: Opt
                 "email": owner_email,
                 "device_id": owner_device,
                 "role": "owner",  # owner, admin, member
-                "joined_at": timestamp
+                "joined_at": timestamp,
             }
-        ] if owner_email or owner_device else []
+        ]
+        if owner_email or owner_device
+        else [],
     }
 
     if "teams" not in file_data:
@@ -1370,7 +1483,7 @@ def get_team_metrics() -> Dict:
         "total_agents": len(agents),
         "active_agents": len([a for a in agents if a.get("status") == "BUSY"]),
         "pending_tasks": len([t for t in tasks if t.get("status") == "PENDING"]),
-        "completed_tasks": len([t for t in tasks if t.get("status") == "COMPLETED"])
+        "completed_tasks": len([t for t in tasks if t.get("status") == "COMPLETED"]),
     }
 
 
@@ -1379,7 +1492,9 @@ def get_team_metrics() -> Dict:
 TEAM_INVITATION_EXPIRY_SECONDS = 7 * 24 * 60 * 60  # 7 days
 
 
-def invite_team_member(team_id: str, inviter_email: str, invitee_email: str, role: str = "member") -> Dict:
+def invite_team_member(
+    team_id: str, inviter_email: str, invitee_email: str, role: str = "member"
+) -> Dict:
     """Invite a user to a team by email.
 
     Args:
@@ -1433,35 +1548,42 @@ def invite_team_member(team_id: str, inviter_email: str, invitee_email: str, rol
 
     # Remove any existing invitation for this email/team
     file_data["invitations"] = [
-        inv for inv in file_data["invitations"]
+        inv
+        for inv in file_data["invitations"]
         if not (inv.get("team_id") == team_id and inv.get("email") == invitee_email)
     ]
 
     # Add new invitation
-    file_data["invitations"].append({
-        "code": invitation_code,
-        "team_id": team_id,
-        "team_name": team.get("name"),
-        "email": invitee_email,
-        "role": role,
-        "inviter_email": inviter_email,
-        "created_at": datetime.now().timestamp(),
-        "expires_at": expires_at
-    })
+    file_data["invitations"].append(
+        {
+            "code": invitation_code,
+            "team_id": team_id,
+            "team_name": team.get("name"),
+            "email": invitee_email,
+            "role": role,
+            "inviter_email": inviter_email,
+            "created_at": datetime.now().timestamp(),
+            "expires_at": expires_at,
+        }
+    )
 
     _write_json_file(TEAMS_FILE, file_data)
 
     # Try to send invitation email
-    _send_team_invitation_email(invitee_email, team.get("name"), inviter_email, invitation_code)
+    _send_team_invitation_email(
+        invitee_email, team.get("name"), inviter_email, invitation_code
+    )
 
     return {
         "success": True,
         "invitation_code": invitation_code,
-        "message": f"Invitation sent to {invitee_email}"
+        "message": f"Invitation sent to {invitee_email}",
     }
 
 
-def _send_team_invitation_email(to_email: str, team_name: str, inviter_email: str, code: str) -> bool:
+def _send_team_invitation_email(
+    to_email: str, team_name: str, inviter_email: str, code: str
+) -> bool:
     """Send team invitation email."""
     config = _get_email_config()
     if not config:
@@ -1469,9 +1591,9 @@ def _send_team_invitation_email(to_email: str, team_name: str, inviter_email: st
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = config.get('from_email', config.get('smtp_user'))
-        msg['To'] = to_email
-        msg['Subject'] = f'ShadowAI - Team Invitation: {team_name}'
+        msg["From"] = config.get("from_email", config.get("smtp_user"))
+        msg["To"] = to_email
+        msg["Subject"] = f"ShadowAI - Team Invitation: {team_name}"
 
         body = f"""
 You've been invited to join a team on ShadowAI!
@@ -1488,11 +1610,11 @@ If you didn't expect this invitation, you can ignore this email.
 
 - ShadowAI Team
 """
-        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(body, "plain"))
 
-        server = smtplib.SMTP(config['smtp_host'], config['smtp_port'])
+        server = smtplib.SMTP(config["smtp_host"], config["smtp_port"])
         server.starttls()
-        server.login(config['smtp_user'], config['smtp_password'])
+        server.login(config["smtp_user"], config["smtp_password"])
         server.send_message(msg)
         server.quit()
 
@@ -1502,7 +1624,9 @@ If you didn't expect this invitation, you can ignore this email.
         return False
 
 
-def accept_team_invitation(invitation_code: str, accepter_email: str, accepter_device: Optional[str] = None) -> Dict:
+def accept_team_invitation(
+    invitation_code: str, accepter_email: str, accepter_device: Optional[str] = None
+) -> Dict:
     """Accept a team invitation.
 
     Args:
@@ -1552,19 +1676,20 @@ def accept_team_invitation(invitation_code: str, accepter_email: str, accepter_d
     if "members" not in team:
         team["members"] = []
 
-    team["members"].append({
-        "email": accepter_email,
-        "device_id": accepter_device,
-        "role": invitation.get("role", "member"),
-        "joined_at": int(datetime.now().timestamp() * 1000)
-    })
+    team["members"].append(
+        {
+            "email": accepter_email,
+            "device_id": accepter_device,
+            "role": invitation.get("role", "member"),
+            "joined_at": int(datetime.now().timestamp() * 1000),
+        }
+    )
 
     file_data["teams"][team_index] = team
 
     # Remove the invitation
     file_data["invitations"] = [
-        inv for inv in file_data["invitations"]
-        if inv.get("code") != invitation_code
+        inv for inv in file_data["invitations"] if inv.get("code") != invitation_code
     ]
 
     _write_json_file(TEAMS_FILE, file_data)
@@ -1582,14 +1707,16 @@ def get_pending_invitations(email: str) -> List[Dict]:
 
     for inv in file_data.get("invitations", []):
         if inv.get("email") == email and inv.get("expires_at", 0) > now:
-            invitations.append({
-                "code": inv.get("code"),
-                "team_id": inv.get("team_id"),
-                "team_name": inv.get("team_name"),
-                "role": inv.get("role"),
-                "inviter_email": inv.get("inviter_email"),
-                "expires_at": inv.get("expires_at")
-            })
+            invitations.append(
+                {
+                    "code": inv.get("code"),
+                    "team_id": inv.get("team_id"),
+                    "team_name": inv.get("team_name"),
+                    "role": inv.get("role"),
+                    "inviter_email": inv.get("inviter_email"),
+                    "expires_at": inv.get("expires_at"),
+                }
+            )
 
     return invitations
 
@@ -1641,7 +1768,9 @@ def remove_team_member(team_id: str, remover_email: str, member_email: str) -> D
         return {"error": "Only owners can remove admins"}
 
     # Remove member
-    team["members"] = [m for m in team.get("members", []) if m.get("email") != member_email]
+    team["members"] = [
+        m for m in team.get("members", []) if m.get("email") != member_email
+    ]
     file_data["teams"][team_index] = team
     _write_json_file(TEAMS_FILE, file_data)
 
@@ -1657,16 +1786,15 @@ def get_teams_for_email(email: str) -> List[Dict]:
     for team in teams:
         for member in team.get("members", []):
             if member.get("email") == email:
-                user_teams.append({
-                    **team,
-                    "my_role": member.get("role")
-                })
+                user_teams.append({**team, "my_role": member.get("role")})
                 break
 
     return user_teams
 
 
-def update_team_member_role(team_id: str, updater_email: str, member_email: str, new_role: str) -> Dict:
+def update_team_member_role(
+    team_id: str, updater_email: str, member_email: str, new_role: str
+) -> Dict:
     """Update a team member's role.
 
     Args:
@@ -1729,6 +1857,7 @@ def update_team_member_role(team_id: str, updater_email: str, member_email: str,
 
 # ============ Tasks ============
 
+
 def get_tasks(device_id: Optional[str] = None) -> List[Dict]:
     """Get all tasks."""
     data = _read_json_file(TASKS_FILE)
@@ -1759,7 +1888,7 @@ def create_task(data: Dict) -> Dict:
         "priority": data.get("priority", "MEDIUM"),
         "status": "PENDING",
         "assigned_agent_id": data.get("assigned_agent_id"),
-        "created_at": int(datetime.now().timestamp() * 1000)
+        "created_at": int(datetime.now().timestamp() * 1000),
     }
     file_data["tasks"].append(task)
     _write_json_file(TASKS_FILE, file_data)
@@ -1788,6 +1917,7 @@ def delete_task(task_id: str) -> Dict:
 
 # ============ Agent Management ============
 
+
 def add_agent(data: Dict) -> Dict:
     """Add a new agent."""
     file_data = _read_json_file(AGENTS_FILE) or {}
@@ -1804,7 +1934,7 @@ def add_agent(data: Dict) -> Dict:
         "specializations": data.get("specializations", []),
         "tasks_completed": 0,
         "workload": 0,
-        "created_at": int(datetime.now().timestamp() * 1000)
+        "created_at": int(datetime.now().timestamp() * 1000),
     }
     file_data[device_id]["agents"].append(agent)
     _write_json_file(AGENTS_FILE, file_data)
@@ -1836,6 +1966,7 @@ def delete_agent(agent_id: str) -> Dict:
 
 # ============ Workflows ============
 
+
 def get_workflows() -> List[Dict]:
     """Get all workflows."""
     data = _read_json_file(WORKFLOWS_FILE)
@@ -1854,7 +1985,7 @@ def start_workflow(workflow_type: str, options: Dict) -> Dict:
         "status": "PENDING",
         "current_stage": "Starting",
         "progress": 0,
-        "started_at": int(datetime.now().timestamp() * 1000)
+        "started_at": int(datetime.now().timestamp() * 1000),
     }
     file_data["workflows"].append(workflow)
     _write_json_file(WORKFLOWS_FILE, file_data)
@@ -1874,19 +2005,14 @@ def cancel_workflow(workflow_id: str) -> Dict:
 
 # ============ Audits ============
 
+
 def _get_period_timestamp(period: str) -> int:
     """Get timestamp for period start."""
     now = datetime.now()
-    periods = {
-        "1D": 1,
-        "7D": 7,
-        "30D": 30,
-        "90D": 90,
-        "ANNUAL": 365,
-        "ALL_TIME": 3650
-    }
+    periods = {"1D": 1, "7D": 7, "30D": 30, "90D": 90, "ANNUAL": 365, "ALL_TIME": 3650}
     days = periods.get(period, 7)
     from datetime import timedelta
+
     start = now - timedelta(days=days)
     return int(start.timestamp() * 1000)
 
@@ -1934,7 +2060,9 @@ def get_audit_stats(period: str = "7D") -> Dict:
 
     ai_decisions = len([e for e in entries if e.get("category") == "AI_DECISION"])
     data_accesses = len([e for e in entries if e.get("category") == "DATA_ACCESS"])
-    security_events = len([e for e in entries if e.get("severity") in ["SECURITY", "CRITICAL"]])
+    security_events = len(
+        [e for e in entries if e.get("severity") in ["SECURITY", "CRITICAL"]]
+    )
 
     # Calculate privacy score (inverse of security events ratio)
     privacy_score = max(0, 100 - (security_events * 5)) if entries else 100
@@ -1955,7 +2083,7 @@ def get_audit_stats(period: str = "7D") -> Dict:
         "data_accesses": data_accesses,
         "security_events": security_events,
         "privacy_score": privacy_score,
-        "risk_level": risk_level
+        "risk_level": risk_level,
     }
 
 
@@ -1980,25 +2108,30 @@ def export_audit_report(format: str, period: str) -> Dict:
     if format == "json":
         filepath = export_dir / f"audit_report_{timestamp}.json"
         report = {"stats": stats, "entries": entries}
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         return {"success": True, "path": str(filepath)}
 
     elif format == "csv":
         filepath = export_dir / f"audit_report_{timestamp}.csv"
         import csv
-        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["ID", "Timestamp", "Category", "Severity", "Summary", "Action"])
+            writer.writerow(
+                ["ID", "Timestamp", "Category", "Severity", "Summary", "Action"]
+            )
             for entry in entries:
-                writer.writerow([
-                    entry.get("id", ""),
-                    _format_timestamp(entry.get("timestamp", 0)),
-                    entry.get("category", ""),
-                    entry.get("severity", ""),
-                    entry.get("summary", ""),
-                    entry.get("action", "")
-                ])
+                writer.writerow(
+                    [
+                        entry.get("id", ""),
+                        _format_timestamp(entry.get("timestamp", 0)),
+                        entry.get("category", ""),
+                        entry.get("severity", ""),
+                        entry.get("summary", ""),
+                        entry.get("action", ""),
+                    ]
+                )
         return {"success": True, "path": str(filepath)}
 
     else:  # PDF not implemented yet
@@ -2006,6 +2139,7 @@ def export_audit_report(format: str, period: str) -> Dict:
 
 
 # ============ Favorites ============
+
 
 def get_favorites() -> Dict:
     """Get all favorites."""
@@ -2035,6 +2169,7 @@ def toggle_favorite(item_type: str, item_id: str) -> Dict:
 
 
 # ============ Project Update ============
+
 
 def update_project(project_id: str, data: Dict) -> Dict:
     """Update a project."""
@@ -2071,6 +2206,7 @@ def delete_project(project_id: str) -> Dict:
 
 # ============ Global Search ============
 
+
 def search_all(query: str, types: List[str]) -> Dict:
     """Search across all content types."""
     query_lower = query.lower()
@@ -2081,52 +2217,196 @@ def search_all(query: str, types: List[str]) -> Dict:
             name = project.get("name", "")
             path = project.get("path", "")
             if query_lower in name.lower() or query_lower in path.lower():
-                results.append({
-                    "type": "project",
-                    "id": project.get("id"),
-                    "title": name,
-                    "preview": path
-                })
+                results.append(
+                    {
+                        "type": "project",
+                        "id": project.get("id"),
+                        "title": name,
+                        "preview": path,
+                    }
+                )
 
     if "notes" in types:
         for note in get_notes():
             title = note.get("title", "")
             if query_lower in title.lower():
-                results.append({
-                    "type": "note",
-                    "id": note.get("id"),
-                    "title": title,
-                    "preview": note.get("time_ago", "")
-                })
+                results.append(
+                    {
+                        "type": "note",
+                        "id": note.get("id"),
+                        "title": title,
+                        "preview": note.get("time_ago", ""),
+                    }
+                )
 
     if "automations" in types:
         for auto in get_automations():
             name = auto.get("name", "")
             desc = auto.get("description", "")
             if query_lower in name.lower() or query_lower in desc.lower():
-                results.append({
-                    "type": "automation",
-                    "id": auto.get("id"),
-                    "title": name,
-                    "preview": desc[:50] if desc else ""
-                })
+                results.append(
+                    {
+                        "type": "automation",
+                        "id": auto.get("id"),
+                        "title": name,
+                        "preview": desc[:50] if desc else "",
+                    }
+                )
 
     if "agents" in types:
         for agent in get_agents():
             name = agent.get("name", "")
             specialty = agent.get("specialty", "")
             if query_lower in name.lower() or query_lower in specialty.lower():
-                results.append({
-                    "type": "agent",
-                    "id": agent.get("id"),
-                    "title": name,
-                    "preview": specialty
-                })
+                results.append(
+                    {
+                        "type": "agent",
+                        "id": agent.get("id"),
+                        "title": name,
+                        "preview": specialty,
+                    }
+                )
 
     return {"items": results[:20]}  # Limit to 20 results
 
 
+# ============ Cards ============
+
+
+def get_cards(device_id: Optional[str] = None) -> List[Dict]:
+    """Get all cards, optionally filtered by device.
+
+    Cards are deduplicated by ID across devices.
+    """
+    data = _read_json_file(CARDS_FILE)
+    if not data:
+        return []
+
+    devices_data = data.get("devices", {})
+    cards_by_id = {}
+
+    for card_device_id, device_info in devices_data.items():
+        if device_id and card_device_id != device_id:
+            continue
+
+        synced_at = device_info.get("synced_at", 0)
+
+        for card in device_info.get("cards", []):
+            card_id = card.get("id")
+            if not card_id:
+                continue
+
+            updated_at = card.get("updated_at", 0)
+
+            if card_id in cards_by_id:
+                existing = cards_by_id[card_id]
+                if updated_at <= existing.get("updated_at", 0):
+                    continue
+
+            cards_by_id[card_id] = {
+                "id": card_id,
+                "title": card.get("title", ""),
+                "description": card.get("description"),
+                "type": card.get("type", "OTHER"),
+                "url": card.get("url"),
+                "item_id": card.get("item_id"),
+                "item_type": card.get("item_type"),
+                "thumbnail_url": card.get("thumbnail_url"),
+                "collection_id": card.get("collection_id"),
+                "is_favorite": card.get("is_favorite", False),
+                "device_id": card_device_id,
+                "device_name": device_info.get("name", card_device_id),
+                "updated_at": updated_at,
+                "updated_at_formatted": _format_timestamp(updated_at),
+                "time_ago": _time_ago(updated_at),
+            }
+
+    cards = list(cards_by_id.values())
+    cards.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+    return cards
+
+
+def get_card(card_id: str) -> Optional[Dict]:
+    """Get a specific card by ID."""
+    cards = get_cards()
+    for card in cards:
+        if card["id"] == card_id:
+            return card
+    return None
+
+
+# ============ Collections ============
+
+
+def get_collections(device_id: Optional[str] = None) -> List[Dict]:
+    """Get all collections, optionally filtered by device.
+
+    Collections are deduplicated by ID across devices.
+    """
+    data = _read_json_file(COLLECTIONS_FILE)
+    if not data:
+        return []
+
+    devices_data = data.get("devices", {})
+    collections_by_id = {}
+
+    for coll_device_id, device_info in devices_data.items():
+        if device_id and coll_device_id != device_id:
+            continue
+
+        synced_at = device_info.get("synced_at", 0)
+
+        for collection in device_info.get("collections", []):
+            collection_id = collection.get("id")
+            if not collection_id:
+                continue
+
+            updated_at = collection.get("updated_at", 0)
+
+            if collection_id in collections_by_id:
+                existing = collections_by_id[collection_id]
+                if updated_at <= existing.get("updated_at", 0):
+                    continue
+
+            collections_by_id[collection_id] = {
+                "id": collection_id,
+                "name": collection.get("name", ""),
+                "description": collection.get("description"),
+                "color": collection.get("color", "#6200EA"),
+                "cover_card_id": collection.get("cover_card_id"),
+                "is_website_collection": collection.get("is_website_collection", False),
+                "card_count": collection.get("card_count", 0),
+                "device_id": coll_device_id,
+                "device_name": device_info.get("name", coll_device_id),
+                "updated_at": updated_at,
+                "updated_at_formatted": _format_timestamp(updated_at),
+                "time_ago": _time_ago(updated_at),
+            }
+
+    collections = list(collections_by_id.values())
+    collections.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+    return collections
+
+
+def get_collection(collection_id: str) -> Optional[Dict]:
+    """Get a specific collection by ID."""
+    collections = get_collections()
+    for collection in collections:
+        if collection["id"] == collection_id:
+            return collection
+    return None
+
+
+def get_collection_cards(
+    collection_id: str, device_id: Optional[str] = None
+) -> List[Dict]:
+    """Get all cards in a collection."""
+    all_cards = get_cards(device_id)
+    return [card for card in all_cards if card.get("collection_id") == collection_id]
+
+
 # ============ Enhanced Analytics ============
+
 
 def get_privacy_score() -> Dict:
     """Get privacy score and compliance data."""
@@ -2136,7 +2416,7 @@ def get_privacy_score() -> Dict:
         "risk_level": stats.get("risk_level", "MINIMAL"),
         "pii_access_count": 0,  # TODO: Track from audit traces
         "encrypted_access_count": 0,
-        "compliance_status": "COMPLIANT"
+        "compliance_status": "COMPLIANT",
     }
 
 
@@ -2148,13 +2428,13 @@ def get_token_usage() -> Dict:
             "total_tokens": 0,
             "input_tokens": 0,
             "output_tokens": 0,
-            "avg_per_query": 0
+            "avg_per_query": 0,
         }
     return {
         "total_tokens": data.get("total_tokens", 0),
         "input_tokens": data.get("input_tokens", 0),
         "output_tokens": data.get("output_tokens", 0),
-        "avg_per_query": data.get("avg_tokens_per_query", 0)
+        "avg_per_query": data.get("avg_tokens_per_query", 0),
     }
 
 
@@ -2170,12 +2450,15 @@ def get_category_breakdown(period: str = "7D") -> Dict:
     return {
         "categories": [
             {"category": cat, "count": count}
-            for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True)
+            for cat, count in sorted(
+                categories.items(), key=lambda x: x[1], reverse=True
+            )
         ]
     }
 
 
 # ============ Create Functions (Web-originated) ============
+
 
 def create_project(data: Dict, device_id: str = "web") -> Dict:
     """Create a new project from web dashboard.
@@ -2206,7 +2489,7 @@ def create_project(data: Dict, device_id: str = "web") -> Dict:
         "synced_at": None,
         # Ownership tracking
         "owner_device": device_id,
-        "shared_with": []  # List of {"device_id": str, "permission": "view"|"edit"|"full"}
+        "shared_with": [],  # List of {"device_id": str, "permission": "view"|"edit"|"full"}
     }
 
     # Ensure device entry exists
@@ -2259,7 +2542,7 @@ def create_note(data: Dict, device_id: str = "web") -> Dict:
         "synced_at": None,
         # Ownership tracking
         "owner_device": device_id,
-        "shared_with": []  # List of {"device_id": str, "permission": "view"|"edit"|"full"}
+        "shared_with": [],  # List of {"device_id": str, "permission": "view"|"edit"|"full"}
     }
 
     # Ensure device entry exists
@@ -2310,7 +2593,7 @@ def create_automation(data: Dict, device_id: str = "web") -> Dict:
         "run_count": 0,
         "source": "web",
         "pending_sync": True,
-        "synced_at": None
+        "synced_at": None,
     }
 
     # Ensure device entry exists
@@ -2330,33 +2613,63 @@ def get_pending_sync_items(device_id: str) -> Dict:
         "projects": [],
         "notes": [],
         "automations": [],
-        "sessions": []
+        "sessions": [],
+        "cards": [],
+        "collections": [],
     }
 
     # Check projects
-    projects_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
-    device_projects = projects_data.get("devices", {}).get(device_id, {}).get("projects", [])
-    pending["projects"] = [p for p in device_projects if p.get("pending_sync")]
+    projects_data = _read_json_file(PROJECTS_FILE)
+    if projects_data:
+        device_projects = (
+            projects_data.get("devices", {}).get(device_id, {}).get("projects", [])
+        )
+        pending["projects"] = [p for p in device_projects if p.get("pending_sync")]
 
     # Check notes
-    notes_data = _read_json_file(NOTES_FILE) or {"devices": {}}
-    device_notes = notes_data.get("devices", {}).get(device_id, {}).get("notes", [])
-    pending["notes"] = [n for n in device_notes if n.get("pending_sync")]
+    notes_data = _read_json_file(NOTES_FILE)
+    if notes_data:
+        device_notes = notes_data.get("devices", {}).get(device_id, {}).get("notes", [])
+        pending["notes"] = [n for n in device_notes if n.get("pending_sync")]
 
     # Check automations
-    auto_data = _read_json_file(AUTOMATIONS_FILE) or {}
-    device_autos = auto_data.get(device_id, {}).get("automations", [])
-    pending["automations"] = [a for a in device_autos if a.get("pending_sync")]
+    automations_data = _read_json_file(AUTOMATIONS_FILE)
+    if automations_data:
+        device_autos = (
+            automations_data.get("devices", {})
+            .get(device_id, {})
+            .get("automations", [])
+        )
+        pending["automations"] = [a for a in device_autos if a.get("pending_sync")]
 
     # Check sessions
     sessions_data = _load_sessions_file()
-    sessions_map = sessions_data.get("sessions", {})
-    if isinstance(sessions_map, dict):
+    if sessions_data:
+        sessions_map = sessions_data.get("sessions", {})
         pending["sessions"] = [
-            s for s in sessions_map.values()
+            s
+            for s in sessions_map.values()
             if isinstance(s, dict)
             and s.get("device_id") == device_id
             and s.get("pending_sync")
+        ]
+
+    # Check cards
+    cards_data = _read_json_file(CARDS_FILE)
+    if cards_data:
+        device_cards = cards_data.get("devices", {}).get(device_id, {}).get("cards", [])
+        pending["cards"] = [c for c in device_cards if c.get("pending_sync")]
+
+    # Check collections
+    collections_data = _read_json_file(COLLECTIONS_FILE)
+    if collections_data:
+        device_collections = (
+            collections_data.get("devices", {})
+            .get(device_id, {})
+            .get("collections", [])
+        )
+        pending["collections"] = [
+            c for c in device_collections if c.get("pending_sync")
         ]
 
     return pending
@@ -2409,6 +2722,7 @@ def mark_items_synced(device_id: str, item_type: str, item_ids: List[str]) -> bo
 
 # ============ Project Todos ============
 
+
 def get_project_todos(project_id: str) -> List[Dict]:
     """Get all todos for a specific project."""
     file_data = _read_json_file(TODOS_FILE)
@@ -2454,7 +2768,7 @@ def create_project_todo(project_id: str, data: Dict) -> Dict:
         "sentToChatAt": None,
         "sortOrder": timestamp,
         "source": "web",
-        "pending_sync": True
+        "pending_sync": True,
     }
 
     # Ensure project entry exists
@@ -2560,6 +2874,7 @@ def reorder_project_todos(project_id: str, todo_ids: List[str]) -> Dict:
 
 # ============ Ownership & Sharing ============
 
+
 def get_permission_level(item: Dict, requesting_device: str) -> Optional[str]:
     """Get the permission level for a device on a content item.
 
@@ -2628,7 +2943,9 @@ def can_share(item: Dict, requesting_device: str) -> bool:
     return permission == "owner"
 
 
-def share_note(note_id: str, owner_device: str, target_device: str, permission: str) -> Dict:
+def share_note(
+    note_id: str, owner_device: str, target_device: str, permission: str
+) -> Dict:
     """Share a note with another device.
 
     Args:
@@ -2671,10 +2988,9 @@ def share_note(note_id: str, owner_device: str, target_device: str, permission: 
                         break
 
                 if not found:
-                    shared_with.append({
-                        "device_id": target_device,
-                        "permission": permission
-                    })
+                    shared_with.append(
+                        {"device_id": target_device, "permission": permission}
+                    )
 
                 note["shared_with"] = shared_with
                 note["updatedAt"] = int(datetime.now().timestamp() * 1000)
@@ -2723,7 +3039,9 @@ def unshare_note(note_id: str, owner_device: str, target_device: str) -> Dict:
     return {"error": "Note not found"}
 
 
-def share_project(project_id: str, owner_device: str, target_device: str, permission: str) -> Dict:
+def share_project(
+    project_id: str, owner_device: str, target_device: str, permission: str
+) -> Dict:
     """Share a project with another device.
 
     Args:
@@ -2766,10 +3084,9 @@ def share_project(project_id: str, owner_device: str, target_device: str, permis
                         break
 
                 if not found:
-                    shared_with.append({
-                        "device_id": target_device,
-                        "permission": permission
-                    })
+                    shared_with.append(
+                        {"device_id": target_device, "permission": permission}
+                    )
 
                 project["shared_with"] = shared_with
                 project["updated_at"] = int(datetime.now().timestamp() * 1000)
@@ -2815,10 +3132,7 @@ def get_shared_content_for_device(device_id: str) -> Dict:
     Returns projects and notes that have been shared with this device
     (where device_id appears in shared_with but is not the owner).
     """
-    shared = {
-        "projects": [],
-        "notes": []
-    }
+    shared = {"projects": [], "notes": []}
 
     # Check projects
     projects_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
@@ -2827,11 +3141,15 @@ def get_shared_content_for_device(device_id: str) -> Dict:
             shared_with = project.get("shared_with", [])
             for share in shared_with:
                 if share.get("device_id") == device_id:
-                    shared["projects"].append({
-                        **project,
-                        "owner_device_name": device_info.get("name", owner_device_id),
-                        "my_permission": share.get("permission", "view")
-                    })
+                    shared["projects"].append(
+                        {
+                            **project,
+                            "owner_device_name": device_info.get(
+                                "name", owner_device_id
+                            ),
+                            "my_permission": share.get("permission", "view"),
+                        }
+                    )
                     break
 
     # Check notes
@@ -2841,11 +3159,15 @@ def get_shared_content_for_device(device_id: str) -> Dict:
             shared_with = note.get("shared_with", [])
             for share in shared_with:
                 if share.get("device_id") == device_id:
-                    shared["notes"].append({
-                        **note,
-                        "owner_device_name": device_info.get("name", owner_device_id),
-                        "my_permission": share.get("permission", "view")
-                    })
+                    shared["notes"].append(
+                        {
+                            **note,
+                            "owner_device_name": device_info.get(
+                                "name", owner_device_id
+                            ),
+                            "my_permission": share.get("permission", "view"),
+                        }
+                    )
                     break
 
     return shared
@@ -2877,7 +3199,9 @@ def delete_note_with_permission(note_id: str, requesting_device: str) -> Dict:
                 if not can_delete(note, requesting_device):
                     permission = get_permission_level(note, requesting_device)
                     if permission:
-                        return {"error": f"Your permission level ({permission}) does not allow deletion"}
+                        return {
+                            "error": f"Your permission level ({permission}) does not allow deletion"
+                        }
                     else:
                         return {"error": "You don't have access to this note"}
 
@@ -2908,12 +3232,18 @@ def delete_project_with_permission(project_id: str, requesting_device: str) -> D
                 if not can_delete(project, requesting_device):
                     permission = get_permission_level(project, requesting_device)
                     if permission:
-                        return {"error": f"Your permission level ({permission}) does not allow deletion"}
+                        return {
+                            "error": f"Your permission level ({permission}) does not allow deletion"
+                        }
                     else:
                         return {"error": "You don't have access to this project"}
 
                 # Permission granted - delete the project
-                device_info["projects"] = [p for p in projects if p.get("id") != project_id and p.get("path") != project_id]
+                device_info["projects"] = [
+                    p
+                    for p in projects
+                    if p.get("id") != project_id and p.get("path") != project_id
+                ]
                 _write_json_file(PROJECTS_FILE, data)
                 return {"success": True}
 
@@ -2938,7 +3268,7 @@ EMAIL_CONFIG_FILE = SHADOWAI_DIR / "email_config.json"
 
 def _generate_verification_code() -> str:
     """Generate a random 6-digit verification code."""
-    return ''.join(random.choices(string.digits, k=VERIFICATION_CODE_LENGTH))
+    return "".join(random.choices(string.digits, k=VERIFICATION_CODE_LENGTH))
 
 
 def _get_email_config() -> Optional[Dict]:
@@ -2946,15 +3276,16 @@ def _get_email_config() -> Optional[Dict]:
     return _read_json_file(EMAIL_CONFIG_FILE)
 
 
-def set_email_config(smtp_host: str, smtp_port: int, smtp_user: str,
-                     smtp_password: str, from_email: str) -> Dict:
+def set_email_config(
+    smtp_host: str, smtp_port: int, smtp_user: str, smtp_password: str, from_email: str
+) -> Dict:
     """Configure SMTP settings for sending verification emails."""
     config = {
         "smtp_host": smtp_host,
         "smtp_port": smtp_port,
         "smtp_user": smtp_user,
         "smtp_password": smtp_password,
-        "from_email": from_email
+        "from_email": from_email,
     }
     if _write_json_file(EMAIL_CONFIG_FILE, config):
         return {"success": True}
@@ -2971,7 +3302,7 @@ def request_email_verification(email: str, device_id: str) -> Dict:
     Returns:
         {"success": True, "message": "..."} or {"error": "..."}
     """
-    if not email or '@' not in email:
+    if not email or "@" not in email:
         return {"error": "Invalid email address"}
 
     email = email.lower().strip()
@@ -2979,7 +3310,7 @@ def request_email_verification(email: str, device_id: str) -> Dict:
     # Check if email is already verified for this device
     emails_data = _read_json_file(EMAILS_FILE) or {
         "verified_emails": {},
-        "pending_verifications": {}
+        "pending_verifications": {},
     }
 
     verified = emails_data.get("verified_emails", {})
@@ -2998,7 +3329,7 @@ def request_email_verification(email: str, device_id: str) -> Dict:
         "code": code,
         "device_id": device_id,
         "expires_at": expires_at,
-        "created_at": datetime.now().timestamp()
+        "created_at": datetime.now().timestamp(),
     }
 
     _write_json_file(EMAILS_FILE, emails_data)
@@ -3010,7 +3341,7 @@ def request_email_verification(email: str, device_id: str) -> Dict:
         return {
             "success": True,
             "message": f"Verification code sent to {email}",
-            "expires_in_seconds": VERIFICATION_CODE_EXPIRY_SECONDS
+            "expires_in_seconds": VERIFICATION_CODE_EXPIRY_SECONDS,
         }
     else:
         # Email not configured - return code for manual testing
@@ -3019,7 +3350,7 @@ def request_email_verification(email: str, device_id: str) -> Dict:
             "success": True,
             "message": "Email service not configured. Code generated for testing.",
             "code": code,  # Only for development/testing
-            "expires_in_seconds": VERIFICATION_CODE_EXPIRY_SECONDS
+            "expires_in_seconds": VERIFICATION_CODE_EXPIRY_SECONDS,
         }
 
 
@@ -3034,9 +3365,9 @@ def _send_verification_email(to_email: str, code: str) -> bool:
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = config.get('from_email', config.get('smtp_user'))
-        msg['To'] = to_email
-        msg['Subject'] = 'ShadowAI - Email Verification Code'
+        msg["From"] = config.get("from_email", config.get("smtp_user"))
+        msg["To"] = to_email
+        msg["Subject"] = "ShadowAI - Email Verification Code"
 
         body = f"""
 Your ShadowAI verification code is:
@@ -3049,11 +3380,11 @@ If you didn't request this, you can ignore this email.
 
 - ShadowAI Team
 """
-        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(body, "plain"))
 
-        server = smtplib.SMTP(config['smtp_host'], config['smtp_port'])
+        server = smtplib.SMTP(config["smtp_host"], config["smtp_port"])
         server.starttls()
-        server.login(config['smtp_user'], config['smtp_password'])
+        server.login(config["smtp_user"], config["smtp_password"])
         server.send_message(msg)
         server.quit()
 
@@ -3110,7 +3441,7 @@ def verify_email_code(email: str, code: str, device_id: str) -> Dict:
     emails_data["verified_emails"][device_id] = {
         "email": email,
         "verified_at": datetime.now().timestamp(),
-        "device_name": device_name
+        "device_name": device_name,
     }
 
     # Clean up pending verification
@@ -3143,13 +3474,17 @@ def get_all_verified_emails() -> List[Dict]:
     result = []
 
     for device_id, info in verified.items():
-        result.append({
-            "device_id": device_id,
-            "email": info.get("email"),
-            "verified_at": info.get("verified_at"),
-            "verified_at_formatted": _format_timestamp(int(info.get("verified_at", 0) * 1000)),
-            "device_name": info.get("device_name", device_id)
-        })
+        result.append(
+            {
+                "device_id": device_id,
+                "email": info.get("email"),
+                "verified_at": info.get("verified_at"),
+                "verified_at_formatted": _format_timestamp(
+                    int(info.get("verified_at", 0) * 1000)
+                ),
+                "device_name": info.get("device_name", device_id),
+            }
+        )
 
     return result
 
@@ -3187,17 +3522,20 @@ def get_devices_by_email(email: str) -> List[Dict]:
     for device_id, info in verified.items():
         if info.get("email") == email:
             device = get_device(device_id)
-            devices.append({
-                "device_id": device_id,
-                "device_name": info.get("device_name", device_id),
-                "verified_at": info.get("verified_at"),
-                "is_online": device.get("status") == "online" if device else False
-            })
+            devices.append(
+                {
+                    "device_id": device_id,
+                    "device_name": info.get("device_name", device_id),
+                    "verified_at": info.get("verified_at"),
+                    "is_online": device.get("status") == "online" if device else False,
+                }
+            )
 
     return devices
 
 
 # ============ Unified Memory Stats ============
+
 
 def get_memory_stats() -> Dict:
     """
@@ -3218,7 +3556,7 @@ def get_memory_stats() -> Dict:
         "by_type": {},
         "storage_estimate_kb": 0,
         "oldest_timestamp": None,
-        "newest_timestamp": None
+        "newest_timestamp": None,
     }
 
     # Notes stats
@@ -3271,12 +3609,12 @@ def get_memory_stats() -> Dict:
 
     # Get timestamps from recent notes
     timestamps = []
-    for note in (notes or []):
+    for note in notes or []:
         ts = note.get("timestamp")
         if ts:
             timestamps.append(ts)
 
-    for project in (projects or []):
+    for project in projects or []:
         ts = project.get("last_modified") or project.get("created_at")
         if ts:
             timestamps.append(ts)
@@ -3290,7 +3628,7 @@ def get_memory_stats() -> Dict:
             elif isinstance(ts, str):
                 try:
                     # Try parsing ISO format
-                    dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     numeric_ts.append(dt.timestamp() * 1000)
                 except:
                     pass
@@ -3301,15 +3639,19 @@ def get_memory_stats() -> Dict:
 
     # Add scope summaries
     stats["scope_summary"] = {
-        "USER_DATA": stats["by_scope"].get("NOTES", 0) + stats["by_scope"].get("PROJECTS", 0),
-        "AI_DATA": stats["by_scope"].get("AGENTS", 0) + stats["by_scope"].get("AUTOMATIONS", 0),
-        "COMPLIANCE": stats["by_scope"].get("AUDIT", 0)
+        "USER_DATA": stats["by_scope"].get("NOTES", 0)
+        + stats["by_scope"].get("PROJECTS", 0),
+        "AI_DATA": stats["by_scope"].get("AGENTS", 0)
+        + stats["by_scope"].get("AUTOMATIONS", 0),
+        "COMPLIANCE": stats["by_scope"].get("AUDIT", 0),
     }
 
     return stats
 
 
-def get_memory_search_results(query: str, scopes: List[str] = None, limit: int = 20) -> Dict:
+def get_memory_search_results(
+    query: str, scopes: List[str] = None, limit: int = 20
+) -> Dict:
     """
     Unified search across memory scopes.
 
@@ -3332,7 +3674,7 @@ def get_memory_search_results(query: str, scopes: List[str] = None, limit: int =
         "NOTES": "notes",
         "PROJECTS": "projects",
         "AGENTS": "agents",
-        "AUTOMATIONS": "automations"
+        "AUTOMATIONS": "automations",
     }
 
     types = [type_map[s] for s in scopes if s in type_map]
@@ -3344,26 +3686,30 @@ def get_memory_search_results(query: str, scopes: List[str] = None, limit: int =
     # Transform to unified memory format
     memory_items = []
     for item in items:
-        memory_items.append({
-            "id": item.get("id"),
-            "type": item.get("type", "").upper(),
-            "scope": item.get("type", "").upper() + "S",  # "note" -> "NOTES"
-            "title": item.get("title", ""),
-            "content": item.get("preview", ""),
-            "timestamp": datetime.now().timestamp() * 1000,  # TODO: Get actual timestamp
-            "relevance_score": 1.0  # TODO: Implement ranking when vector store is added
-        })
+        memory_items.append(
+            {
+                "id": item.get("id"),
+                "type": item.get("type", "").upper(),
+                "scope": item.get("type", "").upper() + "S",  # "note" -> "NOTES"
+                "title": item.get("title", ""),
+                "content": item.get("preview", ""),
+                "timestamp": datetime.now().timestamp()
+                * 1000,  # TODO: Get actual timestamp
+                "relevance_score": 1.0,  # TODO: Implement ranking when vector store is added
+            }
+        )
 
     return {
         "items": memory_items,
         "total_found": len(memory_items),
         "query": query,
         "scopes_searched": scopes,
-        "search_type": "keyword"  # Will become "semantic" when vector store is added
+        "search_type": "keyword",  # Will become "semantic" when vector store is added
     }
 
 
 # ============ Data Cleanup ============
+
 
 def cleanup_stale_data(days_threshold: int = 30) -> Dict:
     """
@@ -3405,7 +3751,7 @@ def cleanup_stale_data(days_threshold: int = 30) -> Dict:
             "removed_projects": 0,
             "removed_notes": 0,
             "removed_automations": 0,
-            "message": "No stale data found"
+            "message": "No stale data found",
         }
 
     removed_projects = 0
@@ -3415,7 +3761,9 @@ def cleanup_stale_data(days_threshold: int = 30) -> Dict:
     # Clean projects
     for device_id in stale_devices:
         if device_id in projects_data.get("devices", {}):
-            device_projects = projects_data["devices"].get(device_id, {}).get("projects", [])
+            device_projects = (
+                projects_data["devices"].get(device_id, {}).get("projects", [])
+            )
             removed_projects += len(device_projects)
             del projects_data["devices"][device_id]
 
@@ -3446,7 +3794,7 @@ def cleanup_stale_data(days_threshold: int = 30) -> Dict:
         "removed_projects": removed_projects,
         "removed_notes": removed_notes,
         "removed_automations": removed_automations,
-        "stale_devices_cleaned": len(stale_devices)
+        "stale_devices_cleaned": len(stale_devices),
     }
 
 
@@ -3466,7 +3814,7 @@ def reset_device_history() -> Dict:
             "success": True,
             "kept_device": None,
             "removed_count": 0,
-            "message": "No devices to clean"
+            "message": "No devices to clean",
         }
 
     # Find the most recent device
@@ -3484,7 +3832,9 @@ def reset_device_history() -> Dict:
     if not most_recent_device:
         # Just pick the first one if no timestamps
         most_recent_device = list(devices_data.keys())[0]
-        most_recent_name = devices_data[most_recent_device].get("name", most_recent_device)
+        most_recent_name = devices_data[most_recent_device].get(
+            "name", most_recent_device
+        )
 
     # Get list of devices to remove (all except most recent)
     devices_to_remove = [d for d in devices_data.keys() if d != most_recent_device]
@@ -3498,7 +3848,9 @@ def reset_device_history() -> Dict:
     # Clean notes
     notes_data = _read_json_file(NOTES_FILE) or {"devices": {}}
     if most_recent_device in notes_data.get("devices", {}):
-        notes_data["devices"] = {most_recent_device: notes_data["devices"][most_recent_device]}
+        notes_data["devices"] = {
+            most_recent_device: notes_data["devices"][most_recent_device]
+        }
     else:
         notes_data["devices"] = {}
     _write_json_file(NOTES_FILE, notes_data)
@@ -3514,5 +3866,5 @@ def reset_device_history() -> Dict:
     return {
         "success": True,
         "kept_device": most_recent_name,
-        "removed_count": removed_count
+        "removed_count": removed_count,
     }

@@ -8,7 +8,6 @@
     <button class="btn btn-primary" onclick="showVideoModal()">
         <span class="material-symbols-outlined">movie</span> Generate Video
     </button>
-    <button class="btn btn-secondary" onclick="refreshVideo()">Refresh</button>
 </div>
 
 <div id="active-video-panel" class="batch-progress-panel hidden">
@@ -271,7 +270,7 @@ async function loadVideoResult(generationId) {
 
 async function loadVideoHistory() {
     try {
-        const response = await fetch('/video/history');
+        const response = await fetchWithRetry('/video/history', {}, { attempts: 3, delay: 1200 });
         const data = await response.json();
         renderVideoHistory(data.data || []);
     } catch (err) {
@@ -335,10 +334,6 @@ function formatTimeAgo(timestamp) {
     if (hours > 0) return `${hours}h ago`;
     if (minutes > 0) return `${minutes}m ago`;
     return 'just now';
-}
-
-function refreshVideo() {
-    loadVideoHistory();
 }
 
 function escapeHtml(text) {

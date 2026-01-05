@@ -124,6 +124,21 @@ def run_image_command():
         "--negative", type=str, default=None, help="Negative prompt"
     )
 
+    # Image-to-Image command
+    i2i_parser = subparsers.add_parser(
+        "image-to-image", help="Generate image from image"
+    )
+    i2i_parser.add_argument("--image_b64", help="Base64 encoded source image")
+    i2i_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
+    i2i_parser.add_argument(
+        "--strength", type=float, default=0.7, help="Transformation strength"
+    )
+    i2i_parser.add_argument("--model", default="sd-xl-turbo", help="Model to use")
+    i2i_parser.add_argument("--steps", type=int, default=4, help="Inference steps")
+    i2i_parser.add_argument("--width", type=int, default=1024, help="Width")
+    i2i_parser.add_argument("--height", type=int, default=1024, help="Height")
+    i2i_parser.add_argument("--stdin", action="store_true", help="Read JSON from stdin")
+
     # Inpaint command
     inpaint_parser = subparsers.add_parser("inpaint", help="Inpaint an image")
     inpaint_parser.add_argument("--image_b64", help="Base64 encoded source image")
@@ -193,6 +208,59 @@ def run_image_command():
                 guidance_scale=guidance,
                 seed=args.seed,
                 source="cli",
+            )
+            print_json(result)
+
+        elif args.command == "image-to-image":
+            from web.services.image_service import get_image_generation_service
+
+            service = get_image_generation_service()
+
+            if args.stdin:
+                input_data = json.load(sys.stdin)
+                image_b64 = input_data.get("image_b64")
+                prompt_b64 = input_data.get("prompt_b64")
+                negative_b64 = input_data.get("negative_b64")
+                strength = input_data.get("strength", 0.7)
+                model = input_data.get("model", "sd-xl-turbo")
+                steps = input_data.get("steps", 4)
+                width = input_data.get("width", 1024)
+                height = input_data.get("height", 1024)
+
+                if not all([image_b64, prompt_b64]):
+                    raise ValueError("Missing required fields in stdin JSON")
+
+                prompt = base64.b64decode(prompt_b64).decode("utf-8")
+                negative = (
+                    base64.b64decode(negative_b64).decode("utf-8")
+                    if negative_b64
+                    else None
+                )
+            else:
+                if not all([args.image_b64, args.prompt_b64]):
+                    print_json(
+                        {"success": False, "error": "Missing required arguments"}
+                    )
+                    sys.exit(1)
+
+                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
+                image_b64 = args.image_b64
+                negative = None
+                strength = args.strength
+                model = args.model
+                steps = args.steps
+                width = args.width
+                height = args.height
+
+            result = service.image_to_image(
+                image_base64=image_b64,
+                prompt=prompt,
+                negative_prompt=negative,
+                strength=strength,
+                model=model,
+                steps=steps,
+                width=width,
+                height=height,
             )
             print_json(result)
 
@@ -365,7 +433,9 @@ def run_video_command():
     )
 
     # Status command
-    status_parser = subparsers.add_parser("status", help="Check video generation status")
+    status_parser = subparsers.add_parser(
+        "status", help="Check video generation status"
+    )
     status_parser.add_argument("--model", help="Check specific model status")
 
     # List models command
@@ -404,10 +474,12 @@ def run_video_command():
 
             # Check if model is installed
             if not is_model_installed(args.model):
-                print_json({
-                    "success": False,
-                    "error": f"Model {args.model} is not installed. Run 'video install {args.model}' first."
-                })
+                print_json(
+                    {
+                        "success": False,
+                        "error": f"Model {args.model} is not installed. Run 'video install {args.model}' first.",
+                    }
+                )
                 sys.exit(1)
 
             generation_id = f"gen_{int(time.time() * 1000)}"
@@ -429,12 +501,14 @@ def run_video_command():
 
             # Progress callback function
             def progress_callback(progress_data):
-                print_json({
-                    "type": "progress",
-                    "status": progress_data.get("status", "Unknown"),
-                    "message": progress_data.get("message", ""),
-                    "progress": progress_data.get("progress", 0)
-                })
+                print_json(
+                    {
+                        "type": "progress",
+                        "status": progress_data.get("status", "Unknown"),
+                        "message": progress_data.get("message", ""),
+                        "progress": progress_data.get("progress", 0),
+                    }
+                )
 
                 updates = {
                     "status": "running",
@@ -456,27 +530,36 @@ def run_video_command():
                 "duration": args.duration,
                 "aspect_ratio": args.aspect_ratio,
                 "negative_prompt": args.negative,
-                "seed": args.seed
+                "seed": args.seed,
             }
 
             # Generate video
             import asyncio
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
             try:
-                result = loop.run_until_complete(generate_video_local(options, progress_callback))
+                result = loop.run_until_complete(
+                    generate_video_local(options, progress_callback)
+                )
                 generations = _load_generations()
                 if generations and "generations" in generations:
                     for gen in generations["generations"]:
                         if gen.get("id") == generation_id:
-                            gen["status"] = "completed" if result.get("success") else "failed"
+                            gen["status"] = (
+                                "completed" if result.get("success") else "failed"
+                            )
                             gen["video_url"] = result.get("videoUrl")
                             gen["video_path"] = result.get("videoPath")
                             gen["duration"] = result.get("duration")
                             gen["cost"] = 0
                             gen["error"] = result.get("error")
-                            gen["completed_at"] = datetime.now().isoformat() if result.get("success") else None
+                            gen["completed_at"] = (
+                                datetime.now().isoformat()
+                                if result.get("success")
+                                else None
+                            )
                             break
                     _save_generations(generations)
                 print_json(result)
@@ -484,10 +567,7 @@ def run_video_command():
                 loop.close()
 
         elif args.command == "install":
-            from web.routes.video import (
-                install_model,
-                MODELS
-            )
+            from web.routes.video import install_model, MODELS
 
             if args.model not in MODELS:
                 print_json({"success": False, "error": f"Unknown model: {args.model}"})
@@ -495,35 +575,36 @@ def run_video_command():
 
             # Progress callback for installation
             def install_progress_callback(progress_data):
-                print_json({
-                    "type": "install_progress",
-                    "status": progress_data.get("status", "Installing"),
-                    "message": progress_data.get("message", ""),
-                    "progress": progress_data.get("progress", 0)
-                })
+                print_json(
+                    {
+                        "type": "install_progress",
+                        "status": progress_data.get("status", "Installing"),
+                        "message": progress_data.get("message", ""),
+                        "progress": progress_data.get("progress", 0),
+                    }
+                )
 
             # Install model
             import asyncio
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
             try:
-                result = loop.run_until_complete(install_model(args.model, install_progress_callback))
+                result = loop.run_until_complete(
+                    install_model(args.model, install_progress_callback)
+                )
                 print_json(result)
             finally:
                 loop.close()
 
         elif args.command == "status":
-            from web.routes.video import (
-                MODELS,
-                is_model_installed,
-                _load_generations
-            )
+            from web.routes.video import MODELS, is_model_installed, _load_generations
 
             status_data = {
                 "models": {},
                 "total_generations": 0,
-                "recent_generations": []
+                "recent_generations": [],
             }
 
             # Check each model
@@ -531,18 +612,20 @@ def run_video_command():
                 model_status = {
                     "name": model_info["name"],
                     "installed": is_model_installed(model_key),
-                    "path": model_info["path"]
+                    "path": model_info["path"],
                 }
                 status_data["models"][model_key] = model_status
 
             # Load generation statistics
             generations_data = _load_generations()
             all_generations = generations_data.get("generations", [])
-            
+
             status_data["total_generations"] = len(all_generations)
-            
+
             # Get recent generations (last 10)
-            recent = sorted(all_generations, key=lambda x: x.get("created_at", ""), reverse=True)[:10]
+            recent = sorted(
+                all_generations, key=lambda x: x.get("created_at", ""), reverse=True
+            )[:10]
             status_data["recent_generations"] = recent
 
             print_json(status_data)
@@ -552,13 +635,15 @@ def run_video_command():
 
             models_data = []
             for model_key, model_info in MODELS.items():
-                models_data.append({
-                    "id": model_key,
-                    "name": model_info["name"],
-                    "installed": is_model_installed(model_key),
-                    "repo": model_info["repo"],
-                    "description": model_info.get("description", "")
-                })
+                models_data.append(
+                    {
+                        "id": model_key,
+                        "name": model_info["name"],
+                        "installed": is_model_installed(model_key),
+                        "repo": model_info["repo"],
+                        "description": model_info.get("description", ""),
+                    }
+                )
 
             print_json({"models": models_data})
 
@@ -718,7 +803,6 @@ def register_install_path():
                     os.path.dirname(install_dir), "shadow_image_cli.py"
                 ),  # Parent dir (for dist/)
                 os.path.join(install_dir, "..", "shadow_image_cli.py"),
-                r"C:\shadow\shadow-bridge\shadow_image_cli.py",  # Hardcoded fallback
             ]
             for source in source_locations:
                 if os.path.exists(source):
@@ -1009,7 +1093,11 @@ def find_ssh_port():
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
         )
         # Parse netstat output to find SSH ports (filtering for LISTENING and :22)
-        lines = [line for line in result.stdout.splitlines() if "LISTENING" in line and ":22" in line]
+        lines = [
+            line
+            for line in result.stdout.splitlines()
+            if "LISTENING" in line and ":22" in line
+        ]
         for line in lines:
             parts = line.split()
             for part in parts:
@@ -1811,7 +1899,9 @@ class DataReceiver(threading.Thread):
                     )
 
                     # Detect file creation for Phase 4.3 requirement (File Notifications)
-                    self._detect_file_creation(message_content, sessionId=relay_msg.get("sessionId"))
+                    self._detect_file_creation(
+                        message_content, sessionId=relay_msg.get("sessionId")
+                    )
 
                 except json.JSONDecodeError:
                     # Not JSON, might be plain text output
@@ -1831,7 +1921,9 @@ class DataReceiver(threading.Thread):
                             },
                         }
                         self._relay_to_all_devices(relay_msg)
-                        self._detect_file_creation(content, sessionId=relay_msg.get("sessionId"))
+                        self._detect_file_creation(
+                            content, sessionId=relay_msg.get("sessionId")
+                        )
 
         except Exception as e:
             log.error(f"Failed to parse transcript content: {e}")
@@ -1839,22 +1931,23 @@ class DataReceiver(threading.Thread):
     def _detect_file_creation(self, content, sessionId=None):
         """Scan content for file creation and notify devices."""
         import re
+
         # Look for common file creation patterns
         # e.g. "Created file index.html", "Writing to styles.css", "Saved as image.png"
         file_patterns = [
             r"(?:Created|Saved|Writing to|Generated)\s+file\s+[`'\"\(]?([^\s`'\"\)\[\]]+\.[a-z0-9]{2,10})",
             r"(?:Created|Saved|Writing to|Generated)\s+[`'\"\(]?([^\s`'\"\)\[\]]+\.(?:html|png|jpg|pdf|md|txt|py|js|json))",
-            r"\[Tool:\s+(?:Write|Edit)\]\s+[`'\"\(]?([^\s`'\"\)\[\]]+\.[a-z0-9]{2,10})"
+            r"\[Tool:\s+(?:Write|Edit)\]\s+[`'\"\(]?([^\s`'\"\)\[\]]+\.[a-z0-9]{2,10})",
         ]
-        
+
         found_files = []
         for pattern in file_patterns:
             matches = re.findall(pattern, content, re.IGNORE_VALUE | re.IGNORE_CASE)
             found_files.extend(matches)
-            
+
         for file_path in set(found_files):
             log.info(f"Detected file creation: {file_path}")
-            
+
             # Send notification message
             notif_msg = {
                 "type": "notification",
@@ -1865,9 +1958,9 @@ class DataReceiver(threading.Thread):
                     "message": f"New file ready: {file_path}",
                     "notificationType": "file_ready",
                     "summary": "File Created",
-                    "fileUrl": f"file://{file_path}", # Placeholder for actual access
-                    "hostname": socket.gethostname()
-                }
+                    "fileUrl": f"file://{file_path}",  # Placeholder for actual access
+                    "hostname": socket.gethostname(),
+                },
             }
             self._relay_to_all_devices(notif_msg)
 
@@ -2157,6 +2250,42 @@ class DataReceiver(threading.Thread):
                                 }
                                 log.info(
                                     f"Including {len(pending['sessions'])} pending sessions for sync to device"
+                                )
+                        self._send_response(conn, response)
+                    elif action == "sync_cards" or "cards" in payload:
+                        cards_payload = payload.get("cards", [])
+                        if SYNC_SERVICE_AVAILABLE and isinstance(cards_payload, list):
+                            save_cards_from_device(device_id, cards_payload)
+                        if self.on_cards_received:
+                            self.on_cards_received(device_id, cards_payload)
+
+                        response = {"success": True, "message": "Cards synced"}
+                        if SYNC_SERVICE_AVAILABLE:
+                            pending = get_pending_sync_items(device_id)
+                            if pending.get("cards"):
+                                response["sync_to_device"] = {"cards": pending["cards"]}
+                                log.info(
+                                    f"Including {len(pending['cards'])} pending cards for sync to device"
+                                )
+                        self._send_response(conn, response)
+                    elif action == "sync_collections" or "collections" in payload:
+                        collections_payload = payload.get("collections", [])
+                        if SYNC_SERVICE_AVAILABLE and isinstance(
+                            collections_payload, list
+                        ):
+                            save_collections_from_device(device_id, collections_payload)
+                        if self.on_collections_received:
+                            self.on_collections_received(device_id, collections_payload)
+
+                        response = {"success": True, "message": "Collections synced"}
+                        if SYNC_SERVICE_AVAILABLE:
+                            pending = get_pending_sync_items(device_id)
+                            if pending.get("collections"):
+                                response["sync_to_device"] = {
+                                    "collections": pending["collections"]
+                                }
+                                log.info(
+                                    f"Including {len(pending['collections'])} pending collections for sync to device"
                                 )
                         self._send_response(conn, response)
                     elif action == "sync_confirm":
@@ -3024,7 +3153,9 @@ class CompanionRelayServer(threading.Thread):
                         inner_message = message.get("message")
                         if inner_message:
                             self._relay_to_all_devices(inner_message)
-                            log.info(f"Internal relay successful for: {inner_message.get('type')}")
+                            log.info(
+                                f"Internal relay successful for: {inner_message.get('type')}"
+                            )
 
                     else:
                         log.debug(f"Unknown message type: {msg_type}")
@@ -3124,7 +3255,7 @@ class CompanionRelayServer(threading.Thread):
         conn.send(data)
 
     def _notify_web_dashboard_sessions_updated(self, device_id):
-        """Notify web dashboard that sessions have been updated."""
+        """Notify web dashboard that sessions have been updated (triggers WebSocket broadcast)."""
 
         def do_notify():
             try:
@@ -3134,6 +3265,48 @@ class CompanionRelayServer(threading.Thread):
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
                     "http://127.0.0.1:6767/api/sessions/sync",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=2)
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def _notify_web_dashboard_cards_updated(self, device_id):
+        """Notify web dashboard that cards have been updated (triggers WebSocket broadcast)."""
+
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+
+                data = json_module.dumps({"device_id": device_id}).encode("utf-8")
+                req = urllib.request.Request(
+                    "http://127.0.0.1:6767/api/cards/sync",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=2)
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def _notify_web_dashboard_collections_updated(self, device_id):
+        """Notify web dashboard that collections have been updated (triggers WebSocket broadcast)."""
+
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+
+                data = json_module.dumps({"device_id": device_id}).encode("utf-8")
+                req = urllib.request.Request(
+                    "http://127.0.0.1:6767/api/collections/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -3854,6 +4027,9 @@ class ShadowBridgeApp:
         self.notes_devices = load_notes_state().get(
             "devices", {}
         )  # device_id -> {name, ip, last_seen, notes}
+        self.sessions_devices = {}  # device_id -> {name, ip, last_seen, sessions}
+        self.cards_devices = {}  # device_id -> {name, ip, last_seen, cards}
+        self.collections_devices = {}  # device_id -> {name, ip, last_seen, collections}
         self.selected_notes_device_id = "__ALL__"
         self._device_menu_updating = False
         self._tool_poll_job = None
@@ -4523,6 +4699,8 @@ class ShadowBridgeApp:
                 on_device_connected=self.on_device_connected,
                 on_notes_received=self.on_notes_received,
                 on_sessions_received=self.on_sessions_received,
+                on_cards_received=self.on_cards_received,
+                on_collections_received=self.on_collections_received,
                 on_key_approval_needed=self.on_key_approval_needed,
             )
             self.data_receiver.start()
@@ -4823,7 +5001,8 @@ class ShadowBridgeApp:
         # Get the dynamic encryption salt for note sync (Phase 5.3 requirement)
         try:
             from web.services.data_service import DYNAMIC_SALT
-            salt_b64 = base64.b64encode(DYNAMIC_SALT).decode('ascii')
+
+            salt_b64 = base64.b64encode(DYNAMIC_SALT).decode("ascii")
         except Exception:
             salt_b64 = None
 
@@ -4971,36 +5150,58 @@ class ShadowBridgeApp:
         return thread is not None and thread.is_alive()
 
     def _start_web_server_thread(self, open_browser: bool, show_errors: bool) -> bool:
+        if self._is_web_server_process_alive():
+            return True
         if self._is_web_server_thread_alive():
             return True
 
-        def run_server():
-            try:
-                run_web_dashboard_server(open_browser=open_browser)
-            except Exception as exc:
-                log.error(f"Threaded web dashboard failed: {exc}")
-                if show_errors:
-                    self.root.after(
-                        0,
-                        lambda: messagebox.showerror(
-                            "Web Dashboard Error",
-                            f"Failed to launch web dashboard:\n{exc}",
-                        ),
-                    )
+        # Launch web server as subprocess for proper shutdown
+        try:
+            python_exe = sys.executable
+            script_path = os.path.abspath(__file__)
+            args = [python_exe, script_path, "--web-server"]
+            if not open_browser:
+                args.append("--no-browser")
 
-        thread = threading.Thread(target=run_server, daemon=True)
-        thread.start()
-        self.web_server_thread = thread
-        return True
+            process = subprocess.Popen(
+                args,
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+            )
+            self.web_process = process
+            log.info(f"Web dashboard started as subprocess (PID: {process.pid})")
+
+            # Open browser in separate thread if requested
+            if open_browser:
+                url = "http://127.0.0.1:6767"
+                monitor_thread = threading.Thread(
+                    target=lambda: self._monitor_web_server_and_open(url, show_errors),
+                    daemon=True,
+                )
+                monitor_thread.start()
+
+            return True
+        except Exception as exc:
+            log.error(f"Failed to start web server subprocess: {exc}")
+            if show_errors:
+                self.root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Web Dashboard Error",
+                        f"Failed to launch web dashboard:\n{exc}",
+                    ),
+                )
+            return False
 
     def _monitor_web_server_and_open(self, url: str, show_errors: bool):
         """Poll the web server until available and optionally open browser."""
+
         def monitor():
             time.sleep(1.5)
             attempts = 0
             while attempts < 4:
                 try:
                     import urllib.request
+
                     urllib.request.urlopen(url, timeout=3)
                     webbrowser.open(url)
                     return
@@ -5021,7 +5222,9 @@ class ShadowBridgeApp:
 
         threading.Thread(target=monitor, daemon=True).start()
 
-    def _start_web_dashboard_process(self, open_browser: bool, show_errors: bool) -> bool:
+    def _start_web_dashboard_process(
+        self, open_browser: bool, show_errors: bool
+    ) -> bool:
         """Ensure the web dashboard server is running; optionally open browser."""
         web_port = 6767
         web_url = f"http://127.0.0.1:{web_port}"
@@ -5037,7 +5240,7 @@ class ShadowBridgeApp:
         except Exception:
             pass
 
-        if self._is_web_server_process_alive() or self._is_web_server_thread_alive():
+        if self._is_web_server_process_alive():
             if open_browser:
                 self._monitor_web_server_and_open(web_url, show_errors)
             return True
@@ -5048,8 +5251,7 @@ class ShadowBridgeApp:
                 web_folder = os.path.join(tools_dir, "web")
                 if not os.path.exists(web_folder):
                     msg = (
-                        f"Web dashboard folder not found.\n\n"
-                        f"Expected at:\n{web_folder}"
+                        f"Web dashboard folder not found.\n\nExpected at:\n{web_folder}"
                     )
                     log.warning(msg)
                     if show_errors:
@@ -5064,7 +5266,9 @@ class ShadowBridgeApp:
             log.error(f"Failed to start web dashboard: {exc}")
             if show_errors:
                 messagebox.showerror("Error", f"Failed to launch web dashboard:\n{exc}")
-            if self._start_web_server_thread(open_browser=open_browser, show_errors=show_errors):
+            if self._start_web_server_thread(
+                open_browser=open_browser, show_errors=show_errors
+            ):
                 if open_browser:
                     self._monitor_web_server_and_open(web_url, show_errors)
                 return True
@@ -5097,7 +5301,7 @@ class ShadowBridgeApp:
         def monitor_loop():
             while not self._web_dashboard_monitor_stop_event.wait(4):
                 try:
-                    if not self._is_web_server_process_alive() and not self._is_web_server_thread_alive():
+                    if not self._is_web_server_process_alive():
                         log.debug("Web dashboard monitor detected downtime, restarting")
                         self._ensure_web_dashboard_running()
                 except Exception as exc:
@@ -5122,9 +5326,11 @@ class ShadowBridgeApp:
             return False
 
         with self._web_dashboard_start_lock:
-            if self._is_web_server_process_alive() or self._is_web_server_thread_alive():
+            if self._is_web_server_process_alive():
                 return True
-            return self._start_web_dashboard_process(open_browser=False, show_errors=False)
+            return self._start_web_dashboard_process(
+                open_browser=False, show_errors=False
+            )
 
     def toggle_broadcast(self):
         """Toggle broadcasting."""
@@ -5837,7 +6043,7 @@ Or run in PowerShell (Admin):
         self.root.destroy()
 
     def force_exit(self):
-        """Force exit the application immediately."""
+        """Force exit of application immediately."""
         self._stop_web_dashboard_monitor()
         self.stop_broadcast()
         if self.data_receiver:
@@ -5853,6 +6059,7 @@ Or run in PowerShell (Admin):
         if self.web_process:
             try:
                 self.web_process.terminate()
+                log.info("Web dashboard process terminated")
             except (OSError, ProcessLookupError):
                 pass  # Process already terminated
         if self.tray_icon:
@@ -6310,7 +6517,61 @@ Or run in PowerShell (Admin):
         """Called when sessions data is received from Android app."""
         if not isinstance(sessions, list):
             return
+
+        device = (self.sessions_devices or {}).get(device_id, {})
+        device.update(
+            {
+                "id": device_id,
+                "name": device.get("name", device_id),
+                "ip": device.get("ip", None),
+                "last_seen": time.time(),
+                "sessions": sessions,
+            }
+        )
+        self.sessions_devices[device_id] = device
+
+        # Notify web dashboard for real-time sync
         self._notify_web_dashboard_sessions_updated(device_id)
+
+    def on_cards_received(self, device_id, cards):
+        """Called when cards data is received from Android app."""
+        if not isinstance(cards, list):
+            return
+
+        device = (self.cards_devices or {}).get(device_id, {})
+        device.update(
+            {
+                "id": device_id,
+                "name": device.get("name", device_id),
+                "ip": device.get("ip", None),
+                "last_seen": time.time(),
+                "cards": cards,
+            }
+        )
+        self.cards_devices[device_id] = device
+
+        # Notify web dashboard for real-time sync
+        self._notify_web_dashboard_cards_updated(device_id)
+
+    def on_collections_received(self, device_id, collections):
+        """Called when collections data is received from Android app."""
+        if not isinstance(collections, list):
+            return
+
+        device = (self.collections_devices or {}).get(device_id, {})
+        device.update(
+            {
+                "id": device_id,
+                "name": device.get("name", device_id),
+                "ip": device.get("ip", None),
+                "last_seen": time.time(),
+                "collections": collections,
+            }
+        )
+        self.collections_devices[device_id] = device
+
+        # Notify web dashboard for real-time sync
+        self._notify_web_dashboard_collections_updated(device_id)
 
     def _notify_web_dashboard_sessions_updated(self, device_id):
         """Notify web dashboard that sessions have been updated."""
@@ -7009,13 +7270,13 @@ def run_audio_command():
 
     argv = sys.argv[2:]
 
-    parser = argparse.ArgumentParser(
-        description="Generate audio using local AI models"
-    )
+    parser = argparse.ArgumentParser(description="Generate audio using local AI models")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     gen_parser = subparsers.add_parser("generate", help="Generate audio")
-    gen_parser.add_argument("prompt", nargs="?", help="Text prompt for audio generation")
+    gen_parser.add_argument(
+        "prompt", nargs="?", help="Text prompt for audio generation"
+    )
     gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
     gen_parser.add_argument(
         "--mode",
@@ -7028,11 +7289,17 @@ def run_audio_command():
         default="musicgen-small",
         help="Model ID (default: musicgen-small)",
     )
-    gen_parser.add_argument("--duration", type=float, default=8, help="Duration in seconds")
-    gen_parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature")
+    gen_parser.add_argument(
+        "--duration", type=float, default=8, help="Duration in seconds"
+    )
+    gen_parser.add_argument(
+        "--temperature", type=float, default=1.0, help="Sampling temperature"
+    )
     gen_parser.add_argument("--top_k", type=int, default=250, help="Top-k sampling")
     gen_parser.add_argument("--top_p", type=float, default=0.0, help="Top-p sampling")
-    gen_parser.add_argument("--seed", type=int, default=None, help="Seed for reproducibility")
+    gen_parser.add_argument(
+        "--seed", type=int, default=None, help="Seed for reproducibility"
+    )
 
     subparsers.add_parser("status", help="Check audio service status")
     subparsers.add_parser("setup", help="Install audio dependencies")
@@ -7124,11 +7391,16 @@ def run_audio_command():
 
         elif args.command == "status":
             from web.routes.audio import _load_generations
-            from web.services.audio_service import get_audio_service_status, get_audio_setup_status
+            from web.services.audio_service import (
+                get_audio_service_status,
+                get_audio_setup_status,
+            )
 
             generations = _load_generations()
             all_generations = generations.get("generations", [])
-            recent = sorted(all_generations, key=lambda x: x.get("created_at", ""), reverse=True)[:10]
+            recent = sorted(
+                all_generations, key=lambda x: x.get("created_at", ""), reverse=True
+            )[:10]
 
             print_json(
                 {

@@ -41,6 +41,7 @@ _rembg_available = False
 _torch_available = False
 _torch_has_cuda = False
 _pipeline = None
+_i2i_pipeline = None
 _inpaint_pipeline = None
 _setup_thread = None
 _setup_lock = threading.Lock()
@@ -282,12 +283,16 @@ def _cleanup_gpu_memory():
 
 def _cleanup_pipelines():
     """Clean up global pipelines to prevent memory leaks."""
-    global _pipeline, _inpaint_pipeline
+    global _pipeline, _i2i_pipeline, _inpaint_pipeline
     try:
         if _pipeline is not None:
             del _pipeline
             _pipeline = None
             logger.debug("Text2Image pipeline cleaned up")
+        if _i2i_pipeline is not None:
+            del _i2i_pipeline
+            _i2i_pipeline = None
+            logger.debug("Image2Image pipeline cleaned up")
         if _inpaint_pipeline is not None:
             del _inpaint_pipeline
             _inpaint_pipeline = None
@@ -671,6 +676,7 @@ class ImageGenerationService:
         import torch
         from diffusers.pipelines.auto_pipeline import (
             AutoPipelineForText2Image,
+            AutoPipelineForImage2Image,
             AutoPipelineForInpainting,
         )
 
@@ -837,6 +843,125 @@ class ImageGenerationService:
 
         except Exception as e:
             logger.error(f"Image generation failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "generation_time_ms": int((time.time() - start_time) * 1000),
+            }
+
+    def image_to_image(
+        self,
+        image_base64: str,
+        prompt: str,
+        negative_prompt: str = None,
+        strength: float = 0.7,
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 20,
+        guidance_scale: float = 7.5,
+        seed: int = None,
+        model: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate an image from an input image and prompt.
+
+        Args:
+            image_base64: Source image as base64
+            prompt: Text prompt describing changes/additions
+            strength: Transformation strength (0.0 = no change, 1.0 = total change)
+
+        Returns:
+            Dict with 'success', 'image' (base64)
+        """
+        global _i2i_pipeline
+
+        start_time = time.time()
+
+        try:
+            if not _diffusers_available or not _torch_available:
+                raise RuntimeError("Image-to-Image requires PyTorch and diffusers")
+
+            import torch
+            from diffusers.pipelines.auto_pipeline import AutoPipelineForImage2Image
+
+            # Lazy load model for I2I
+            model_id = model or self.DEFAULT_MODEL
+            model_name = self.MODELS.get(model_id, model_id)
+
+            if _i2i_pipeline is None or self.current_model != model_id:
+                logger.info(f"Loading Image2Image pipeline: {model_name}")
+                _cleanup_pipelines()
+
+                if torch.cuda.is_available():
+                    device = "cuda"
+                    torch_dtype = torch.float16
+                else:
+                    device = "cpu"
+                    torch_dtype = torch.float32
+
+                _i2i_pipeline = AutoPipelineForImage2Image.from_pretrained(
+                    model_name,
+                    torch_dtype=torch_dtype,
+                    variant="fp16" if torch_dtype == torch.float16 else None,
+                    use_safetensors=True,
+                )
+                _i2i_pipeline.to(device)
+                self.device = device
+                self.current_model = model_id
+
+                if device == "cuda":
+                    _i2i_pipeline.enable_attention_slicing()
+
+            # Decode image
+            image = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB")
+            
+            # Resize if needed
+            if image.width != width or image.height != height:
+                image = image.resize((width, height), Image.Resampling.LANCZOS)
+
+            # Set seed for reproducibility
+            generator = None
+            if seed is not None:
+                generator = torch.Generator(device=self.device).manual_seed(seed)
+            else:
+                seed = torch.randint(0, 2**32, (1,)).item()
+                generator = torch.Generator(device=self.device).manual_seed(seed)
+
+            # Generate
+            result = _i2i_pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt or "blurry, bad quality, distorted",
+                image=image,
+                strength=strength,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                generator=generator,
+            )
+
+            output_image = result.images[0]
+
+            # Convert to base64
+            buffer = io.BytesIO()
+            output_image.save(buffer, format="PNG")
+            output_base64 = base64.b64encode(buffer.getvalue()).decode()
+
+            generation_time = int((time.time() - start_time) * 1000)
+
+            # Clean up GPU memory
+            if self.device == "cuda":
+                _cleanup_gpu_memory()
+
+            return {
+                "success": True,
+                "image": output_base64,
+                "seed": seed,
+                "generation_time_ms": generation_time,
+            }
+
+        except Exception as e:
+            logger.error(f"Image-to-Image failed: {e}")
+            if hasattr(self, "device") and self.device == "cuda":
+                _cleanup_gpu_memory()
             return {
                 "success": False,
                 "error": str(e),

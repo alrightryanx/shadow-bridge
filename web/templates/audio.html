@@ -8,7 +8,6 @@
     <button class="btn btn-primary" onclick="showAudioModal()">
         <span class="material-symbols-outlined">graphic_eq</span> Generate Audio
     </button>
-    <button class="btn btn-secondary" onclick="refreshAudio()">Refresh</button>
 </div>
 
 <div id="audio-service-banner" class="info-banner hidden">
@@ -17,6 +16,8 @@
         <div>
             <span id="audio-service-message">Audio service unavailable</span>
             <div id="audio-install-note" class="text-muted" style="font-size: 0.85em; margin-top: 4px;"></div>
+            <div id="audio-install-commands" class="audio-install-commands hidden"></div>
+            <a id="audio-install-guide" class="audio-install-guide hidden" target="_blank" rel="noreferrer">Manual install guide</a>
         </div>
     </div>
     <button id="audio-install-btn" class="btn btn-small btn-primary" onclick="runAudioSetup()">Install (~2.5GB)</button>
@@ -213,7 +214,7 @@ function updateAudioEstimate() {
 
 async function loadAudioModels() {
     try {
-        const response = await fetch('/audio/models');
+        const response = await fetchWithRetry('/audio/models', {}, { attempts: 3, delay: 1200 });
         const data = await response.json();
         audioModels = data.data || {};
         updateAudioModels();
@@ -237,7 +238,7 @@ function updateAudioModels() {
 
 async function checkAudioService() {
     try {
-        const response = await fetch('/audio/status');
+        const response = await fetchWithRetry('/audio/status', {}, { attempts: 3, delay: 1200 });
         const data = await response.json();
         const service = data.service || {};
         audioServiceInfo = service;
@@ -245,6 +246,8 @@ async function checkAudioService() {
         const banner = document.getElementById('audio-service-banner');
         const installBtn = document.getElementById('audio-install-btn');
         const installNote = document.getElementById('audio-install-note');
+        const installCommands = document.getElementById('audio-install-commands');
+        const installGuide = document.getElementById('audio-install-guide');
         
         if (!service.ready) {
             banner.classList.remove('hidden');
@@ -258,16 +261,35 @@ async function checkAudioService() {
             document.getElementById('audio-service-message').textContent = msg;
             
             // Show install note and update button based on environment
+            if (service.install_note) {
+                installNote.textContent = service.install_note;
+            } else {
+                installNote.textContent = '';
+            }
+
             if (service.is_frozen) {
-                installNote.textContent = 'Running from portable EXE. Run from source or use installer for audio.';
                 installBtn.textContent = 'Not Available';
                 installBtn.disabled = true;
                 installBtn.classList.add('btn-disabled');
-            } else if (service.install_note) {
-                installNote.textContent = service.install_note;
+            } else {
                 const sizeGb = service.install_size_gb || 2.5;
                 installBtn.textContent = `Install (~${sizeGb}GB)`;
                 installBtn.disabled = false;
+                installBtn.classList.remove('btn-disabled');
+            }
+            
+            if (service.install_commands && service.install_commands.length > 0) {
+                installCommands.textContent = service.install_commands.join('\\n');
+                installCommands.classList.remove('hidden');
+            } else {
+                installCommands.classList.add('hidden');
+            }
+
+            if (service.install_manual_url) {
+                installGuide.href = service.install_manual_url;
+                installGuide.classList.remove('hidden');
+            } else {
+                installGuide.classList.add('hidden');
             }
         } else {
             banner.classList.add('hidden');
@@ -275,6 +297,8 @@ async function checkAudioService() {
             if (service.gpu_name) {
                 document.getElementById('audio-estimate-gpu').textContent = service.gpu_name;
             }
+            installCommands.classList.add('hidden');
+            installGuide.classList.add('hidden');
         }
         
         // Check setup status
@@ -309,7 +333,7 @@ async function runAudioSetup() {
             // Poll for status
             const pollInterval = setInterval(async () => {
                 await checkAudioService();
-                const statusResp = await fetch('/audio/setup/status');
+                const statusResp = await fetchWithRetry('/audio/setup/status', {}, { attempts: 3, delay: 1200 });
                 const statusData = await statusResp.json();
                 if (statusData.status !== 'running') {
                     clearInterval(pollInterval);
@@ -469,7 +493,7 @@ async function pollAudioStatus() {
 
 async function loadAudioHistory() {
     try {
-        const response = await fetch('/audio/history');
+        const response = await fetchWithRetry('/audio/history', {}, { attempts: 3, delay: 1200 });
         const data = await response.json();
         renderAudioHistory(data.data || []);
     } catch (err) {
@@ -552,11 +576,6 @@ function playAudio(item) {
     document.getElementById('player-subtitle').textContent = `${item.model || ''} • ${item.duration || 0}s`;
     player.src = item.stream_url;
     player.play();
-}
-
-function refreshAudio() {
-    loadAudioHistory();
-    checkAudioService();
 }
 
 function escapeHtml(text) {
@@ -657,6 +676,29 @@ function escapeHtml(text) {
     align-items: center;
     gap: 8px;
     color: var(--warning);
+}
+
+.audio-install-commands {
+    font-family: var(--font-mono, 'Segoe UI Mono', Consolas, monospace);
+    font-size: 0.85em;
+    margin-top: 6px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px dashed var(--border-color);
+    background: var(--bg-secondary);
+    white-space: pre-line;
+}
+
+.audio-install-guide {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 0.8em;
+    color: var(--primary-color);
+}
+
+.audio-install-commands.hidden,
+.audio-install-guide.hidden {
+    display: none;
 }
 
 .range-label {

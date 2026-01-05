@@ -108,14 +108,13 @@
                 </div>
             </div>
 
-            <!-- Model & Size -->
             <div class="form-row">
                 <div class="form-group form-half">
                     <label for="gen-model">Model</label>
                     <select id="gen-model" class="form-input" onchange="updateEstimates()">
-                        <option value="stable-diffusion" selected>Stable Diffusion XL (Free)</option>
-                        <option value="flux-schnell">FLUX Schnell (Free, Fast)</option>
-                        <option value="dalle-3">DALL-E 3 (Premium)</option>
+                        <option value="sd-xl-turbo" selected>SDXL Turbo (Fastest)</option>
+                        <option value="sd-xl">Stable Diffusion XL (Quality)</option>
+                        <option value="sd-1.5">Stable Diffusion 1.5 (Legacy)</option>
                     </select>
                 </div>
                 <div class="form-group form-half">
@@ -347,7 +346,7 @@ async function startSingleGeneration(prompt, model, size, negative, steps, guida
         btn.disabled = true;
         btn.innerHTML = '<span class="material-symbols-outlined spin">autorenew</span> Generating...';
 
-        const response = await fetch('/v1/images/generate', {
+        const response = await fetch('/api/image/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -386,7 +385,7 @@ async function startBatchGeneration(prompt, model, size, negative, steps, guidan
     const variation = document.getElementById('gen-variation').value / 100;
 
     try {
-        const response = await fetch('/v1/images/generate-batch', {
+        const response = await fetch('/api/image/batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -525,18 +524,11 @@ async function loadBatchHistory() {
 
  async function viewImage(imageId) {
     try {
-        const response = await fetch(`/v1/images/result/${imageId}`);
-        const data = await response.json();
-
-        if (!data.image_url) {
-            showToast('Image not available', 'error');
-            return;
-        }
-
+        const imageUrl = `/api/image/file/${imageId}`;
+        
         // Show image in lightbox
-        allImages = [data];
-        renderGallery([data]);
-        openLightbox(0);
+        document.getElementById('lightbox-image').src = imageUrl;
+        document.getElementById('image-lightbox').classList.remove('hidden');
 
     } catch (err) {
         showToast('Error: ' + err.message, 'error');
