@@ -235,7 +235,14 @@ def _set_setup_status(status: str, stage: str, progress: int, message: str, erro
 
 def _run_audio_setup() -> None:
     try:
-        _set_setup_status("running", "checking", 5, "Checking audio dependencies...")
+        _set_setup_status("running", "checking", 5, "Checking disk space and dependencies...")
+
+        # Check disk space (need ~2.5GB + some buffer = 3GB)
+        import shutil
+        total, used, free = shutil.disk_usage(Path.home())
+        free_gb = free / (1024**3)
+        if free_gb < 3.0:
+            raise RuntimeError(f"Insufficient disk space. Need at least 3GB, but only {free_gb:.1f}GB available.")
 
         if AUDIOCRAFT_AVAILABLE and TORCH_AVAILABLE:
             _set_setup_status("ready", "ready", 100, "Audio generation ready")

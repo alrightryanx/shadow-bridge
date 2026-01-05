@@ -56,6 +56,7 @@ IMAGE_MODE = len(sys.argv) > 1 and sys.argv[1] == "image"
 VIDEO_MODE = len(sys.argv) > 1 and sys.argv[1] == "video"
 AUDIO_MODE = len(sys.argv) > 1 and sys.argv[1] == "audio"
 WEB_SERVER_MODE = "--web-server" in sys.argv
+DEBUG_BUILD = "--debug" in sys.argv
 
 
 def run_image_command():
@@ -7412,9 +7413,25 @@ def run_audio_command():
             )
 
         elif args.command == "setup":
-            from web.services.audio_service import start_audio_setup
+            from web.services.audio_service import start_audio_setup, get_audio_setup_status
 
-            print_json(start_audio_setup())
+            print("Starting audio setup (PyTorch + AudioCraft)...")
+            start_audio_setup()
+            
+            # Wait for completion in CLI mode
+            last_msg = ""
+            while True:
+                status = get_audio_setup_status()
+                msg = status.get("message", "")
+                if msg != last_msg:
+                    print(f"[{status.get('stage', 'running')}] {msg}")
+                    last_msg = msg
+                
+                if status.get("status") in ["ready", "error"]:
+                    break
+                time.sleep(1)
+            
+            print_json(status)
 
         elif args.command == "list-models":
             from web.services.audio_service import DEFAULT_MODELS
