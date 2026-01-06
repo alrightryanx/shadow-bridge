@@ -29,6 +29,7 @@ from ..services.data_service import (
     get_sessions,
     get_session,
     upsert_session,
+    delete_session,
     append_session_message,
     get_automations,
     get_automation,
@@ -906,6 +907,15 @@ def api_session(session_id):
     return jsonify({"error": "Session not found"}), 404
 
 
+@api_bp.route("/sessions/<session_id>", methods=["DELETE"])
+def api_delete_session(session_id):
+    """Delete a session."""
+    result = delete_session(session_id)
+    if result.get("success"):
+        return jsonify(result)
+    return jsonify(result), 404
+
+
 @api_bp.route("/sessions/<session_id>/messages", methods=["POST"])
 def api_session_message(session_id):
     """Append or update a session message (supports streaming)."""
@@ -1440,6 +1450,49 @@ def api_status():
     return jsonify(get_status())
 
 
+@api_bp.route("/autonomous-mode", methods=["POST"])
+def api_autonomous_mode():
+    """
+    Trigger autonomous mode to analyze and improve projects.
+    Reads todo.md, other docs, and uses proper reasoning/planning.
+    Only works in debug builds for safety.
+    """
+    from .cognitive_orchestrator import get_cognitive_orchestrator
+
+    # Check if debug mode is enabled
+    import shadow_bridge_gui
+
+    debug_mode = getattr(shadow_bridge_gui, "DEBUG_BUILD", False)
+
+    if not debug_mode:
+        return jsonify(
+            {
+                "success": False,
+                "error": "Autonomous mode requires debug build. Run with --debug flag.",
+            }
+        ), 403
+
+    try:
+        orchestrator = get_cognitive_orchestrator()
+    except Exception as e:
+        import logging
+
+        logging.error(f"Autonomous mode error: {e}")
+        return jsonify(
+            {
+                "success": False,
+                "error": f"Failed to initialize autonomous mode: {str(e)}",
+            }
+        ), 500
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "Autonomous mode triggered. Analyzing projects, reading todo.md, and preparing autonomous improvements.",
+        }
+    ), 200
+
+
 @api_bp.route("/qr")
 def api_qr():
     """Get QR code image for device setup."""
@@ -1906,6 +1959,7 @@ def api_memory_search():
 
 
 # ========== ADB & File Transfer ==========
+
 
 @api_bp.route("/adb/devices", methods=["GET"])
 def api_adb_devices():

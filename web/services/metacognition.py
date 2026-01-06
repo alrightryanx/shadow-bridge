@@ -14,6 +14,8 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 import json
 
+from .llm_gateway import get_llm_gateway
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -46,86 +48,86 @@ class MetacognitiveLayer:
     Layer for higher-order cognitive functions.
     """
 
-    def __init__(self, ai_service=None):
-        self.ai_service = ai_service  # To use LLM for assessment
+    def __init__(self):
+        self.llm = get_llm_gateway()
 
-    def assess_query(self, query: str, context: Optional[Dict] = None) -> CognitiveAssessment:
+    async def assess_query(self, query: str, context: Optional[Dict] = None) -> CognitiveAssessment:
         """
-        Assess a user query before execution.
+        Assess a user query before execution using LLM.
+        """
+        system_prompt = """You are the Metacognitive Layer of ShadowAI.
+Your goal is to "think about the thinking" required for this query.
+Assess the RISK, AMBIGUITY, and MISSING INFORMATION.
+
+Return JSON:
+{
+  "confidence": 0.0-1.0,
+  "ambiguity_detected": true/false,
+  "missing_info": ["item1", ...],
+  "risk_level": "LOW/MEDIUM/HIGH",
+  "reasoning": "Why this assessment?",
+  "suggested_strategy": "DIRECT/DEBATE/CLARIFY"
+}"""
         
-        In a full implementation, this would call a fast LLM to evaluate.
-        For prototype, we use heuristics.
-        """
-        # Heuristic assessment
-        confidence = 0.9
-        ambiguity = False
-        missing = []
-        risk = "LOW"
-        reasoning = "Query appears straightforward."
-        strategy = "DIRECT_EXECUTION"
+        prompt = f"Assess Query: {query}\nContext: {json.dumps(context) if context else 'None'}"
+        
+        try:
+            assessment_data = await self.llm.ask_json(prompt, system_prompt)
+            return CognitiveAssessment(
+                query=query,
+                confidence=assessment_data.get("confidence", 0.5),
+                ambiguity_detected=assessment_data.get("ambiguity_detected", False),
+                missing_info=assessment_data.get("missing_info", []),
+                risk_level=assessment_data.get("risk_level", "LOW"),
+                reasoning=assessment_data.get("reasoning", "LLM Assessment"),
+                suggested_strategy=assessment_data.get("suggested_strategy", "DIRECT")
+            )
+        except Exception as e:
+            logger.error(f"Metacognitive assessment error: {e}")
+            # Fallback to heuristic
+            return self._heuristic_assessment(query, context)
 
+    def _heuristic_assessment(self, query: str, context: Optional[Dict] = None) -> CognitiveAssessment:
+        """Fallback heuristic assessment."""
         lower_q = query.lower()
-
-        # Ambiguity detection
-        if " it " in lower_q or " that " in lower_q or " this " in lower_q:
-            confidence -= 0.2
-            ambiguity = True
-            reasoning = "Query contains ambiguous pronouns ('it', 'that'). Context required."
-            strategy = "CLARIFY_OR_INFER"
-
-        # Missing info detection
-        if "email" in lower_q and "@" not in lower_q and "last" not in lower_q:
-             confidence -= 0.3
-             missing.append("recipient_email")
-             reasoning = "User asked to email but didn't specify recipient."
-             strategy = "ASK_CLARIFICATION"
-
-        # Risk assessment
-        if "delete" in lower_q or "remove" in lower_q or "kill" in lower_q:
-            risk = "MEDIUM"
-            if "all" in lower_q or "system" in lower_q:
-                risk = "HIGH"
-                confidence -= 0.1
-                reasoning = "Destructive command detected. High risk."
-                strategy = "REQUIRE_CONFIRMATION"
-
-        # Context improvement
-        if context and context.get("active_context"):
-            confidence += 0.1
-            reasoning += " Active context available."
-
+        risk = "HIGH" if "delete" in lower_q or "remove" in lower_q else "LOW"
         return CognitiveAssessment(
             query=query,
-            confidence=min(1.0, max(0.1, confidence)),
-            ambiguity_detected=ambiguity,
-            missing_info=missing,
+            confidence=0.5,
+            ambiguity_detected=False,
+            missing_info=[],
             risk_level=risk,
-            reasoning=reasoning,
-            suggested_strategy=strategy
+            reasoning="Fallback heuristic used.",
+            suggested_strategy="DIRECT"
         )
 
-    def critique_plan(self, plan: str, goal: str) -> SelfCritique:
+    async def critique_plan(self, plan: str, goal: str) -> SelfCritique:
         """
-        Self-critique a generated plan.
+        Self-critique a generated plan using LLM.
         """
-        critiques = []
-        score = 0.8
+        system_prompt = """Critique the following plan for achieving the goal.
+Be critical and identify potential failure points.
+
+Return JSON:
+{
+  "critique_points": ["point1", ...],
+  "score": 0.0-1.0,
+  "improved_plan": "..."
+}"""
         
-        # Heuristic critique
-        if len(plan.split()) < 5:
-            critiques.append("Plan is too brief.")
-            score -= 0.2
+        prompt = f"Goal: {goal}\nPlan: {plan}"
         
-        if "sudo" in plan:
-            critiques.append("Plan uses elevated privileges.")
-            score -= 0.1
-            
-        return SelfCritique(
-            original_plan=plan,
-            critique_points=critiques,
-            score=min(1.0, max(0.1, score)),
-            improved_plan=None # In real impl, would generate improvement
-        )
+        try:
+            critique_data = await self.llm.ask_json(prompt, system_prompt)
+            return SelfCritique(
+                original_plan=plan,
+                critique_points=critique_data.get("critique_points", []),
+                score=critique_data.get("score", 0.5),
+                improved_plan=critique_data.get("improved_plan")
+            )
+        except Exception as e:
+            logger.error(f"Critique error: {e}")
+            return SelfCritique(plan, ["Critique system error"], 0.5, None)
 
 # Global instance
 _metacognitive_layer: Optional[MetacognitiveLayer] = None

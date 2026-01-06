@@ -67,7 +67,21 @@
 <!-- Session Console -->
 <section class="section dashboard-card session-console">
     <div class="section-header">
-        <h2><span class="material-symbols-outlined">forum</span> Session Chats</h2>
+        <div class="session-header-left">
+            <h2><span class="material-symbols-outlined">forum</span> Session Chats</h2>
+            <div class="session-controls">
+                <select id="session-group-by" class="control-select" onchange="onSessionControlChange()">
+                    <option value="none">Show All</option>
+                    <option value="project">Group by Project</option>
+                    <option value="device">Group by Device</option>
+                </select>
+                <select id="session-sort-by" class="control-select" onchange="onSessionControlChange()">
+                    <option value="desc">Newest First</option>
+                    <option value="asc">Oldest First</option>
+                </select>
+                <button class="btn btn-small btn-secondary" onclick="clearAllSessions()">Clear All</button>
+            </div>
+        </div>
         <div class="session-title-editor">
             <input type="text" id="session-title-input" placeholder="Select a session to rename" />
             <button class="btn btn-small btn-primary" type="button" onclick="saveSessionTitle()">Save</button>
@@ -368,9 +382,9 @@ async function loadStats(deviceId) {
     }
 }
 
- async function loadSessionsPanel(deviceId, preserveSelection = false) {
+async function loadSessionsPanel(deviceId, preserveSelection = false) {
     try {
-        const sessions = await api.getSessions(deviceId, null, 50);
+        const sessions = await api.getSessions(deviceId, null, 100); // Load more for grouping/sorting
         dashboardSessions = Array.isArray(sessions) ? sessions : [];
         console.log('loadSessionsPanel: Loaded', dashboardSessions.length, 'sessions');
         renderSessionList(dashboardSessions, preserveSelection);
@@ -379,6 +393,10 @@ async function loadStats(deviceId) {
         dashboardSessions = [];
         renderSessionList([], false);
     }
+}
+
+function onSessionControlChange() {
+    renderSessionList(dashboardSessions, true);
 }
 
 function renderSessionList(sessions, preserveSelection) {
@@ -399,27 +417,42 @@ function renderSessionList(sessions, preserveSelection) {
         return;
     }
 
-    let nextSessionId = selectedSessionId;
-    if (!preserveSelection || !sessions.some(s => s.id === selectedSessionId)) {
-        nextSessionId = sessions[0].id;
+    const groupBy = document.getElementById('session-group-by').value;
+    const sortBy = document.getElementById('session-sort-by').value;
+
+    // 1. Sort
+    let processedSessions = [...sessions].sort((a, b) => {
+        const timeA = a.lastActivityAt || 0;
+        const timeB = b.lastActivityAt || 0;
+        return sortBy === 'asc' ? timeA - timeB : timeB - timeA;
+    });
+
+    // 2. Render
+    let html = '';
+    if (groupBy === 'none') {
+        html = processedSessions.map(s => renderSessionItem(s)).join('');
+    } else {
+        const groups = new Map();
+        processedSessions.forEach(s => {
+            const key = groupBy === 'project' 
+                ? (s.projectId || 'Unassigned') 
+                : (s.device_name || s.device_id || 'Unknown Device');
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(s);
+        });
+
+        groups.forEach((groupSessions, key) => {
+            html += `<div class="session-group-header">${escapeHtml(key)}</div>`;
+            html += groupSessions.map(s => renderSessionItem(s)).join('');
+        });
     }
 
-    container.innerHTML = sessions.map(s => {
-        const backend = formatBackendLabel(s);
-        const model = formatModelLabel(s);
-        const status = s.is_running ? 'Running' : 'Idle';
-        return `
-            <div class="session-list-item ${s.id === selectedSessionId ? 'active' : ''}" data-session-id="${s.id}" onclick="selectSession('${s.id}')">
-                <div class="session-list-title">${escapeHtml(s.title || 'New Session')}</div>
-                <div class="session-list-meta">
-                    <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
-                    <span>${escapeHtml(backend || 'Unknown')}</span>
-                    ${model ? `<span>${escapeHtml(model)}</span>` : ''}
-                </div>
-                <div class="session-list-sub">${escapeHtml(s.time_ago || '')} | ${s.message_count || 0} msgs</div>
-            </div>
-        `;
-    }).join('');
+    container.innerHTML = html;
+
+    let nextSessionId = selectedSessionId;
+    if (!preserveSelection || !sessions.some(s => s.id === selectedSessionId)) {
+        nextSessionId = processedSessions[0].id;
+    }
 
     if (nextSessionId) {
         selectedSessionId = nextSessionId;
@@ -432,6 +465,62 @@ function renderSessionList(sessions, preserveSelection) {
             });
         }
     }
+}
+
+function renderSessionItem(s) {
+    const backend = formatBackendLabel(s);
+    const status = s.is_running ? 'Running' : 'Idle';
+    return `
+        <div class="session-list-item ${s.id === selectedSessionId ? 'active' : ''}" data-session-id="${s.id}" onclick="selectSession('${s.id}')">
+            <div class="session-item-content">
+                <div class="session-list-title">${escapeHtml(s.title || 'New Session')}</div>
+                <div class="session-list-meta">
+                    <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
+                    <span>${escapeHtml(backend || 'Unknown')}</span>
+                </div>
+                <div class="session-list-sub">${escapeHtml(s.time_ago || '')} | ${s.message_count || 0} msgs</div>
+            </div>
+            <div class="session-delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Close Session">
+                <span class="material-symbols-outlined">close</span>
+            </div>
+        </div>
+    `;
+}
+
+async function deleteSession(sessionId) {
+    if (!confirm('Are you sure you want to close this session? It will be removed from the dashboard.')) return;
+
+    try {
+        const result = await api.deleteSession(sessionId);
+        if (result.success) {
+            showToast('Session closed', 'success');
+            dashboardSessions = dashboardSessions.filter(s => s.id !== sessionId);
+            renderSessionList(dashboardSessions, false);
+        } else {
+            showToast('Failed to close session: ' + result.error, 'error');
+        }
+    } catch (error) {
+        showToast('Error closing session', 'error');
+    }
+}
+
+async function clearAllSessions() {
+    if (!confirm('Are you sure you want to close ALL sessions shown here?')) return;
+    
+    // For simplicity, we'll just clear the local list first, but in a real app
+    // we'd probably want a bulk delete API.
+    let successCount = 0;
+    const toDelete = [...dashboardSessions];
+    
+    showToast(`Closing ${toDelete.length} sessions...`, 'info');
+    
+    for (const session of toDelete) {
+        const result = await api.deleteSession(session.id);
+        if (result.success) successCount++;
+    }
+    
+    loadSessionsPanel(getDeviceIdParam());
+    showToast(`Closed ${successCount} sessions`, 'success');
 }
 
 function selectSessionFromCard(sessionId) {
@@ -493,13 +582,38 @@ function renderSessionMessages(messages) {
 function renderSessionMessage(message) {
     const role = String(message.role || 'assistant').toLowerCase();
     const id = message.id || message.messageId || `msg_${message.timestamp || Date.now()}`;
-    const content = message.content || '';
+    let content = (message.content || '').trim();
     const timeLabel = formatTimeShort(message.timestamp);
-    const safeContent = escapeHtml(content).replace(/\n/g, '<br>');
+    
+    // Improved formatting for JSON blobs, technical logs, or Python dict strings
+    let displayContent = '';
+    
+    // Detection logic for technical/structured content
+    const looksTechnical = (content.startsWith('{') || content.startsWith('[')) && content.length > 60;
+    
+    if (looksTechnical) {
+        try {
+            // Try standard JSON first
+            const parsed = JSON.parse(content);
+            displayContent = `<pre class="code-block json-content"><code>${escapeHtml(JSON.stringify(parsed, null, 2))}</code></pre>`;
+        } catch (e) {
+            // If not valid JSON, check if it looks like a Python dict string (has 'key': 'value')
+            if (content.includes("': '") || content.includes("': {")) {
+                // Wrap in pre/code but don't attempt to re-format as JSON
+                displayContent = `<pre class="code-block technical-content"><code>${escapeHtml(content)}</code></pre>`;
+            } else {
+                // Fallback to standard rendering but still use pre if it's large and structured
+                displayContent = `<pre class="code-block"><code>${escapeHtml(content)}</code></pre>`;
+            }
+        }
+    } else {
+        displayContent = escapeHtml(content).replace(/\n/g, '<br>');
+    }
+
     return `
         <div class="session-msg ${role}" data-message-id="${id}">
             <div class="session-msg-role">${escapeHtml(role)}</div>
-            <div class="session-msg-content">${safeContent}</div>
+            <div class="session-msg-content">${displayContent}</div>
             <div class="session-msg-meta">${timeLabel}</div>
         </div>
     `;
@@ -1199,20 +1313,51 @@ function getTimeAgo(date) {
     border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: 10px;
     padding: 8px;
-    max-height: 420px;
+    max-height: 700px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
 
+.session-console .section-header {
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.session-header-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.session-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.control-select {
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font-size: 12px;
+    cursor: pointer;
+}
+
 .session-list-item {
+    position: relative;
     padding: 8px;
     border-radius: 8px;
     border: 1px solid transparent;
     cursor: pointer;
     transition: all 0.15s;
     background: var(--md-sys-color-surface);
+    overflow: hidden;
+    user-select: none;
 }
 
 .session-list-item:hover {
@@ -1223,6 +1368,47 @@ function getTimeAgo(date) {
 .session-list-item.active {
     border-color: var(--accent);
     background: rgba(var(--accent-rgb), 0.12);
+}
+
+.session-item-content {
+    transition: transform 0.2s ease;
+}
+
+.session-list-item:hover .session-delete-btn {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.session-delete-btn {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 50px;
+    background: var(--md-sys-color-error);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: translateX(100%);
+    opacity: 0;
+    transition: all 0.2s ease;
+    z-index: 5;
+}
+
+.session-delete-btn:hover {
+    background: #d32f2f;
+}
+
+.session-group-header {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 8px 4px 4px 4px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    margin-bottom: 4px;
 }
 
 .session-list-title {
@@ -1256,7 +1442,9 @@ function getTimeAgo(date) {
     border-radius: 10px;
     display: flex;
     flex-direction: column;
+    height: 700px;
     min-height: 420px;
+    min-width: 0; /* Fix for layout expansion */
 }
 
 .session-meta {
@@ -1296,6 +1484,8 @@ function getTimeAgo(date) {
     display: flex;
     flex-direction: column;
     gap: 10px;
+    min-width: 0;
+    max-height: 100%;
 }
 
 .session-msg {
@@ -1303,7 +1493,10 @@ function getTimeAgo(date) {
     border-radius: 10px;
     border: 1px solid var(--md-sys-color-outline-variant);
     background: var(--md-sys-color-surface-variant);
-    max-width: 92%;
+    max-width: 95%;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    word-break: break-word;
 }
 
 .session-msg.user {
@@ -1336,6 +1529,31 @@ function getTimeAgo(date) {
     color: var(--md-sys-color-on-surface);
     margin-top: 4px;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+}
+
+.code-block {
+    margin: 8px 0;
+    padding: 10px;
+    background: var(--md-sys-color-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    max-width: 100%;
+}
+
+.code-block code {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+}
+
+.json-content code {
+    color: var(--accent-light);
 }
 
 .session-msg-meta {

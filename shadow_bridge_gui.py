@@ -1687,6 +1687,158 @@ def create_app_icon(size=64):
     return img
 
 
+import upnpy
+import requests
+
+class UPnPManager:
+    """
+    Handles automatic port forwarding via UPnP and Public IP discovery.
+    Ensures SSH (22) and Signaling (19287) are reachable from outside.
+    """
+    def __init__(self):
+        self.upnp = upnpy.UPnP()
+        self.public_ip = None
+        self.is_mapped = False
+        self.mappings = [
+            {"port": 22, "proto": "TCP", "desc": "Shadow SSH"},
+            {"port": 19287, "proto": "UDP", "desc": "Shadow Signaling"}
+        ]
+
+    def discover_and_map(self):
+        """Discover UPnP devices and map required ports."""
+        threading.Thread(target=self._run_discovery, daemon=True).start()
+
+    def _run_discovery(self):
+        try:
+            # 1. Discover Public IP (Reliable way)
+            try:
+                response = requests.get("https://api.ipify.org?format=json", timeout=5)
+                if response.status_code == 200:
+                    self.public_ip = response.json().get("ip")
+                    log.info(f"Public IP discovered: {self.public_ip}")
+            except Exception as e:
+                log.warning(f"Could not discover Public IP: {e}")
+
+            # 2. UPnP Port Mapping
+            devices = self.upnp.discover()
+            if not devices:
+                log.info("No UPnP devices found on network.")
+                return
+
+            # Get the IGD (Internet Gateway Device)
+            device = self.upnp.get_igd()
+            if not device:
+                log.info("No Internet Gateway Device found for UPnP.")
+                return
+
+            # Get the AddPortMapping service
+            service = device.get_service('WANIPConnection.1') or device.get_service('WANPPPConnection.1')
+            if not service:
+                log.info("UPnP Connection service not found.")
+                return
+
+            local_ip = get_local_ip()
+            success_count = 0
+            
+            for mapping in self.mappings:
+                try:
+                    # Check if already mapped (best effort)
+                    # We try to add it; if it exists, most routers just update/ignore
+                    service.AddPortMapping(
+                        NewRemoteHost='',
+                        NewExternalPort=mapping["port"],
+                        NewProtocol=mapping["proto"],
+                        NewInternalPort=mapping["port"],
+                        NewInternalClient=local_ip,
+                        NewEnabled=1,
+                        NewPortMappingDescription=mapping["desc"],
+                        NewLeaseDuration=0 # Permanent until reboot
+                    )
+                    log.info(f"UPnP: Mapped {mapping['proto']} {mapping['port']} to {local_ip}")
+                    success_count += 1
+                except Exception as e:
+                    log.warning(f"UPnP mapping failed for {mapping['port']}: {e}")
+
+            self.is_mapped = success_count > 0
+            if self.is_mapped:
+                log.info(f"UPnP auto-mapping successful ({success_count}/{len(self.mappings)})")
+
+        except Exception as e:
+            log.error(f"UPnP discovery error: {e}")
+
+    def get_public_ip(self):
+        return self.public_ip
+
+
+class SignalingService(threading.Thread):
+    """
+    UDP Signaling Service for rapid roaming and instant discovery.
+    Listens for heartbeats from the Android app and maintains active 
+    NAT mappings to ensure SSH can connect instantly.
+    """
+    PORT = 19287
+    MAGIC = b"SHADOW_SIGNAL_V1"
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.running = True
+        self.sock = None
+        self.active_devices = {}  # device_id -> {last_ip, last_seen, last_latency}
+        self._lock = threading.Lock()
+
+    def run(self):
+        log.info(f"Starting Signaling Service on UDP {self.PORT}")
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock.bind(("", self.PORT))
+            self.sock.settimeout(1.0)
+            
+            while self.running:
+                try:
+                    data, addr = self.sock.recvfrom(1024)
+                    if data.startswith(self.MAGIC):
+                        self._handle_signal(data, addr)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.running:
+                        log.error(f"Signaling error: {e}")
+                    time.sleep(1)
+        except Exception as e:
+            log.error(f"Signaling service failed to start: {e}")
+
+    def _handle_signal(self, data, addr):
+        try:
+            # Format: MAGIC | device_id | status_json
+            parts = data[len(self.MAGIC):].split(b"|", 1)
+            if len(parts) < 2: return
+            
+            device_id = parts[0].decode('utf-8')
+            status_json = json.loads(parts[1].decode('utf-8'))
+            
+            with self._lock:
+                is_new = device_id not in self.active_devices
+                self.active_devices[device_id] = {
+                    "ip": addr[0],
+                    "last_seen": time.time(),
+                    "status": status_json
+                }
+                
+            # Send immediate ACK to help Android app measure RTT and confirm NAT mapping
+            ack_data = self.MAGIC + b"ACK|" + json.dumps({"timestamp": time.time()}).encode('utf-8')
+            self.sock.sendto(ack_data, addr)
+            
+            if is_new:
+                log.info(f"Instant discovery: New device {device_id} signaled from {addr[0]}")
+        except Exception as e:
+            log.debug(f"Failed to handle signal: {e}")
+
+    def stop(self):
+        self.running = False
+        if self.sock:
+            self.sock.close()
+
+
 class DataReceiver(threading.Thread):
     """TCP server that receives project and notes data from Android app.
 
@@ -3316,52 +3468,277 @@ class CompanionRelayServer(threading.Thread):
             except Exception as e:
                 log.debug(f"Could not notify web dashboard: {e}")
 
-        threading.Thread(target=do_notify, daemon=True).start()
+                threading.Thread(target=do_notify, daemon=True).start()
 
-    def _notify_web_dashboard_session_message(
-        self, session_id, message, is_update=False
-    ):
-        """Send a session message update to the web dashboard."""
+        
 
-        def do_notify():
-            try:
-                import urllib.request
-                import json as json_module
+        
 
-                payload = json_module.dumps(
-                    {
-                        "session_id": session_id,
-                        "message": message,
-                        "is_update": bool(is_update),
-                    }
-                ).encode("utf-8")
-                req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/sessions/message",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                urllib.request.urlopen(req, timeout=2)
-            except Exception as e:
-                log.debug(f"Could not notify web dashboard: {e}")
+        def _notify_web_dashboard_session_message(
 
-        threading.Thread(target=do_notify, daemon=True).start()
+        
 
-    def _start_transcript_watcher(self, transcript_path):
-        """Start watching a transcript file for new content."""
-        if not transcript_path or not os.path.exists(transcript_path):
-            log.warning(f"Transcript path invalid or doesn't exist: {transcript_path}")
-            return
+        
 
-        self._stop_transcript_watcher()
+            self, session_id, message, is_update=False
 
-        self._transcript_path = transcript_path
-        self._transcript_last_pos = (
-            os.path.getsize(transcript_path) if os.path.exists(transcript_path) else 0
-        )
-        self._transcript_stop_event.clear()
+        
 
-        self._transcript_watcher_thread = threading.Thread(
+        
+
+        ):
+
+        
+
+        
+
+            """Send a session message update to the web dashboard."""
+
+        
+
+        
+
+    
+
+        
+
+        
+
+            def do_notify():
+
+        
+
+        
+
+                try:
+
+        
+
+        
+
+                    import urllib.request
+
+        
+
+        
+
+                    import json as json_module
+
+        
+
+        
+
+    
+
+        
+
+        
+
+                    payload = json_module.dumps(
+
+        
+
+        
+
+                        {
+
+        
+
+        
+
+                            "session_id": session_id,
+
+        
+
+        
+
+                            "message": message,
+
+        
+
+        
+
+                            "is_update": bool(is_update),
+
+        
+
+        
+
+                        }
+
+        
+
+        
+
+                    ).encode("utf-8")
+
+        
+
+        
+
+                    req = urllib.request.Request(
+
+        
+
+        
+
+                        "http://127.0.0.1:6767/api/sessions/message",
+
+        
+
+        
+
+                        data=payload,
+
+        
+
+        
+
+                        headers={"Content-Type": "application/json"},
+
+        
+
+        
+
+                        method="POST",
+
+        
+
+        
+
+                    )
+
+        
+
+        
+
+                    urllib.request.urlopen(req, timeout=2)
+
+        
+
+        
+
+                except Exception as e:
+
+        
+
+        
+
+                    log.debug(f"Could not notify web dashboard: {e}")
+
+        
+
+        
+
+    
+
+        
+
+        
+
+            # Run in background thread to not block the relay
+
+        
+
+        
+
+            threading.Thread(target=do_notify, daemon=True).start()
+
+        
+
+        
+
+    
+
+        
+
+        
+
+        def _start_transcript_watcher(self, transcript_path):
+
+        
+
+        
+
+            """Start watching a transcript file for new content."""
+
+        
+
+        
+
+            if not transcript_path or not os.path.exists(transcript_path):
+
+        
+
+        
+
+                log.warning(f"Transcript path invalid or doesn't exist: {transcript_path}")
+
+        
+
+        
+
+                return
+
+        
+
+        
+
+    
+
+        
+
+        
+
+            self._stop_transcript_watcher()
+
+        
+
+        
+
+    
+
+        
+
+        
+
+            self._transcript_path = transcript_path
+
+        
+
+        
+
+            self._transcript_last_pos = (
+
+        
+
+        
+
+                os.path.getsize(transcript_path) if os.path.exists(transcript_path) else 0
+
+        
+
+        
+
+            )
+
+        
+
+        
+
+            self._transcript_stop_event.clear()
+
+        
+
+        
+
+    
+
+        
+
+        
+
+            self._transcript_watcher_thread = threading.Thread(
             target=self._watch_transcript, daemon=True
         )
         self._transcript_watcher_thread.start()
@@ -3934,17 +4311,21 @@ class DiscoveryServer(threading.Thread):
         try:
             self.sock.bind(("", DISCOVERY_PORT))
             self.sock.settimeout(1.0)
+            log.info(f"Discovery server listening on UDP {DISCOVERY_PORT}")
             while self.running:
                 try:
                     data, addr = self.sock.recvfrom(1024)
                     if data.startswith(DISCOVERY_MAGIC):
+                        log.debug(f"Received discovery request from {addr[0]}")
+                        # Refresh info before responding to ensure IPs are current
                         response = (
                             DISCOVERY_MAGIC + json.dumps(self.connection_info).encode()
                         )
                         self.sock.sendto(response, addr)
                 except socket.timeout:
                     continue
-                except Exception:
+                except Exception as e:
+                    log.debug(f"Discovery error: {e}")
                     pass
         finally:
             if self.sock:
@@ -3955,6 +4336,157 @@ class DiscoveryServer(threading.Thread):
 
     def update_info(self, info):
         self.connection_info = info
+
+
+
+
+class CloudSyncService(threading.Thread):
+
+    """
+
+    Background service that pushes local ShadowBridge data (~/.shadowai/*.json)
+
+    to the Central Cloud Backend (api.driver.ai).
+
+    """
+
+    SYNC_INTERVAL = 300  # 5 minutes
+
+        
+
+    def __init__(self):
+
+        super().__init__(daemon=True)
+
+        self.running = True
+
+        self.api_token = None
+
+        self.base_url = "https://api.driver.ai/v1/content"
+
+        self._load_token()
+
+        
+
+    def _load_token(self):
+
+        """Try to find the API token from connected devices or settings."""
+
+        try:
+
+            if os.path.exists(SETTINGS_FILE):
+
+                with open(SETTINGS_FILE, "r") as f:
+
+                    settings = json.load(f)
+
+                    self.api_token = settings.get("cloud_api_token")
+
+        except Exception:
+
+            pass
+
+        
+
+    def run(self):
+
+        log.info("Cloud Sync Service starting...")
+
+        while self.running:
+
+            if self.api_token:
+
+                try:
+
+                    self._perform_sync()
+
+                except Exception as e:
+
+                    log.error(f"Cloud sync error: {e}")
+
+                    
+
+            time.sleep(self.SYNC_INTERVAL)
+
+        
+
+    def _perform_sync(self):
+
+        """Push local JSON data to cloud."""
+
+        # Sync Projects
+
+        if os.path.exists(PROJECTS_FILE):
+
+            with open(PROJECTS_FILE, "r") as f:
+
+                data = json.load(f)
+
+                # Projects are under devices in this file
+
+                for device_id, device_info in data.get("devices", {}).items():
+
+                    projects = device_info.get("projects", [])
+
+                    for proj in projects:
+
+                        self._push_to_cloud("projects", proj)
+
+        
+
+        # Sync Notes
+
+        if os.path.exists(NOTES_FILE):
+
+            with open(NOTES_FILE, "r") as f:
+
+                data = json.load(f)
+
+                for device_id, device_info in data.get("devices", {}).items():
+
+                    notes = device_info.get("notes", [])
+
+                    for note in notes:
+
+                        self._push_to_cloud("notes", note)
+
+        
+
+    def _push_to_cloud(self, endpoint, payload):
+
+        """HTTP POST to cloud backend."""
+
+        try:
+
+            import requests
+
+            headers = {"Authorization": f"Bearer {self.api_token}"}
+
+            url = f"{self.base_url}/{endpoint}"
+
+                    
+
+            # Re-map local fields to backend fields if necessary
+
+            # Backend expects project: {name, description, path, metadata}
+
+            # Backend expects note: {title, content, project_id, category, tags}
+
+                    
+
+            res = requests.post(url, json=payload, headers=headers, timeout=10)
+
+            if res.status_code == 201:
+
+                log.debug(f"Synced {endpoint} item to cloud: {payload.get('id')}")
+
+        except Exception as e:
+
+            log.debug(f"Cloud sync item failed: {e}")
+
+        
+
+        
 
 
 class ShadowBridgeApp:
@@ -4036,6 +4568,14 @@ class ShadowBridgeApp:
         self._tool_poll_job = None
 
         self._auto_web_dashboard_attempts = 0
+
+        # Start Signaling Service for instant discovery/roaming
+        self.signaling_service = SignalingService()
+        self.signaling_service.start()
+
+        # Start UPnP Port Mapping
+        self.upnp_manager = UPnPManager()
+        self.upnp_manager.discover_and_map()
 
         # Setup modern styles
         self.setup_styles()
@@ -4711,6 +5251,9 @@ class ShadowBridgeApp:
 
         # Also start companion relay for Claude Code plugin
         self.start_companion_relay()
+        
+        # Start Cloud Sync
+        self.start_cloud_sync()
 
     def start_companion_relay(self):
         """Start TCP relay server for Claude Code Companion feature."""
@@ -4722,6 +5265,15 @@ class ShadowBridgeApp:
             log.info(f"Companion relay started on port {COMPANION_PORT}")
         except Exception as e:
             log.error(f"Failed to start companion relay: {e}")
+
+    def start_cloud_sync(self):
+        """Start background cloud sync service."""
+        try:
+            self.cloud_sync = CloudSyncService()
+            self.cloud_sync.start()
+            log.info("Cloud sync service started")
+        except Exception as e:
+            log.error(f"Failed to start cloud sync: {e}")
 
     def on_companion_status_change(self, status, port):
         """Called when companion relay status changes."""
@@ -4998,6 +5550,7 @@ class ShadowBridgeApp:
         tailscale_ip = get_tailscale_ip()
         local_ip = get_local_ip()
         hostname_local = get_hostname_local()
+        public_ip = self.upnp_manager.get_public_ip()
 
         # Get the dynamic encryption salt for note sync (Phase 5.3 requirement)
         try:
@@ -5017,7 +5570,13 @@ class ShadowBridgeApp:
                 {"host": tailscale_ip, "type": "tailscale", "stable": True}
             )
 
-        # 2. Hostname.local (stable on local network even if IP changes)
+        # 2. Public IP (Direct internet access via UPnP)
+        if public_ip:
+            hosts_to_try.append(
+                {"host": public_ip, "type": "public", "stable": True}
+            )
+
+        # 3. Hostname.local (stable on local network even if IP changes)
         if hostname_local:
             hosts_to_try.append(
                 {"host": hostname_local, "type": "mdns", "stable": True}
@@ -6019,6 +6578,8 @@ Or run in PowerShell (Admin):
         self._stop_web_dashboard_monitor()
         self._save_window_state()
         self.stop_broadcast()
+        if hasattr(self, 'signaling_service') and self.signaling_service:
+            self.signaling_service.stop()
         if self.data_receiver:
             try:
                 self.data_receiver.stop()
@@ -6047,6 +6608,8 @@ Or run in PowerShell (Admin):
         """Force exit of application immediately."""
         self._stop_web_dashboard_monitor()
         self.stop_broadcast()
+        if hasattr(self, 'signaling_service') and self.signaling_service:
+            self.signaling_service.stop()
         if self.data_receiver:
             try:
                 self.data_receiver.stop()

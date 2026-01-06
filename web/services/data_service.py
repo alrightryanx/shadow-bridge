@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+# Import notifier
+from .notifier_service import get_notifier
+
 # SECURITY: Thread lock for file I/O operations to prevent race conditions
 _file_lock = threading.Lock()
 
@@ -746,6 +749,29 @@ def upsert_session(session: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def delete_session(session_id: str) -> Dict[str, Any]:
+    """Delete a session from the local cache."""
+    data = _load_sessions_file()
+    sessions = data.get("sessions", {})
+
+    if session_id in sessions:
+        del sessions[session_id]
+        data["sessions"] = sessions
+        _write_json_file(SESSIONS_FILE, data)
+        return {"success": True, "message": "Session deleted"}
+    
+    # Check backward compatibility list-style sessions
+    if isinstance(sessions, list):
+        original_len = len(sessions)
+        sessions = [s for s in sessions if (s.get("id") != session_id and s.get("sessionId") != session_id)]
+        if len(sessions) < original_len:
+            data["sessions"] = sessions
+            _write_json_file(SESSIONS_FILE, data)
+            return {"success": True, "message": "Session deleted"}
+
+    return {"success": False, "error": "Session not found"}
+
+
 def save_sessions_from_device(
     device_id: str, device_name: str, sessions: List[Dict[str, Any]]
 ) -> bool:
@@ -872,9 +898,23 @@ def append_session_message(
     session["title"] = _session_title(session)
     sessions[session_id] = session
     data["sessions"] = sessions
-    _write_json_file(SESSIONS_FILE, data)
+    if is_final and content:
+        # Trigger background quality sentinel check
+        notifier = get_notifier()
+        provider = session.get("provider", "shadow")
+        
+        # Determine content type for sentinel
+        content_type = "prompt" if role == "user" else "response"
+        
+        # Non-blocking check (since we are in data service)
+        def check_quality():
+            notifier.notify_quality_issue(content, content_type, session_id, provider)
+            
+        import threading
+        threading.Thread(target=check_quality, daemon=True).start()
 
-    return {"session": session, "message": message}
+    _write_json_file(SESSIONS_FILE, data)
+    return session
 
 
 def delete_note(note_id: str) -> Dict:
@@ -1322,6 +1362,16 @@ def get_status() -> Dict:
     except (socket.gaierror, socket.herror, OSError):
         local_ip = "127.0.0.1"
 
+    # Check for debug mode
+    debug_mode = False
+    try:
+        # Import at function level to avoid circular import
+        import shadow_bridge_gui
+
+        debug_mode = getattr(shadow_bridge_gui, "DEBUG_BUILD", False)
+    except (ImportError, AttributeError):
+        pass
+
     return {
         "shadowbridge_running": shadowbridge_running,
         "devices_connected": len(online_devices),
@@ -1332,6 +1382,7 @@ def get_status() -> Dict:
         "version": "1.031",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
+        "debug_mode": debug_mode,
     }
 
 
@@ -1978,15 +2029,34 @@ def get_workflows() -> List[Dict]:
 def start_workflow(workflow_type: str, options: Dict) -> Dict:
     """Start a new workflow."""
     file_data = _read_json_file(WORKFLOWS_FILE) or {"workflows": []}
+    
+    workflow_id = _generate_id()
     workflow = {
-        "id": _generate_id(),
+        "id": workflow_id,
         "type": workflow_type,
         "name": f"{workflow_type.replace('_', ' ').title()} Workflow",
-        "status": "PENDING",
-        "current_stage": "Starting",
-        "progress": 0,
+        "status": "RUNNING",
+        "current_stage": "Initializing Agents",
+        "progress": 5,
         "started_at": int(datetime.now().timestamp() * 1000),
     }
+    
+    # If it's an agent-based workflow, trigger the background process
+    if workflow_type == "AGENT_STAFF":
+        task = options.get("task", "AGI Project")
+        team = options.get("team", "dev")
+        # Trigger background shadow_agent execution
+        import subprocess
+        try:
+            # We run this detached to not block the API
+            cmd = f"python -m shadow_agent --team {team} --task \"{task}\""
+            subprocess.Popen(cmd, shell=True)
+            workflow["current_stage"] = f"Team '{team}' working on task"
+        except Exception as e:
+            logger.error(f"Failed to start shadow_agent: {e}")
+            workflow["status"] = "FAILED"
+            workflow["error"] = str(e)
+
     file_data["workflows"].append(workflow)
     _write_json_file(WORKFLOWS_FILE, file_data)
     return {"success": True, "workflow": workflow}

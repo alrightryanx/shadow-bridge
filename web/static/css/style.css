@@ -1,49 +1,49 @@
 /* ShadowAI Web Dashboard - M3 Glassmorphism Theme */
 
 :root {
-    /* M3 Color System - Dark Theme with Claude Terracotta */
-    --md-sys-color-primary: #e8967a;
-    --md-sys-color-on-primary: #5c3021;
-    --md-sys-color-primary-container: #a8502e;
-    --md-sys-color-on-primary-container: #faf0eb;
+    /* M3 Color System - Dark Theme with Neutral Greys and Deeper Terracotta */
+    --md-sys-color-primary: #d97757;
+    --md-sys-color-on-primary: #451f15;
+    --md-sys-color-primary-container: #8c3d25;
+    --md-sys-color-on-primary-container: #fcece8;
 
-    --md-sys-color-secondary: #d8c2b8;
-    --md-sys-color-on-secondary: #3d352c;
-    --md-sys-color-secondary-container: #4d453c;
-    --md-sys-color-on-secondary-container: #faf0eb;
+    --md-sys-color-secondary: #c0c0c0;
+    --md-sys-color-on-secondary: #2a2a2a;
+    --md-sys-color-secondary-container: #3d3d3d;
+    --md-sys-color-on-secondary-container: #eeeeee;
 
-    --md-sys-color-tertiary: #d4a85a;
-    --md-sys-color-on-tertiary: #3d3015;
-    --md-sys-color-tertiary-container: #5b4a2a;
-    --md-sys-color-on-tertiary-container: #fef3d8;
+    --md-sys-color-tertiary: #c5a358;
+    --md-sys-color-on-tertiary: #332a10;
+    --md-sys-color-tertiary-container: #4d401a;
+    --md-sys-color-on-tertiary-container: #fef1d0;
 
     --md-sys-color-error: #ffb4ab;
     --md-sys-color-on-error: #690005;
     --md-sys-color-error-container: #93000a;
     --md-sys-color-on-error-container: #ffdad6;
 
-    --md-sys-color-background: #1a1714;
-    --md-sys-color-on-background: #f0e8e2;
-    --md-sys-color-surface: #211d19;
-    --md-sys-color-on-surface: #f0e8e2;
-    --md-sys-color-surface-variant: #2a251f;
-    --md-sys-color-on-surface-variant: #d8c8b8;
-    --md-sys-color-outline: #a09080;
-    --md-sys-color-outline-variant: #4d443a;
+    --md-sys-color-background: #0f0f0f;
+    --md-sys-color-on-background: #e6e1e0;
+    --md-sys-color-surface: #1a1a1a;
+    --md-sys-color-on-surface: #e6e1e0;
+    --md-sys-color-surface-variant: #262626;
+    --md-sys-color-on-surface-variant: #c7c7c7;
+    --md-sys-color-outline: #8e8e8e;
+    --md-sys-color-outline-variant: #3d3d3d;
 
-    /* Glass effect colors */
-    --glass-bg: rgba(42, 37, 31, 0.6);
-    --glass-bg-elevated: rgba(52, 45, 38, 0.7);
-    --glass-border: rgba(250, 246, 241, 0.08);
-    --glass-highlight: rgba(250, 246, 241, 0.05);
+    /* Glass effect colors - shifted to neutral dark */
+    --glass-bg: rgba(26, 26, 26, 0.7);
+    --glass-bg-elevated: rgba(38, 38, 38, 0.8);
+    --glass-border: rgba(255, 255, 255, 0.06);
+    --glass-highlight: rgba(255, 255, 255, 0.03);
 
-    /* Accent */
-    --accent: #D97757;
-    --accent-light: #e8967a;
-    --accent-variant: #c4613f;
-    --accent-container: rgba(217, 119, 87, 0.15);
+    /* Accent - Darker, richer Terracotta */
+    --accent: #c4613f;
+    --accent-light: #d97757;
+    --accent-variant: #a8502e;
+    --accent-container: rgba(196, 97, 63, 0.12);
     --on-accent: #ffffff;
-    --on-accent-container: #5c3021;
+    --on-accent-container: #451f15;
 
     /* Surface containers */
     --surface-container: #2a251f;
@@ -224,6 +224,8 @@ body {
     min-height: 100vh;
     overflow-x: hidden; /* Prevent horizontal scrollbar */
     width: 100%;
+    overflow-wrap: break-word; /* Added global overflow wrap */
+    word-wrap: break-word;      /* Legacy support */
 
     /* Animated gradient background */
     background:

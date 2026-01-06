@@ -1,21 +1,11 @@
-"""
-Multi-Model Debate System - AGI-Readiness
-
-Implements a system where multiple AI personas debate a topic 
-to reach a higher-quality consensus:
-1. Propose: Initial solutions from different perspectives.
-2. Critique: Each persona critiques the others' solutions.
-3. Refine: Personas update their solutions based on feedback.
-4. Synthesize: A moderator synthesizes the final consensus.
-
-AGI-Readiness: Reduces bias and increases reasoning quality through adversarial collaboration.
-"""
 import logging
 import asyncio
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 import json
 import time
+
+from .llm_gateway import get_llm_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +52,8 @@ class MultiModelDebateSystem:
     Orchestrates a debate between multiple AI personas.
     """
 
-    def __init__(self, ai_provider=None):
-        self.ai_provider = ai_provider
+    def __init__(self):
+        self.llm = get_llm_gateway()
         self.default_personas = [
             DebatePersona(
                 name="Optimist",
@@ -90,7 +80,7 @@ class MultiModelDebateSystem:
         personas: Optional[List[DebatePersona]] = None
     ) -> DebateSession:
         """
-        Conduct a debate session.
+        Conduct a debate session using the LLM Gateway.
         """
         import uuid
         session_id = str(uuid.uuid4())[:8]
@@ -110,8 +100,7 @@ class MultiModelDebateSystem:
             logger.info(f"Debate {session_id}: Round 1 (Proposals)")
             proposals = []
             for persona in active_personas:
-                # In real impl, call AI provider with persona-specific prompt
-                content = self._simulate_response(persona, topic, "PROPOSAL")
+                content = await self._call_persona(persona, topic, "PROPOSAL")
                 turn = DebateTurn(persona.name, content, "PROPOSAL")
                 session.turns.append(turn)
                 proposals.append(turn)
@@ -124,7 +113,7 @@ class MultiModelDebateSystem:
                 critiques = []
                 for persona in active_personas:
                     others_work = [p.content for p in proposals if p.persona_name != persona.name]
-                    content = self._simulate_response(persona, topic, "CRITIQUE", context=others_work)
+                    content = await self._call_persona(persona, topic, "CRITIQUE", context=others_work)
                     turn = DebateTurn(persona.name, content, "CRITIQUE")
                     session.turns.append(turn)
                     critiques.append(turn)
@@ -133,7 +122,7 @@ class MultiModelDebateSystem:
                 new_proposals = []
                 for persona in active_personas:
                     my_critiques = [c.content for c in critiques if c.persona_name != persona.name]
-                    content = self._simulate_response(persona, topic, "REFINEMENT", context=my_critiques)
+                    content = await self._call_persona(persona, topic, "REFINEMENT", context=my_critiques)
                     turn = DebateTurn(persona.name, content, "REFINEMENT")
                     session.turns.append(turn)
                     new_proposals.append(turn)
@@ -142,7 +131,7 @@ class MultiModelDebateSystem:
 
             # Final Phase: Synthesis
             logger.info(f"Debate {session_id}: Synthesis")
-            session.consensus = self._simulate_synthesis(topic, session.turns)
+            session.consensus = await self._call_moderator(topic, session.turns)
             session.status = "COMPLETED"
 
         except Exception as e:
@@ -152,31 +141,32 @@ class MultiModelDebateSystem:
 
         return session
 
-    def _simulate_response(self, persona: DebatePersona, topic: str, turn_type: str, context: Optional[List[str]] = None) -> str:
-        """
-        Simulate an AI response for the prototype.
-        In production, this calls the LLM with a specialized prompt.
-        """
-        if turn_type == "PROPOSAL":
-            if persona.name == "Optimist":
-                return f"[Optimist View] This is a brilliant idea for '{topic}'. We should scale it globally using cutting-edge tech."
-            if persona.name == "Skeptic":
-                return f"[Skeptic View] I have concerns about '{topic}'. The security risks and scaling costs are too high."
-            return f"[Realist View] For '{topic}', we need a phased approach with clear KPIs and a solid budget."
+    async def _call_persona(self, persona: DebatePersona, topic: str, turn_type: str, context: Optional[List[str]] = None) -> str:
+        """Call the LLM with a persona-specific prompt."""
+        system_prompt = f"You are the {persona.name} persona ({persona.role}). {persona.description}"
         
-        if turn_type == "CRITIQUE":
-            return f"[{persona.name} Critique] I've reviewed the other proposals. They miss the point about {context[0][:20]}..."
-            
-        if turn_type == "REFINEMENT":
-            return f"[{persona.name} Refined] Based on the feedback, I've updated the plan for '{topic}' to be more robust."
-            
-        return "Thinking..."
+        if turn_type == "PROPOSAL":
+            prompt = f"Provide a detailed proposal for the topic: '{topic}'"
+        elif turn_type == "CRITIQUE":
+            others = "\n\n".join(context or [])
+            prompt = f"Critique the following proposals for the topic '{topic}':\n\n{others}\n\nFocus on your unique perspective."
+        elif turn_type == "REFINEMENT":
+            critiques = "\n\n".join(context or [])
+            prompt = f"Refine your proposal for '{topic}' based on these critiques:\n\n{critiques}"
+        else:
+            prompt = topic
 
-    def _simulate_synthesis(self, topic: str, turns: List[DebateTurn]) -> str:
-        """
-        Simulate the moderator's synthesis.
-        """
-        return f"Consensus for '{topic}': We will proceed with a high-innovation strategy (Optimist) but with a mandatory zero-trust security audit (Skeptic) and a 3-month trial period (Realist)."
+        return await self.llm.ask(prompt, system_prompt)
+
+    async def _call_moderator(self, topic: str, turns: List[DebateTurn]) -> str:
+        """Call the LLM to synthesize the final consensus."""
+        history = "\n\n".join([f"{t.persona_name} ({t.turn_type}): {t.content}" for t in turns])
+        prompt = f"Synthesize a final consensus for the topic '{topic}' based on this debate history:\n\n{history}"
+        
+        return await self.llm.ask(prompt, "You are a neutral moderator focused on finding the best path forward.")
+
+    def get_session(self, session_id: str) -> Optional[DebateSession]:
+        return self._sessions.get(session_id)
 
     def get_session(self, session_id: str) -> Optional[DebateSession]:
         return self._sessions.get(session_id)

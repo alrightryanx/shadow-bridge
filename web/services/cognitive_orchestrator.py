@@ -18,19 +18,21 @@ from dataclasses import dataclass, asdict
 from .metacognition import get_metacognitive_layer, CognitiveAssessment
 from .debate_system import get_debate_system
 from .context_window import get_context_service
+from .llm_gateway import get_llm_gateway
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class CognitivePlan:
     """The decided course of action."""
-    strategy: str  # DIRECT, DEBATE, CLARIFY, BLOCKED
+    strategy: str  # DIRECT, DEBATE, CLARIFY, SWARM, RECURSIVE, STAFF, BLOCKED
     reasoning: str
     risk_level: str
     confidence: float
     execution_steps: list
     context_used: Dict
     debate_session_id: Optional[str] = None
+    task_id: Optional[str] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -44,6 +46,7 @@ class CognitiveOrchestrator:
         self.meta_layer = get_metacognitive_layer()
         self.debate_system = get_debate_system()
         self.context_service = get_context_service()
+        self.llm = get_llm_gateway()
 
     async def process_query(self, query: str, client_context: Optional[Dict] = None) -> CognitivePlan:
         """
@@ -52,67 +55,93 @@ class CognitiveOrchestrator:
         logger.info(f"Cognitive Orchestrator processing: '{query}'")
 
         # 1. Metacognitive Assessment
-        # "Think about thinking" - is this dangerous? Ambiguous?
-        assessment = self.meta_layer.assess_query(query, client_context)
+        assessment = await self.meta_layer.assess_query(query, client_context)
         logger.info(f"Assessment: Risk={assessment.risk_level}, Conf={assessment.confidence}")
 
         # 2. Context Assembly
-        # Build the context window based on the query
         context_window = self.context_service.build_context_window(query)
         
-        # 3. Strategy Selection & Planning
-        plan = await self._formulate_plan(query, assessment, context_window)
+        # 3. Intelligent Routing (AGI Brain)
+        routing_decision = await self._route_intelligently(query, assessment, context_window)
+        
+        # 4. Strategy Execution Plan
+        plan = await self._formulate_plan(query, assessment, context_window, routing_decision)
         
         return plan
 
-    async def _formulate_plan(self, query: str, assessment: CognitiveAssessment, context: Any) -> CognitivePlan:
-        """Decide on a strategy based on assessment."""
+    async def _route_intelligently(self, query: str, assessment: CognitiveAssessment, context: Any) -> Dict[str, Any]:
+        """Use LLM to decide the best strategy for the task."""
+        system_prompt = """You are the Supervisor Brain of ShadowAI, an AGI Orchestrator.
+Your goal is to route user queries to the most appropriate cognitive strategy.
+
+STRATEGIES:
+1. DIRECT: Simple tasks, questions, or commands that can be answered or executed immediately.
+2. CLARIFY: Queries that are too ambiguous or missing critical information.
+3. SWARM: Complex technical tasks that benefit from parallel processing or multiple perspectives (e.g., optimizing code, complex research).
+4. RECURSIVE: Deep thinking tasks, logic puzzles, or tasks requiring extreme precision where self-correction is needed.
+5. STAFF: Long-running, multi-step projects (e.g., "Build an app", "Write and publish a book").
+6. DEBATE: High-risk decisions or ethical dilemmas where multiple viewpoints are needed before acting.
+
+Return your decision in JSON format:
+{
+  "strategy": "STRATEGY_NAME",
+  "reasoning": "Brief explanation of why this strategy was chosen",
+  "confidence": 0.0-1.0
+}"""
         
-        # Strategy: DEBATE
-        # Triggered by High Risk or Low Confidence (but not due to simple ambiguity)
-        if assessment.risk_level == "HIGH" or (assessment.confidence < 0.6 and not assessment.ambiguity_detected):
-            logger.info("Triggering Debate System due to Risk/Confidence")
-            
-            # Start a debate to refine the approach
-            debate_topic = f"How to safely handle: {query}"
+        prompt = f"User Query: {query}\nRisk Level: {assessment.risk_level}\nAmbiguity: {assessment.ambiguity_detected}\nContext: {context.summary if hasattr(context, 'summary') else 'None'}"
+        
+        try:
+            decision = await self.llm.ask_json(prompt, system_prompt)
+            # Validate strategy
+            valid_strategies = ["DIRECT", "CLARIFY", "SWARM", "RECURSIVE", "STAFF", "DEBATE"]
+            if decision.get("strategy") not in valid_strategies:
+                decision["strategy"] = "DIRECT" # Default
+            return decision
+        except Exception as e:
+            logger.error(f"Routing error: {e}")
+            return {"strategy": "DIRECT", "reasoning": "Fallback to direct due to routing error.", "confidence": 0.5}
+
+    async def _formulate_plan(self, query: str, assessment: CognitiveAssessment, context: Any, routing: Dict[str, Any]) -> CognitivePlan:
+        """Refine the plan based on routing decision and assessment."""
+        
+        strategy = routing.get("strategy", "DIRECT")
+        reasoning = routing.get("reasoning", "Standard execution.")
+        confidence = routing.get("confidence", assessment.confidence)
+
+        # Force DEBATE if risk is HIGH regardless of LLM decision
+        if assessment.risk_level == "HIGH" and strategy != "DEBATE":
+            strategy = "DEBATE"
+            reasoning = "High risk detected by metacognitive layer. Overriding to DEBATE strategy for safety."
+
+        # Map strategies to execution steps
+        steps = []
+        debate_id = None
+        
+        if strategy == "DEBATE":
+            debate_topic = f"Safety and efficacy of: {query}"
             session = await self.debate_system.conduct_debate(topic=debate_topic, rounds=2)
-            
-            return CognitivePlan(
-                strategy="DEBATE",
-                reasoning=f"Query deemed {assessment.risk_level} risk. Debate conducted to ensure safety.",
-                risk_level=assessment.risk_level,
-                confidence=assessment.confidence, # Initial confidence
-                execution_steps=["Review Debate Consensus", "Execute Synthesized Plan"],
-                context_used={"active_items": len(context.active_context or [])},
-                debate_session_id=session.session_id
-            )
-
-        # Strategy: CLARIFY
-        # Triggered by Ambiguity or Missing Info
-        if assessment.ambiguity_detected or assessment.missing_info:
-            return CognitivePlan(
-                strategy="CLARIFY",
-                reasoning=assessment.reasoning,
-                risk_level=assessment.risk_level,
-                confidence=assessment.confidence,
-                execution_steps=["Ask User for Clarification"],
-                context_used={}
-            )
-
-        # Strategy: DIRECT
-        # Standard execution path
-        steps = ["Load Context", "Execute Command"]
-        
-        # Predictive Pre-loading hook (already handled in context service/API, but could be reinforced here)
-        # In a full system, we might refine the steps here.
+            debate_id = session.session_id
+            steps = ["Conduct Multi-Model Debate", "Synthesize Consensus", "Safe Execution"]
+        elif strategy == "SWARM":
+            steps = ["Recruit Agent Swarm", "Broadcase Task", "Monitor Stigmergy Matrix", "Aggregate Result"]
+        elif strategy == "RECURSIVE":
+            steps = ["Initialize Reasoning Loop", "Recursive Refinement", "Convergence Check"]
+        elif strategy == "STAFF":
+            steps = ["Initialize Agent Staff", "Supervisor Assignment", "Multi-Agent Workflow"]
+        elif strategy == "CLARIFY":
+            steps = ["Formulate Clarification Question", "Wait for User Input"]
+        else: # DIRECT
+            steps = ["Assemble Context", "Execute Direct Command"]
 
         return CognitivePlan(
-            strategy="DIRECT",
-            reasoning="Query is clear and low risk. Proceeding with execution.",
+            strategy=strategy,
+            reasoning=reasoning,
             risk_level=assessment.risk_level,
-            confidence=assessment.confidence,
+            confidence=confidence,
             execution_steps=steps,
-            context_used={"token_estimate": context.token_estimate}
+            context_used={"token_estimate": getattr(context, 'token_estimate', 0)},
+            debate_session_id=debate_id
         )
 
 # Global instance

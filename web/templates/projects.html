@@ -13,6 +13,10 @@
         <button class="btn btn-small" id="grid-view-btn" onclick="setView('grid')">Grid</button>
         <button class="btn btn-small active" id="list-view-btn" onclick="setView('list')">List</button>
     </div>
+    <!-- Autonomous mode button hidden for ShadowBridge (intended for shadow-android debug builds) -->
+    <button class="btn btn-autonomous hidden" id="autonomous-mode-btn" onclick="triggerAutonomousMode()" title="Autonomous Mode - Analyze, plan, and improve projects using AI reasoning">
+        <span class="material-symbols-outlined">auto_awesome</span> Autonomous
+    </button>
     <button class="btn btn-primary" onclick="showCreateProjectModal()">
         <span class="material-symbols-outlined">add</span> Create New
     </button>
@@ -23,134 +27,85 @@
 </div>
 {% endblock %}
 
-<!-- Create Project Modal -->
-<div id="create-project-modal" class="modal hidden">
-    <div class="modal-content modal-small">
-        <div class="modal-header">
-            <h2>Create Project</h2>
-            <button class="modal-close" onclick="closeCreateProjectModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="form-group">
-                <label for="create-project-name">Project Name *</label>
-                <input type="text" id="create-project-name" class="form-input" placeholder="My Project">
-            </div>
-            <div class="form-group">
-                <label for="create-project-path">Path</label>
-                <input type="text" id="create-project-path" class="form-input" placeholder="C:\Projects\my-project">
-            </div>
-            <div class="form-group">
-                <label for="create-project-description">Description</label>
-                <textarea id="create-project-description" class="form-input" rows="3" placeholder="Project description..."></textarea>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="create-project-group">Group</label>
-                    <input type="text" id="create-project-group" class="form-input" placeholder="Personal">
-                </div>
-                <div class="form-group">
-                    <label for="create-project-color">Color</label>
-                    <input type="color" id="create-project-color" class="form-input form-color" value="#6750A4">
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="create-project-github">GitHub URL</label>
-                <input type="text" id="create-project-github" class="form-input" placeholder="https://github.com/user/repo">
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeCreateProjectModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="createProject()">Create</button>
-        </div>
-    </div>
-</div>
-
-<!-- Share Project Modal -->
-<div id="share-project-modal" class="modal hidden">
-    <div class="modal-content modal-medium">
-        <div class="modal-header">
-            <h2><span class="material-symbols-outlined">share</span> Share Project</h2>
-            <button class="modal-close" onclick="closeShareModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <p class="share-item-title" id="share-project-title-display"></p>
-
-            <!-- Current shares -->
-            <div class="share-section">
-                <h3>Shared With</h3>
-                <div id="current-shares" class="share-list">
-                    <div class="empty-state">Not shared with anyone</div>
-                </div>
-            </div>
-
-            <!-- Add new share -->
-            <div class="share-section">
-                <h3>Add Device</h3>
-                <div class="share-add-form">
-                    <select id="share-device-select" class="form-input">
-                        <option value="">Select a device...</option>
-                    </select>
-                    <select id="share-permission-select" class="form-input">
-                        <option value="view">View only</option>
-                        <option value="edit">Can edit</option>
-                        <option value="full">Full access</option>
-                    </select>
-                    <button class="btn btn-primary" onclick="addShare()">
-                        <span class="material-symbols-outlined">person_add</span> Share
-                    </button>
-                </div>
-            </div>
-
-            <div class="share-info">
-                <p><strong>Permission Levels:</strong></p>
-                <ul>
-                    <li><strong>View</strong> - Can see project details</li>
-                    <li><strong>Edit</strong> - Can view and modify</li>
-                    <li><strong>Full</strong> - Can view, modify, and delete</li>
-                </ul>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeShareModal()">Close</button>
-        </div>
-    </div>
-</div>
-
-<!-- Edit Project Modal -->
-<div id="edit-project-modal" class="modal hidden">
-    <div class="modal-content modal-small">
-        <div class="modal-header">
-            <h2>Edit Project</h2>
-            <button class="modal-close" onclick="closeEditProjectModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="form-group">
-                <label for="edit-project-name">Project Name</label>
-                <input type="text" id="edit-project-name" class="form-input">
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeEditProjectModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="saveProject()">Save</button>
-        </div>
-    </div>
-</div>
-
-{% block scripts %}
 <script>
 let allProjects = [];
 let currentView = 'list';
 let showPinnedOnly = false;
 let editingProjectId = null;
+let isDebugMode = false;
+
+// Check if debug mode is enabled on page load
+async function checkDebugMode() {
+    try {
+        const response = await fetch('/api/status');
+        const data = await response.json();
+        isDebugMode = data.debug_mode === true;
+        
+        // Show autonomous mode button only in debug builds (for Android app)
+        const autBtn = document.getElementById('autonomous-mode-btn');
+        if (autBtn) {
+            if (isDebugMode) {
+                autBtn.classList.remove('hidden');
+                autBtn.style.display = 'flex';
+            } else {
+                autBtn.classList.add('hidden');
+                autBtn.style.display = 'none';
+            }
+        }
+    } catch (e) {
+        console.error('Failed to check debug mode:', e);
+    }
+}
+
+// Trigger autonomous mode - analyzes projects using todo.md and docs
+async function triggerAutonomousMode() {
+    if (!confirm('Autonomous Mode will analyze all your projects using AI reasoning and planning. It will read todo.md, documentation, and suggest improvements. Continue?')) {
+        return;
+    }
+    
+    try {
+        showToast('Starting autonomous mode: Analyzing projects...', 'info');
+        
+        const response = await fetch('/api/autonomous-mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast('Autonomous mode activated! AI is now analyzing your projects.', 'success', 5000);
+            // Reload projects after delay to see improvements
+            setTimeout(() => loadProjects(), 2000);
+        } else {
+            showToast(result.error || 'Failed to activate autonomous mode', 'error');
+        }
+    } catch (e) {
+        console.error('Autonomous mode error:', e);
+        showToast('Failed to activate autonomous mode', 'error');
+    }
+}
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Check debug mode and show autonomous button
+    checkDebugMode();
+    
     loadProjects();
 });
 
 async function loadProjects() {
     const deviceId = getDeviceIdParam();
-    allProjects = await api.getProjects(deviceId);
-    filterProjects();
+    const result = await api.getProjects(deviceId);
+    
+    if (Array.isArray(result)) {
+        allProjects = result;
+        filterProjects();
+    } else {
+        console.error('Failed to load projects:', result);
+        allProjects = [];
+        showToast('Failed to load projects: ' + (result.error || 'Unknown error'), 'error');
+        document.getElementById('projects-container').innerHTML = '<div class="empty-state">Error loading projects</div>';
+    }
 }
 
 function togglePinnedFilter() {
@@ -718,6 +673,27 @@ async function removeShare(targetDevice) {
 .btn-icon-small.btn-danger:hover {
     background: rgba(217, 119, 87, 0.15);
     color: var(--error);
+}
+
+/* Autonomous Mode Button */
+.btn-autonomous {
+    background: linear-gradient(135deg, #FF6B35 0%, #FF8C42 100%);
+    color: white;
+    border: 1px solid #FF6B35;
+    box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3);
+}
+
+.btn-autonomous.hidden {
+    display: none;
+}
+
+.btn-autonomous:hover {
+    background: linear-gradient(135deg, #FF5722 0%, #FF8C42 100%);
+    transform: translateY(-1px);
+}
+
+.btn-autonomous .material-symbols-outlined {
+    font-size: 18px;
 }
 </style>
 {% endblock %}

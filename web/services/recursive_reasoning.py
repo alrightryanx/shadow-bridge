@@ -17,6 +17,7 @@ import time
 
 from .metacognition import get_metacognitive_layer
 from .debate_system import get_debate_system
+from .llm_gateway import get_llm_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -45,18 +46,24 @@ class RecursiveReasoningEngine:
 
     def __init__(self):
         self.meta_layer = get_metacognitive_layer()
+        self.llm = get_llm_gateway()
         self.max_depth = 5  # Safety limit for prototype
 
     async def recurse_until_optimal(
         self,
         problem: str,
-        initial_solution: str,
+        initial_solution: Optional[str] = None,
         target_confidence: float = 0.95
     ) -> RecursiveResult:
         """
         Deeply refine a solution until it meets the target confidence or converges.
         """
         iterations = []
+        
+        # 0. Generate initial solution if not provided
+        if not initial_solution:
+            initial_solution = await self.llm.ask(f"Provide a detailed initial solution for: {problem}")
+
         current_solution = initial_solution
         current_depth = 0
         prev_confidence = 0.0
@@ -98,11 +105,15 @@ class RecursiveReasoningEngine:
 
     async def _generate_refinement(self, problem: str, current: str, critique: str) -> str:
         """
-        Simulate a refinement step.
-        In production, this would call an LLM with the critique.
+        Call LLM to refine the solution based on critique.
         """
-        # Simulated improvement
-        return f"{current}\n[Refined with: {critique[:30]}]"
+        prompt = f"""Problem: {problem}
+Current Solution: {current}
+Critique: {critique}
+
+Please provide an improved and more precise version of the solution that addresses the critique."""
+        
+        return await self.llm.ask(prompt, "You are a logical refiner focusing on precision and depth.")
 
 # Global instance
 _recursive_engine: Optional[RecursiveReasoningEngine] = None

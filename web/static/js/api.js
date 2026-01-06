@@ -206,6 +206,12 @@ const api = {
         });
     },
 
+    async deleteSession(sessionId) {
+        return this.fetch(`/sessions/${sessionId}`, {
+            method: 'DELETE'
+        });
+    },
+
     // Automations
     async getAutomations(deviceId = null) {
         const params = deviceId ? `?device_id=${deviceId}` : '';
