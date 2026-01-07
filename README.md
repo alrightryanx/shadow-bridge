@@ -33,12 +33,30 @@ ShadowBridge includes a web dashboard at `http://localhost:6767` for managing pr
 
 ## Installation
 
+### Windows
+
 ```bash
 pip install -r requirements.txt
 python shadow_bridge_gui.py
 ```
 
 For a more native Windows experience you can build the MSI installer via `python setup.py bdist_msi` (see [docs/windows-installer.md](docs/windows-installer.md)). The resulting MSI skips the ~2.5 GB PyTorch + AudioCraft bundle, so follow the manual audio dependency steps in that guide after installing the base app.
+
+### Linux
+
+For Linux users, a build script is provided to automate the setup:
+
+```bash
+# Make the script executable
+chmod +x build_linux.sh
+
+# Run the build script
+./build_linux.sh
+```
+
+This will create a virtual environment, install dependencies, and build the executable in `dist/ShadowBridge/ShadowBridge`.
+
+For troubleshooting and system dependencies, see [README_LINUX.md](README_LINUX.md).
 
 ## Ports
 
