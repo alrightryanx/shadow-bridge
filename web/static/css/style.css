@@ -3210,3 +3210,101 @@ body {
     color: var(--md-sys-color-outline);
     font-size: 13px;
 }
+
+/* ============ Device List ============ */
+
+.devices-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.device-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md);
+    background: var(--md-sys-color-surface-container);
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.device-item:hover {
+    background: var(--md-sys-color-surface-container-high);
+}
+
+.device-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.device-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
+}
+
+.device-status {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--md-sys-color-outline);
+}
+
+.device-status.online {
+    background: var(--md-sys-color-tertiary);
+    box-shadow: 0 0 8px var(--md-sys-color-tertiary);
+}
+
+.device-status.offline {
+    background: var(--md-sys-color-outline);
+}
+
+.device-name {
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface);
+}
+
+.device-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    font-size: 12px;
+    color: var(--md-sys-color-outline);
+}
+
+.device-id {
+    font-family: monospace;
+    background: var(--md-sys-color-surface-container-highest);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.device-ip {
+    font-family: monospace;
+}
+
+.device-last-seen {
+    color: var(--md-sys-color-outline);
+}
+
+.device-actions {
+    display: flex;
+    gap: var(--spacing-xs);
+}
+
+.loading-state,
+.error-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-xl);
+    color: var(--md-sys-color-outline);
+    gap: var(--spacing-sm);
+}
+
+.error-state {
+    color: var(--md-sys-color-error);
+}

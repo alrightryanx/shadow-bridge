@@ -4,6 +4,7 @@ REST API endpoints for Shadow Web Dashboard
 
 from flask import Blueprint, jsonify, request, send_file
 import subprocess
+import shlex
 import socket
 import json
 import os
@@ -21,6 +22,7 @@ from ..services.data_service import (
     encrypt_note_content,
     get_devices,
     get_device,
+    remove_device,
     get_projects,
     get_project,
     update_project,
@@ -106,7 +108,7 @@ logger = logging.getLogger(__name__)
 # ============ Rate Limiting ============
 
 
-class RateLimiter:
+class ApiRateLimiter:
     """Simple in-memory rate limiter using sliding window."""
 
     def __init__(self, requests_per_minute: int = 60):
@@ -142,7 +144,7 @@ class RateLimiter:
 
 
 # Global rate limiter instance
-_rate_limiter = RateLimiter(requests_per_minute=120)
+_api_rate_limiter = ApiRateLimiter(requests_per_minute=120)
 
 
 def rate_limit(f):
@@ -153,7 +155,7 @@ def rate_limit(f):
         # Use client IP as rate limit key
         client_ip = request.remote_addr or "unknown"
 
-        if not _rate_limiter.is_allowed(client_ip):
+        if not _api_rate_limiter.is_allowed(client_ip):
             return jsonify({"error": "Rate limit exceeded", "retry_after": 60}), 429
 
         return f(*args, **kwargs)
@@ -369,14 +371,27 @@ def api_device(device_id):
     return jsonify({"error": "Device not found"}), 404
 
 
+@api_bp.route("/devices/<device_id>", methods=["DELETE"])
+def api_remove_device(device_id):
+    """Remove a specific device and all its associated data."""
+    result = remove_device(device_id)
+    if result.get("success"):
+        return jsonify(result)
+    return jsonify(result), 400
+
+
 # ============ Projects ============
 
 
 @api_bp.route("/projects")
 def api_projects():
     """List all projects."""
-    device_id = request.args.get("device_id")
-    return jsonify(get_projects(device_id))
+    try:
+        device_id = request.args.get("device_id")
+        return jsonify(get_projects(device_id))
+    except Exception as e:
+        logger.error(f"Error fetching projects: {e}")
+        return jsonify([]) # Return empty list on error to prevent frontend crash
 
 
 @api_bp.route("/projects", methods=["POST"])
@@ -1449,6 +1464,55 @@ def api_status():
     """Get system status."""
     return jsonify(get_status())
 
+@api_bp.route("/tailscale/status")
+def api_tailscale_status():
+    """Return a quick health check for the local Tailscale daemon."""
+    result = None
+    try:
+        result = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=8
+        )
+
+        if result.returncode != 0:
+            return (
+                jsonify(
+                    {
+                        "error": "tailscale status failed",
+                        "details": result.stderr.strip() or "Unknown error",
+                    }
+                ),
+                502,
+            )
+
+        payload = json.loads(result.stdout)
+        return jsonify(
+            {
+                "success": True,
+                "status": "running",
+                "detail": payload,
+            }
+        )
+    except FileNotFoundError:
+        return jsonify({"error": "Tailscale CLI is not installed"}), 501
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Tailscale status command timed out"}), 504
+    except json.JSONDecodeError:
+        return (
+            jsonify(
+                {
+                    "error": "Could not parse Tailscale output",
+                    "raw": (result.stdout if result else "").strip(),
+                }
+            ),
+            502,
+        )
+    except Exception as exc:
+        logger.exception("Tailscale status error")
+        return jsonify({"error": str(exc)}), 500
+
 
 @api_bp.route("/autonomous-mode", methods=["POST"])
 def api_autonomous_mode():
@@ -1717,7 +1781,7 @@ def api_reorder_project_todos(project_id):
 
 @api_bp.route("/projects/<project_id>/launch-cli", methods=["POST"])
 def api_launch_cli(project_id):
-    """Launch Claude Code CLI in project directory."""
+    """Launch a CLI in the project directory (custom command allowed)."""
     project = get_project(project_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
@@ -1726,37 +1790,53 @@ def api_launch_cli(project_id):
     if not path:
         return jsonify({"error": "No path for project"}), 400
 
-    # SECURITY: Validate and normalize path
-    import os
-
     path = os.path.normpath(os.path.abspath(path))
     if not os.path.exists(path):
         return jsonify({"error": f"Path does not exist: {path}"}), 400
     if not os.path.isdir(path):
         return jsonify({"error": "Path must be a directory"}), 400
 
+    data = request.get_json(silent=True) or {}
+    command_text = sanitize_cli_command(data.get("command") or "claude")
+
+    if not command_text:
+        command_text = "claude"
+
     try:
-        # SECURITY: Use array form without shell=True to prevent command injection
-        subprocess.Popen(
-            ["wt", "-d", path, "claude"],
-            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+        launcher = None
+        if os.name == "nt":
+            try:
+                subprocess.Popen(
+                    ["wt", "-d", path, "cmd", "/k", command_text],
+                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                )
+                launcher = "wt"
+            except FileNotFoundError:
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "cmd", "/k", f'cd /d "{path}" && {command_text}'],
+                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                )
+                launcher = "cmd"
+        else:
+            command_parts = shlex.split(command_text)
+            subprocess.Popen(command_parts, cwd=path)
+            launcher = command_parts[0] if command_parts else command_text
+
+        return jsonify(
+            {
+                "success": True,
+                "path": path,
+                "command": command_text,
+                "launcher": launcher,
+            }
         )
-        return jsonify({"success": True, "path": path, "command": "claude"})
-    except FileNotFoundError:
-        # Fallback: try cmd with claude (use array form for safety)
-        try:
-            # SECURITY: Use array form - no shell=True with user input
-            subprocess.Popen(
-                ["cmd", "/c", "start", "cmd", "/k", f'cd /d "{path}" && claude'],
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-            return jsonify(
-                {"success": True, "path": path, "command": "claude (via cmd)"}
-            )
-        except Exception as e:
-            return jsonify({"error": f"Failed to launch CLI: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": f"Failed to launch CLI: {str(e)}"}), 500
+
+
+def sanitize_cli_command(command: str) -> str:
+    """Strip newlines and extra whitespace from user-supplied CLI commands."""
+    return " ".join(command.split())
 
 
 # ============ Agent Management ============
@@ -4991,35 +5071,17 @@ def api_image_remove_background():
 def api_batch_generate():
     """
     Start a batch image generation job.
-
-    Request body:
-    {
-        "prompt": "A beautiful sunset over mountains",
-        "count": 20,
-        "variation_strength": 0.3,  // 0.0-1.0: 0=same, 0.3=slight, 0.7=heavy
-        "negative_prompt": "blurry",  // optional
-        "model": "sd-xl-turbo",  // optional
-        "width": 1024,  // optional
-        "height": 1024,  // optional
-        "steps": 4,  // optional
-        "guidance_scale": 7.5,  // optional
-        "base_seed": 12345  // optional
-    }
-
-    Returns:
-    {
-        "success": true,
-        "job": { ... job info ... },
-        "estimated_time_seconds": 70.5
-    }
     """
     try:
         from ..services.image_service import start_batch_generation
 
         data = request.get_json()
+        print(f"[DEBUG] Batch generate request data: {data}")
+        
         if not data or "prompt" not in data:
             return jsonify({"success": False, "error": "prompt is required"}), 400
 
+        print(f"[DEBUG] Starting batch generation for prompt: {data['prompt']}")
         result = start_batch_generation(
             prompt=data["prompt"],
             count=data.get("count", 1),
@@ -5032,10 +5094,14 @@ def api_batch_generate():
             guidance_scale=data.get("guidance_scale", 7.5),
             base_seed=data.get("base_seed"),
         )
+        print(f"[DEBUG] Batch generation result: {result}")
 
         return jsonify(result)
 
     except Exception as e:
+        print(f"[ERROR] Batch generation error: {e}")
+        import traceback
+        traceback.print_exc()
         logger.error(f"Batch generation error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 

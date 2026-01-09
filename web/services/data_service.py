@@ -365,6 +365,8 @@ def get_projects(device_id: Optional[str] = None) -> List[Dict]:
 
     # Projects are stored under "devices" key
     devices_data = data.get("devices", {})
+    if not isinstance(devices_data, dict):
+        devices_data = {}
 
     # Track best project per ID (deduplicate across device entries)
     projects_by_id = {}
@@ -376,6 +378,8 @@ def get_projects(device_id: Optional[str] = None) -> List[Dict]:
         synced_at = device_info.get("synced_at", 0)
 
         for project in device_info.get("projects", []):
+            if not isinstance(project, dict):
+                continue
             project_id = project.get("id", project.get("path", ""))
             updated_at = project.get("updated_at", 0)
 
@@ -1379,7 +1383,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.031",
+        "version": "1.039",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,
@@ -3937,4 +3941,58 @@ def reset_device_history() -> Dict:
         "success": True,
         "kept_device": most_recent_name,
         "removed_count": removed_count,
+    }
+
+
+def remove_device(device_id: str) -> Dict:
+    """
+    Remove a specific device and all its associated data.
+
+    Args:
+        device_id: The ID of the device to remove
+
+    Returns:
+        Dict with success status and details
+    """
+    # Read projects data
+    projects_data = _read_json_file(PROJECTS_FILE) or {"devices": {}}
+    devices_data = projects_data.get("devices", {})
+
+    if device_id not in devices_data:
+        return {
+            "success": False,
+            "error": "Device not found",
+        }
+
+    # Get device name before removing
+    device_name = devices_data[device_id].get("name", device_id)
+
+    # Check if this is the only device
+    if len(devices_data) == 1:
+        return {
+            "success": False,
+            "error": "Cannot remove the only device. At least one device must remain.",
+        }
+
+    # Remove from projects data
+    del devices_data[device_id]
+    projects_data["devices"] = devices_data
+    _write_json_file(PROJECTS_FILE, projects_data)
+
+    # Remove from notes
+    notes_data = _read_json_file(NOTES_FILE) or {"devices": {}}
+    if device_id in notes_data.get("devices", {}):
+        del notes_data["devices"][device_id]
+        _write_json_file(NOTES_FILE, notes_data)
+
+    # Remove from automations
+    auto_data = _read_json_file(AUTOMATIONS_FILE) or {}
+    if device_id in auto_data:
+        del auto_data[device_id]
+        _write_json_file(AUTOMATIONS_FILE, auto_data)
+
+    return {
+        "success": True,
+        "removed_device": device_name,
+        "device_id": device_id,
     }

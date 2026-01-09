@@ -54,6 +54,18 @@
     </div>
 </section>
 
+<!-- Connected Devices -->
+<section class="section">
+    <h2>Connected Devices</h2>
+    <p class="section-description">Manage devices connected to ShadowBridge.</p>
+    <div id="devices-list" class="devices-list">
+        <div class="loading-state">
+            <div class="spinner"></div>
+            <span>Loading devices...</span>
+        </div>
+    </div>
+</section>
+
 <!-- Preferences -->
 <section class="section">
     <h2>Preferences</h2>
@@ -353,6 +365,12 @@
             <span class="about-value" id="local-ip">Detecting...</span>
         </div>
     </div>
+    <div class="network-check">
+        <button class="btn btn-primary" id="tailscale-check-btn" onclick="checkTailScale()">
+            <span class="material-symbols-outlined">wifi</span> Check TailScale
+        </button>
+        <span id="tailscale-status-label" class="network-status">Unknown</span>
+    </div>
 </section>
 
 <!-- About -->
@@ -392,6 +410,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadPreferences();
     loadEmailVerificationStatus();
     loadTeamManagement();
+    loadDevicesList();
 });
 
 // ============ Email Verification ============
@@ -1059,6 +1078,109 @@ async function loadStatus() {
     }
 }
 
+async function checkTailScale() {
+    const btn = document.getElementById('tailscale-check-btn');
+    const label = document.getElementById('tailscale-status-label');
+
+    if (btn) btn.disabled = true;
+    if (label) label.textContent = 'Checking...';
+
+    try {
+        const response = await fetch('/api/tailscale/status');
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            if (label) label.textContent = 'TailScale running';
+            showToast('TailScale is running', 'success');
+        } else {
+            const message = data.error || data.details || 'TailScale check failed';
+            if (label) label.textContent = message;
+            showToast(message, 'error');
+        }
+    } catch (e) {
+        if (label) label.textContent = 'Check failed';
+        showToast('TailScale check failed: ' + e.message, 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// ============ Device Management ============
+
+async function loadDevicesList() {
+    const container = document.getElementById('devices-list');
+    if (!container) return;
+
+    try {
+        const response = await fetch('/api/devices');
+        const devices = await response.json();
+
+        if (!devices || devices.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">devices</span>
+                    <p>No devices connected yet. Scan the QR code above to connect a device.</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = devices.map(device => `
+            <div class="device-item" data-device-id="${escapeHtml(device.id)}">
+                <div class="device-info">
+                    <div class="device-header">
+                        <span class="device-status ${device.status === 'online' ? 'online' : 'offline'}"></span>
+                        <span class="device-name">${escapeHtml(device.name || device.id)}</span>
+                    </div>
+                    <div class="device-details">
+                        <span class="device-id">${escapeHtml(device.id)}</span>
+                        ${device.ip ? `<span class="device-ip">${escapeHtml(device.ip)}</span>` : ''}
+                        <span class="device-last-seen">Last seen: ${escapeHtml(device.last_seen_formatted || 'Never')}</span>
+                    </div>
+                </div>
+                <div class="device-actions">
+                    <button class="btn btn-small btn-danger" onclick="removeDevice('${escapeHtml(device.id)}', '${escapeHtml(device.name || device.id)}')" title="Remove device">
+                        <span class="material-symbols-outlined">delete</span>
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('Failed to load devices:', e);
+        container.innerHTML = `
+            <div class="error-state">
+                <span class="material-symbols-outlined">error</span>
+                <p>Failed to load devices</p>
+            </div>
+        `;
+    }
+}
+
+async function removeDevice(deviceId, deviceName) {
+    if (!confirm(`Remove "${deviceName}" and all its associated data (projects, notes, automations)?\n\nThis action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(`Device "${deviceName}" removed successfully`, 'success');
+            loadDevicesList();
+            loadStatus(); // Update device count in status cards
+        } else {
+            showToast(result.error || 'Failed to remove device', 'error');
+        }
+    } catch (e) {
+        console.error('Failed to remove device:', e);
+        showToast('Failed to remove device: ' + e.message, 'error');
+    }
+}
+
 async function loadQRCode() {
     const container = document.getElementById('qr-code');
     container.innerHTML = `
@@ -1379,6 +1501,18 @@ async function exportAllData() {
     display: flex;
     gap: var(--spacing-md);
     flex-wrap: wrap;
+}
+
+.network-check {
+    margin-top: var(--spacing-md);
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+}
+
+.network-status {
+    color: var(--text-dim);
+    font-size: 0.9rem;
 }
 
 /* Clickable rows */

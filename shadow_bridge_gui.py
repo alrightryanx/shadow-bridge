@@ -745,7 +745,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.032"
+APP_VERSION = "1.039"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -1125,7 +1125,7 @@ def find_ssh_port():
     ]
     for config_path in sshd_config_paths:
         try:
-            with open(config_path, "r") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith("Port ") and not line.startswith("#"):
@@ -1470,7 +1470,7 @@ def load_settings():
     """Load settings from JSON file."""
     try:
         if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, "r") as f:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception as e:
         log.warning(f"Failed to load settings: {e}")
@@ -1481,7 +1481,7 @@ def save_settings(settings):
     """Save settings to JSON file."""
     try:
         os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-        with open(SETTINGS_FILE, "w") as f:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
         return True
     except Exception as e:
@@ -1616,7 +1616,7 @@ start "" "{current_exe}"
 del "%~f0"
 '''
 
-        with open(batch_path, "w") as f:
+        with open(batch_path, "w", encoding="utf-8") as f:
             f.write(batch_content)
 
         # Launch the batch script (hidden)
@@ -1905,7 +1905,7 @@ class DataReceiver(threading.Thread):
                 "approved_devices.json",
             )
             if os.path.exists(approved_file):
-                with open(approved_file, "r") as f:
+                with open(approved_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self._approved_devices = set(data.get("approved", []))
                     log.info(f"Loaded {len(self._approved_devices)} approved devices")
@@ -1922,7 +1922,7 @@ class DataReceiver(threading.Thread):
                 "approved_devices.json",
             )
             os.makedirs(os.path.dirname(approved_file), exist_ok=True)
-            with open(approved_file, "w") as f:
+            with open(approved_file, "w", encoding="utf-8") as f:
                 json.dump({"approved": list(self._approved_devices)}, f, indent=2)
         except Exception as e:
             log.warning(f"Could not save approved devices: {e}")
@@ -2579,7 +2579,7 @@ class DataReceiver(threading.Thread):
                     # Read existing authorized_keys
                     existing_keys = set()
                     if os.path.exists(auth_keys_file):
-                        with open(auth_keys_file, "r") as f:
+                        with open(auth_keys_file, "r", encoding="utf-8") as f:
                             for line in f:
                                 line = line.strip()
                                 if line and not line.startswith("#"):
@@ -2598,7 +2598,7 @@ class DataReceiver(threading.Thread):
                             continue
 
                     # Append new key with comment
-                    with open(auth_keys_file, "a") as f:
+                    with open(auth_keys_file, "a", encoding="utf-8") as f:
                         # Add newline if file doesn't end with one
                         if (
                             os.path.exists(auth_keys_file)
@@ -2928,7 +2928,7 @@ def load_projects_state():
     """Load per-device projects state from local file."""
     try:
         if os.path.exists(PROJECTS_FILE):
-            with open(PROJECTS_FILE, "r") as f:
+            with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
                 # v2 schema (multi-device)
@@ -2982,7 +2982,7 @@ def save_projects_state(state):
             "updated": time.time(),
             "devices": state.get("devices", {}),
         }
-        with open(PROJECTS_FILE, "w") as f:
+        with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
     except Exception:
         pass
@@ -2992,7 +2992,7 @@ def load_notes_state():
     """Load per-device notes state from local file."""
     try:
         if os.path.exists(NOTES_FILE):
-            with open(NOTES_FILE, "r") as f:
+            with open(NOTES_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("devices"), dict):
                     devices = {
@@ -3019,7 +3019,7 @@ def save_notes_state(state):
             "updated": time.time(),
             "devices": state.get("devices", {}),
         }
-        with open(NOTES_FILE, "w") as f:
+        with open(NOTES_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
     except Exception:
         pass
@@ -4375,7 +4375,7 @@ class CloudSyncService(threading.Thread):
 
             if os.path.exists(SETTINGS_FILE):
 
-                with open(SETTINGS_FILE, "r") as f:
+                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
 
                     settings = json.load(f)
 
@@ -4417,7 +4417,7 @@ class CloudSyncService(threading.Thread):
 
         if os.path.exists(PROJECTS_FILE):
 
-            with open(PROJECTS_FILE, "r") as f:
+            with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
 
                 data = json.load(f)
 
@@ -4437,7 +4437,7 @@ class CloudSyncService(threading.Thread):
 
         if os.path.exists(NOTES_FILE):
 
-            with open(NOTES_FILE, "r") as f:
+            with open(NOTES_FILE, "r", encoding="utf-8") as f:
 
                 data = json.load(f)
 
@@ -6506,7 +6506,7 @@ Or run in PowerShell (Admin):
                     "x": int(match.group(3)),
                     "y": int(match.group(4)),
                 }
-                with open(WINDOW_STATE_FILE, "w") as f:
+                with open(WINDOW_STATE_FILE, "w", encoding="utf-8") as f:
                     json.dump(state, f)
         except Exception as e:
             log.debug(f"Failed to save window state: {e}")
@@ -6515,7 +6515,7 @@ Or run in PowerShell (Admin):
         """Load and apply saved window position and size."""
         try:
             if os.path.exists(WINDOW_STATE_FILE):
-                with open(WINDOW_STATE_FILE, "r") as f:
+                with open(WINDOW_STATE_FILE, "r", encoding="utf-8") as f:
                     state = json.load(f)
                 w = state.get("width", self.window_width)
                 h = state.get("height", self.window_height)
