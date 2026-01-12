@@ -752,7 +752,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.040"
+APP_VERSION = "1.041"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -3212,7 +3212,28 @@ class CompanionRelayServer(threading.Thread):
         device_id = None
 
         try:
-            conn.settimeout(None)  # No timeout for persistent connections
+            # Set reasonable timeout for reads (30 seconds)
+            conn.settimeout(30.0)
+
+            # Enable TCP keepalive to detect stale connections
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            # Platform-specific keepalive settings
+            if platform.system() == "Windows":
+                # Windows: (enabled, idle_time_ms, interval_ms)
+                # Start probing after 10 seconds idle, probe every 3 seconds
+                conn.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 10000, 3000))
+            else:
+                # Linux/Mac: Set keepalive parameters
+                try:
+                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)  # 10 seconds idle
+                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)  # 3 second intervals
+                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)  # 3 probes before giving up
+                except (AttributeError, OSError):
+                    # Some platforms don't support these options
+                    pass
+
+            log.debug(f"TCP keepalive enabled for {addr}")
 
             while self.running:
                 # Read length-prefixed message
@@ -3365,6 +3386,10 @@ class CompanionRelayServer(threading.Thread):
                 except Exception as e:
                     log.error(f"Error processing message: {e}")
 
+        except socket.timeout:
+            log.warning(f"Connection timeout from {addr} - stale connection detected")
+            if device_id:
+                log.info(f"Removing stale device connection: {device_id}")
         except Exception as e:
             log.debug(f"Companion connection closed: {e}")
         finally:
@@ -4654,6 +4679,16 @@ class ShadowBridgeApp:
             except Exception as e:
                 log.error(f"Failed to start Sentinel: {e}")
 
+        # Start Thread Watchdog for server health monitoring
+        try:
+            from utils.watchdog import ThreadWatchdog
+            self.watchdog = ThreadWatchdog(check_interval=5)
+            self.watchdog.start()
+            log.info("Thread watchdog started")
+        except Exception as e:
+            log.error(f"Failed to start thread watchdog: {e}")
+            self.watchdog = None
+
         # Setup modern styles
         self.setup_styles()
 
@@ -5323,14 +5358,43 @@ class ShadowBridgeApp:
             )
             self.data_receiver.start()
             log.info(f"Data receiver started on port {DATA_PORT}")
+
+            # Register with watchdog for auto-restart
+            if self.watchdog:
+                self.watchdog.register(
+                    "DataReceiver",
+                    self.data_receiver,
+                    self.start_data_receiver_thread,
+                    max_restarts=5,
+                    restart_window=300
+                )
         except Exception as e:
             log.error(f"Failed to start data receiver: {e}")
 
         # Also start companion relay for Claude Code plugin
         self.start_companion_relay()
-        
+
         # Start Cloud Sync
         self.start_cloud_sync()
+
+    def start_data_receiver_thread(self):
+        """Internal method to create new DataReceiver thread for watchdog restart."""
+        try:
+            self.data_receiver = DataReceiver(
+                on_data_received=self.on_projects_received,
+                on_device_connected=self.on_device_connected,
+                on_notes_received=self.on_notes_received,
+                on_sessions_received=self.on_sessions_received,
+                on_cards_received=self.on_cards_received,
+                on_collections_received=self.on_collections_received,
+                on_key_approval_needed=self.on_key_approval_needed,
+            )
+            self.data_receiver.start()
+            log.info(f"DataReceiver restarted by watchdog")
+            return self.data_receiver
+        except Exception as e:
+            log.error(f"Failed to restart DataReceiver: {e}")
+            return None
 
     def start_companion_relay(self):
         """Start TCP relay server for Claude Code Companion feature."""
@@ -5340,8 +5404,31 @@ class ShadowBridgeApp:
             )
             self.companion_relay.start()
             log.info(f"Companion relay started on port {COMPANION_PORT}")
+
+            # Register with watchdog for auto-restart
+            if self.watchdog:
+                self.watchdog.register(
+                    "CompanionRelay",
+                    self.companion_relay,
+                    self.start_companion_relay_thread,
+                    max_restarts=5,
+                    restart_window=300
+                )
         except Exception as e:
             log.error(f"Failed to start companion relay: {e}")
+
+    def start_companion_relay_thread(self):
+        """Internal method to create new CompanionRelay thread for watchdog restart."""
+        try:
+            self.companion_relay = CompanionRelayServer(
+                on_status_change=self.on_companion_status_change
+            )
+            self.companion_relay.start()
+            log.info(f"CompanionRelay restarted by watchdog")
+            return self.companion_relay
+        except Exception as e:
+            log.error(f"Failed to restart CompanionRelay: {e}")
+            return None
 
     def start_cloud_sync(self):
         """Start background cloud sync service."""
@@ -6025,6 +6112,16 @@ class ShadowBridgeApp:
                     text="● Broadcasting", fg=COLORS["success"]
                 )
             log.info("Discovery server started successfully")
+
+            # Register with watchdog for auto-restart
+            if self.watchdog:
+                self.watchdog.register(
+                    "DiscoveryServer",
+                    self.discovery_server,
+                    self.start_broadcast_thread,
+                    max_restarts=5,
+                    restart_window=300
+                )
         except Exception as e:
             log.error(f"Failed to start discovery server: {e}")
             self.is_broadcasting = False
@@ -6039,6 +6136,28 @@ class ShadowBridgeApp:
                 f"Error: {e}\n\n"
                 f"Check that port {DISCOVERY_PORT} is not in use by another application."
             )
+
+    def start_broadcast_thread(self):
+        """Internal method to create new DiscoveryServer thread for watchdog restart."""
+        try:
+            setup_firewall_rule()
+            self.discovery_server = DiscoveryServer(self.get_connection_info())
+            self.discovery_server.start()
+            self.is_broadcasting = True
+            if hasattr(self, "broadcast_status_label"):
+                self.broadcast_status_label.configure(
+                    text="● Broadcasting", fg=COLORS["success"]
+                )
+            log.info(f"DiscoveryServer restarted by watchdog")
+            return self.discovery_server
+        except Exception as e:
+            log.error(f"Failed to restart DiscoveryServer: {e}")
+            self.is_broadcasting = False
+            if hasattr(self, "broadcast_status_label"):
+                self.broadcast_status_label.configure(
+                    text="● Broadcast Failed", fg=COLORS["error"]
+                )
+            return None
 
     def stop_broadcast(self):
         """Stop discovery server."""

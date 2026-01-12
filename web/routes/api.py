@@ -78,6 +78,7 @@ from ..services.data_service import (
     unshare_project,
     get_shared_content_for_device,
     get_permission_level,
+    mark_items_synced,
     # Email Verification
     request_email_verification,
     verify_email_code,
@@ -281,16 +282,20 @@ def _send_note_request(host: str, port: int, payload: dict, timeout_s: int) -> d
 def _try_note_request(
     device_ips: list[str], port: int, payload: dict, timeout_s: int, retries: int
 ) -> dict:
-    """Try multiple device IPs with retries, return first successful response."""
+    """Try multiple device IPs with retries using exponential backoff."""
+    from ..utils.retry import ExponentialBackoff
+
     last_error: Exception | None = None
     for host in device_ips:
+        backoff = ExponentialBackoff(base=0.5, multiplier=1.5, max_delay=5.0)
         for attempt in range(retries):
             try:
                 return _send_note_request(host, port, payload, timeout_s)
             except Exception as exc:
                 last_error = exc
                 if attempt < retries - 1:
-                    time.sleep(0.2)
+                    delay = backoff.next()
+                    time.sleep(delay)
     if last_error:
         raise last_error
     raise RuntimeError("No device hosts available")
@@ -346,7 +351,7 @@ def _try_note_request_ports(
 def _try_note_sync(device_ips: list[str], ports: list[int]) -> bool:
     try:
         response = _try_note_request_ports(
-            device_ips, ports, {"action": "sync_notes"}, timeout_s=6, retries=1
+            device_ips, ports, {"action": "sync_notes"}, timeout_s=6, retries=3
         )
         return bool(response.get("success", True))
     except Exception:
@@ -489,6 +494,38 @@ def api_create_note():
         return jsonify({"error": "Title is required"}), 400
     device_id = data.get("device_id", "web")
     result = create_note(data, device_id)
+    note = result.get("note") if isinstance(result, dict) else None
+    if result.get("success") and note and device_id and device_id != "web":
+        try:
+            note_payload = dict(note)
+            note_payload["device_id"] = device_id
+            if device_id:
+                note_payload["content"] = encrypt_note_content(
+                    note_payload.get("content", ""), device_id
+                )
+
+            device_ips = _collect_note_device_ips({"device_id": device_id})
+            if device_ips:
+                ports = _build_note_ports(note_payload.get("note_content_port"))
+                response = _try_note_request_ports(
+                    device_ips,
+                    ports,
+                    {"action": "create_note", "note": note_payload},
+                    timeout_s=8,
+                    retries=3,
+                )
+                if response.get("success"):
+                    mark_items_synced(device_id, "notes", [note_payload.get("id")])
+                    result["pushed_to_device"] = True
+                else:
+                    result["pushed_to_device"] = False
+                    result["device_message"] = response.get("message", "Device rejected")
+            else:
+                result["pushed_to_device"] = False
+                result["device_message"] = "Device IP not available"
+        except Exception as exc:
+            result["pushed_to_device"] = False
+            result["device_message"] = str(exc)
     return jsonify(result)
 
 
@@ -952,10 +989,17 @@ def api_session_message(session_id):
         from .websocket import broadcast_session_message, broadcast_sessions_updated
 
         is_update = bool(data.get("is_update")) or bool(delta)
-        broadcast_session_message(
-            session_id, result.get("message"), is_update=is_update
+        session = result.get("session") if isinstance(result, dict) else None
+        message_payload = result.get("message") if isinstance(result, dict) else None
+        if message_payload:
+            broadcast_session_message(
+                session_id, message_payload, is_update=is_update
+            )
+        device_id = (
+            (session or {}).get("device_id")
+            or (session or {}).get("deviceId")
+            or "web"
         )
-        device_id = result.get("session", {}).get("device_id") or "web"
         broadcast_sessions_updated(device_id)
     except Exception:
         pass
@@ -963,8 +1007,8 @@ def api_session_message(session_id):
     return jsonify(
         {
             "success": True,
-            "session": result.get("session"),
-            "message": result.get("message"),
+            "session": result.get("session") if isinstance(result, dict) else None,
+            "message": result.get("message") if isinstance(result, dict) else None,
         }
     )
 
@@ -978,61 +1022,63 @@ def api_session_message_shortcut():
         return jsonify({"error": "session_id is required"}), 400
     return api_session_message(session_id)
 
-    @api_bp.route("/sessions/sync", methods=["POST"])
-    def api_sessions_sync():
-        """
-        Receive sessions sync notification and broadcast to WebSocket clients.
-        Called by ShadowBridge after syncing sessions from Android app.
-        """
-        try:
-            from .websocket import broadcast_sessions_updated
+@api_bp.route("/sessions/sync", methods=["POST"])
+def api_sessions_sync():
+    """
+    Receive sessions sync notification and broadcast to WebSocket clients.
+    Called by ShadowBridge after syncing sessions from Android app.
+    """
+    try:
+        from .websocket import broadcast_sessions_updated
 
-            data = request.get_json() or {}
-            device_id = data.get("device_id", "unknown")
+        data = request.get_json() or {}
+        device_id = data.get("device_id", "unknown")
 
-            broadcast_sessions_updated(device_id)
+        broadcast_sessions_updated(device_id)
 
-            return jsonify({"success": True, "message": "Sessions sync broadcasted"})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        return jsonify({"success": True, "message": "Sessions sync broadcasted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    @api_bp.route("/cards/sync", methods=["POST"])
-    def api_cards_sync():
-        """
-        Receive cards sync notification and broadcast to WebSocket clients.
-        Called by ShadowBridge after syncing cards from Android app.
-        """
-        try:
-            from .websocket import broadcast_cards_updated
 
-            data = request.get_json() or {}
-            device_id = data.get("device_id", "unknown")
+@api_bp.route("/cards/sync", methods=["POST"])
+def api_cards_sync():
+    """
+    Receive cards sync notification and broadcast to WebSocket clients.
+    Called by ShadowBridge after syncing cards from Android app.
+    """
+    try:
+        from .websocket import broadcast_cards_updated
 
-            broadcast_cards_updated(device_id)
+        data = request.get_json() or {}
+        device_id = data.get("device_id", "unknown")
 
-            return jsonify({"success": True, "message": "Cards sync broadcasted"})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        broadcast_cards_updated(device_id)
 
-    @api_bp.route("/collections/sync", methods=["POST"])
-    def api_collections_sync():
-        """
-        Receive collections sync notification and broadcast to WebSocket clients.
-        Called by ShadowBridge after syncing collections from Android app.
-        """
-        try:
-            from .websocket import broadcast_collections_updated
+        return jsonify({"success": True, "message": "Cards sync broadcasted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-            data = request.get_json() or {}
-            device_id = data.get("device_id", "unknown")
 
-            broadcast_collections_updated(device_id)
+@api_bp.route("/collections/sync", methods=["POST"])
+def api_collections_sync():
+    """
+    Receive collections sync notification and broadcast to WebSocket clients.
+    Called by ShadowBridge after syncing collections from Android app.
+    """
+    try:
+        from .websocket import broadcast_collections_updated
 
-            return jsonify({"success": True, "message": "Collections sync broadcasted"})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        data = request.get_json() or {}
+        device_id = data.get("device_id", "unknown")
 
-    # ============ Automations ============
+        broadcast_collections_updated(device_id)
+
+        return jsonify({"success": True, "message": "Collections sync broadcasted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ============ Automations ============
 
 
 @api_bp.route("/automations")
@@ -1109,6 +1155,36 @@ def api_automation_logs(automation_id):
     return jsonify(logs)
 
 
+def send_command_to_device(command_type: str, payload: dict, device_id: str = None) -> bool:
+    """Send a command to Android device via Companion Relay."""
+    try:
+        message = {
+            "type": command_type,
+            "timestamp": int(time.time() * 1000),
+            "deviceId": device_id,
+            **payload
+        }
+
+        # Connect to ShadowBridge Companion Relay (localhost:19286)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            s.connect(("127.0.0.1", 19286))
+
+            # Handshake as "web_api"
+            handshake = {"type": "handshake", "deviceId": "web_api", "version": 1}
+            h_data = json.dumps(handshake).encode("utf-8")
+            s.sendall(len(h_data).to_bytes(4, "big") + h_data)
+            time.sleep(0.1)
+
+            # Send Command
+            data = json.dumps(message).encode("utf-8")
+            s.sendall(len(data).to_bytes(4, "big") + data)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send command to relay: {e}")
+        return False
+
+
 @api_bp.route("/automations/<automation_id>/run", methods=["POST"])
 def api_run_automation(automation_id):
     """Trigger manual automation run."""
@@ -1116,8 +1192,17 @@ def api_run_automation(automation_id):
     if not auto:
         return jsonify({"error": "Automation not found"}), 404
 
-    # TODO: Send trigger command to device
-    return jsonify({"error": "Not implemented"}), 501
+    device_id = auto.get("device_id")
+    success = send_command_to_device(
+        "automation_trigger", 
+        {"automationId": automation_id}, 
+        device_id
+    )
+
+    if success:
+        return jsonify({"success": True, "message": "Automation triggered on device"})
+    else:
+        return jsonify({"error": "Failed to send trigger command to device"}), 500
 
 
 # ============ Agents ============
@@ -1195,7 +1280,9 @@ def api_agent_activity():
 def api_pause_agents():
     """Pause all agent execution."""
     _add_activity("system", "All agents paused", "pause")
-    # TODO: Send pause command to Android device
+    
+    send_command_to_device("agent_command", {"action": "pause_all"})
+    
     return jsonify({"success": True, "message": "Pause command sent"})
 
 
@@ -1203,7 +1290,9 @@ def api_pause_agents():
 def api_resume_agents():
     """Resume all agent execution."""
     _add_activity("system", "All agents resumed", "play")
-    # TODO: Send resume command to Android device
+    
+    send_command_to_device("agent_command", {"action": "resume_all"})
+    
     return jsonify({"success": True, "message": "Resume command sent"})
 
 
@@ -1211,7 +1300,9 @@ def api_resume_agents():
 def api_kill_all_agents():
     """Emergency kill switch for all agents."""
     _add_activity("kill", "KILL ALL command executed", "cancel")
-    # TODO: Send kill command to Android device
+    
+    send_command_to_device("agent_command", {"action": "kill_all"})
+    
     return jsonify({"success": True, "message": "Kill all command sent"})
 
 
@@ -1221,7 +1312,9 @@ def api_kill_agent(agent_id):
     agent = get_agent(agent_id)
     agent_name = agent.get("name", agent_id) if agent else agent_id
     _add_activity("kill", f"Agent {agent_name} terminated", "cancel")
-    # TODO: Send kill command to Android device for specific agent
+    
+    send_command_to_device("agent_command", {"action": "kill", "agentId": agent_id})
+    
     return jsonify(
         {"success": True, "message": f"Kill command sent for agent {agent_id}"}
     )
