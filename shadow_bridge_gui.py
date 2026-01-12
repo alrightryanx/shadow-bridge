@@ -37,6 +37,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from io import BytesIO
 
+# Import Ouroboros Sentinel
+try:
+    from ouroboros.sentinel import Sentinel
+    HAS_SENTINEL = True
+except ImportError:
+    HAS_SENTINEL = False
+
 # Import data service for bi-directional sync (web -> Android)
 try:
     from web.services.data_service import (
@@ -745,7 +752,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.039"
+APP_VERSION = "1.040"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -1872,6 +1879,8 @@ class DataReceiver(threading.Thread):
         )
         self.running = True
         self.sock = None
+        self.bind_failed = False  # Track if port binding failed
+        self.bind_error = None  # Store error message
         self.connected_devices = {}  # device_id -> {name, ip, last_seen}
         self.ip_to_device_id = {}  # ip -> device_id
         self._devices_lock = threading.Lock()
@@ -2188,6 +2197,26 @@ class DataReceiver(threading.Thread):
             self.sock.bind(("", DATA_PORT))
             self.sock.listen(5)
             self.sock.settimeout(1.0)
+            log.info(f"✓ DataReceiver listening on port {DATA_PORT}")
+        except OSError as e:
+            log.error(f"❌ FATAL: DataReceiver cannot bind to port {DATA_PORT}: {e}")
+            log.error(f"Another application may be using port {DATA_PORT}")
+            log.error("Device sync will NOT work until this is resolved")
+            # Set flag for GUI to detect failure
+            self.bind_failed = True
+            self.bind_error = str(e)
+            return  # Exit thread - cannot continue without port
+        except Exception as e:
+            log.error(f"❌ FATAL: DataReceiver unexpected error during bind: {e}")
+            self.bind_failed = True
+            self.bind_error = str(e)
+            return
+
+        # Port binding successful - mark as ready
+        self.bind_failed = False
+        self.bind_error = None
+
+        try:
             while self.running:
                 try:
                     conn, addr = self.sock.accept()
@@ -2195,8 +2224,9 @@ class DataReceiver(threading.Thread):
                     self._executor.submit(self._handle_client, conn, addr)
                 except socket.timeout:
                     continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    if self.running:  # Only log if not shutting down
+                        log.warning(f"DataReceiver accept error: {e}")
         finally:
             self._executor.shutdown(wait=False)
             if self.sock:
@@ -3090,6 +3120,8 @@ class CompanionRelayServer(threading.Thread):
         self.running = True
         self.sock = None
         self.on_status_change = on_status_change
+        self.bind_failed = False  # Track if port binding failed
+        self.bind_error = None  # Store error message
 
         # Connected clients
         self._plugin_conn = None  # Connection from Claude Code plugin
@@ -3124,7 +3156,9 @@ class CompanionRelayServer(threading.Thread):
             self.sock.listen(5)
             self.sock.settimeout(1.0)
 
-            log.info(f"Companion relay server listening on port {COMPANION_PORT}")
+            log.info(f"✓ Companion relay server listening on port {COMPANION_PORT}")
+            self.bind_failed = False
+            self.bind_error = None
             if self.on_status_change:
                 self.on_status_change("listening", COMPANION_PORT)
 
@@ -3138,8 +3172,20 @@ class CompanionRelayServer(threading.Thread):
                 except Exception as e:
                     if self.running:
                         log.error(f"Companion accept error: {e}")
+        except OSError as e:
+            log.error(f"❌ FATAL: CompanionRelay cannot bind to port {COMPANION_PORT}: {e}")
+            log.error(f"Another application may be using port {COMPANION_PORT}")
+            log.error("Claude Code companion relay will NOT work until this is resolved")
+            self.bind_failed = True
+            self.bind_error = str(e)
+            if self.on_status_change:
+                self.on_status_change("bind_failed", COMPANION_PORT)
         except Exception as e:
-            log.error(f"Companion server error: {e}")
+            log.error(f"❌ FATAL: CompanionRelay unexpected error: {e}")
+            self.bind_failed = True
+            self.bind_error = str(e)
+            if self.on_status_change:
+                self.on_status_change("error", COMPANION_PORT)
         finally:
             self._executor.shutdown(wait=False)
             if self.sock:
@@ -3263,6 +3309,8 @@ class CompanionRelayServer(threading.Thread):
                         "session_end",
                         "notification",
                         "approval_dismiss",
+                        "automation_trigger",
+                        "agent_command",
                     ]:
                         target_device = message.get("deviceId")
 
@@ -4303,6 +4351,8 @@ class DiscoveryServer(threading.Thread):
         self.connection_info = connection_info
         self.running = True
         self.sock = None
+        self.bind_failed = False  # Track if port binding failed
+        self.bind_error = None  # Store error message
 
     def run(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -4310,7 +4360,25 @@ class DiscoveryServer(threading.Thread):
         try:
             self.sock.bind(("", DISCOVERY_PORT))
             self.sock.settimeout(1.0)
-            log.info(f"Discovery server listening on UDP {DISCOVERY_PORT}")
+            log.info(f"✓ Discovery server listening on UDP {DISCOVERY_PORT}")
+        except OSError as e:
+            log.error(f"❌ FATAL: DiscoveryServer cannot bind to port {DISCOVERY_PORT}: {e}")
+            log.error(f"Another application may be using UDP port {DISCOVERY_PORT}")
+            log.error("Network discovery will NOT work until this is resolved")
+            self.bind_failed = True
+            self.bind_error = str(e)
+            return  # Exit thread - cannot continue without port
+        except Exception as e:
+            log.error(f"❌ FATAL: DiscoveryServer unexpected error during bind: {e}")
+            self.bind_failed = True
+            self.bind_error = str(e)
+            return
+
+        # Port binding successful
+        self.bind_failed = False
+        self.bind_error = None
+
+        try:
             while self.running:
                 try:
                     data, addr = self.sock.recvfrom(1024)
@@ -4324,8 +4392,8 @@ class DiscoveryServer(threading.Thread):
                 except socket.timeout:
                     continue
                 except Exception as e:
-                    log.debug(f"Discovery error: {e}")
-                    pass
+                    if self.running:  # Only log if not shutting down
+                        log.debug(f"Discovery error: {e}")
         finally:
             if self.sock:
                 self.sock.close()
@@ -4575,6 +4643,16 @@ class ShadowBridgeApp:
         # Start UPnP Port Mapping
         self.upnp_manager = UPnPManager()
         self.upnp_manager.discover_and_map()
+
+        # Start Ouroboros Sentinel
+        self.sentinel = None
+        if HAS_SENTINEL:
+            try:
+                self.sentinel = Sentinel()
+                self.sentinel.start()
+                log.info("Sentinel started")
+            except Exception as e:
+                log.error(f"Failed to start Sentinel: {e}")
 
         # Setup modern styles
         self.setup_styles()
@@ -5946,8 +6024,21 @@ class ShadowBridgeApp:
                 self.broadcast_status_label.configure(
                     text="● Broadcasting", fg=COLORS["success"]
                 )
-        except Exception:
-            pass
+            log.info("Discovery server started successfully")
+        except Exception as e:
+            log.error(f"Failed to start discovery server: {e}")
+            self.is_broadcasting = False
+            if hasattr(self, "broadcast_status_label"):
+                self.broadcast_status_label.configure(
+                    text="● Broadcast Failed", fg=COLORS["error"]
+                )
+            # Show error to user
+            messagebox.showerror(
+                "Network Discovery Failed",
+                f"Could not start network discovery service.\n\n"
+                f"Error: {e}\n\n"
+                f"Check that port {DISCOVERY_PORT} is not in use by another application."
+            )
 
     def stop_broadcast(self):
         """Stop discovery server."""
@@ -6573,35 +6664,24 @@ Or run in PowerShell (Admin):
         self.root.lift()
 
     def quit_app(self):
-        """Quit application."""
-        self._stop_web_dashboard_monitor()
-        self._save_window_state()
-        self.stop_broadcast()
-        if hasattr(self, 'signaling_service') and self.signaling_service:
-            self.signaling_service.stop()
-        if self.data_receiver:
-            try:
-                self.data_receiver.stop()
-            except (RuntimeError, OSError):
-                pass  # Already stopped or thread error
-        if self.companion_relay:
-            try:
-                self.companion_relay.stop()
-            except (RuntimeError, OSError):
-                pass  # Already stopped or thread error
-        if self.web_process:
-            try:
-                self.web_process.terminate()
-                log.info("Web dashboard process terminated")
-            except (OSError, ProcessLookupError):
-                pass  # Process already terminated
+        """Clean exit."""
         if self.tray_icon:
-            try:
-                self.tray_icon.stop()
-            except (RuntimeError, OSError):
-                pass  # Tray already stopped
-        self.root.quit()
-        self.root.destroy()
+            self.tray_icon.stop()
+        if self.discovery_server:
+            self.discovery_server.stop()
+        if self.data_receiver:
+            self.data_receiver.stop()
+        if self.companion_relay:
+            self.companion_relay.stop()
+        if self.signaling_service:
+            self.signaling_service.stop()
+        if self.sentinel:
+            self.sentinel.stop()
+        if self.web_process:
+            self.web_process.terminate()
+        if self.root:
+            self.root.destroy()
+        sys.exit(0)
 
     def force_exit(self):
         """Force exit of application immediately."""
@@ -6773,9 +6853,12 @@ Or run in PowerShell (Admin):
         )
         self.devices[device_id] = device
 
-        self.refresh_connected_devices_ui()
-        self.refresh_project_device_menu()
-        self.update_status()
+        def refresh_ui():
+            self.refresh_connected_devices_ui()
+            self.refresh_project_device_menu()
+            self.update_status()
+
+        self.root.after(0, refresh_ui)
 
     def on_projects_received(self, device_id, projects):
         """Called when projects data is received from Android app."""
@@ -6794,10 +6877,13 @@ Or run in PowerShell (Admin):
         )
         self.devices[device_id] = device
 
-        self.refresh_connected_devices_ui()
-        self.refresh_project_device_menu()
-        self.refresh_projects_ui()
-        self.update_status()
+        def refresh_ui():
+            self.refresh_connected_devices_ui()
+            self.refresh_project_device_menu()
+            self.refresh_projects_ui()
+            self.update_status()
+
+        self.root.after(0, refresh_ui)
 
         # Notify web dashboard for real-time sync
         self._notify_web_dashboard_projects_updated(device_id)
@@ -7047,8 +7133,11 @@ Or run in PowerShell (Admin):
         )
         self.notes_devices[device_id] = device
 
-        self.refresh_notes_device_menu()
-        self.refresh_notes_ui()
+        def refresh_ui():
+            self.refresh_notes_device_menu()
+            self.refresh_notes_ui()
+
+        self.root.after(0, refresh_ui)
 
         # Notify web dashboard for real-time sync
         self._notify_web_dashboard_notes_updated(device_id)
@@ -7153,6 +7242,81 @@ Or run in PowerShell (Admin):
                 )
                 urllib.request.urlopen(req, timeout=2)
                 log.debug(f"Notified web dashboard of sessions update for {device_id}")
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def _notify_web_dashboard_cards_updated(self, device_id):
+        """Notify web dashboard that cards have been updated (triggers WebSocket broadcast)."""
+
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+
+                data = json_module.dumps({"device_id": device_id}).encode("utf-8")
+                req = urllib.request.Request(
+                    "http://127.0.0.1:6767/api/cards/sync",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=2)
+                log.debug(f"Notified web dashboard of cards update for {device_id}")
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def _notify_web_dashboard_collections_updated(self, device_id):
+        """Notify web dashboard that collections have been updated (triggers WebSocket broadcast)."""
+
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+
+                data = json_module.dumps({"device_id": device_id}).encode("utf-8")
+                req = urllib.request.Request(
+                    "http://127.0.0.1:6767/api/collections/sync",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=2)
+                log.debug(
+                    f"Notified web dashboard of collections update for {device_id}"
+                )
+            except Exception as e:
+                log.debug(f"Could not notify web dashboard: {e}")
+
+        threading.Thread(target=do_notify, daemon=True).start()
+
+    def _notify_web_dashboard_session_message(
+        self, session_id, message, is_update=False
+    ):
+        """Send a session message update to the web dashboard."""
+
+        def do_notify():
+            try:
+                import urllib.request
+                import json as json_module
+
+                payload = json_module.dumps(
+                    {
+                        "session_id": session_id,
+                        "message": message,
+                        "is_update": bool(is_update),
+                    }
+                ).encode("utf-8")
+                req = urllib.request.Request(
+                    "http://127.0.0.1:6767/api/sessions/message",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=2)
             except Exception as e:
                 log.debug(f"Could not notify web dashboard: {e}")
 

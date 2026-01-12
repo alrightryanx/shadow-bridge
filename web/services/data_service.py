@@ -26,6 +26,7 @@ PROJECTS_FILE = SHADOWAI_DIR / "projects.json"
 NOTES_FILE = SHADOWAI_DIR / "notes.json"
 SESSIONS_FILE = SHADOWAI_DIR / "sessions.json"
 AUTOMATIONS_FILE = SHADOWAI_DIR / "automations.json"
+AUTOMATION_LOGS_FILE = SHADOWAI_DIR / "automation_logs.json"
 AGENTS_FILE = SHADOWAI_DIR / "agents.json"
 SYNC_KEYS_FILE = SHADOWAI_DIR / "sync_keys.json"
 ANALYTICS_FILE = SHADOWAI_DIR / "analytics.json"
@@ -216,6 +217,44 @@ def _format_timestamp(ts: int) -> str:
         return dt.strftime("%Y-%m-%d %H:%M")
     except (ValueError, OSError, OverflowError):
         return "Unknown"
+
+
+def _coerce_timestamp_ms(raw_ts: Any) -> int:
+    if isinstance(raw_ts, (int, float)):
+        ts = int(raw_ts)
+        if ts < 10_000_000_000:
+            return ts * 1000
+        return ts
+    return 0
+
+
+def _normalize_automation_log(entry: Dict) -> Optional[Dict]:
+    if not isinstance(entry, dict):
+        return None
+    raw_ts = (
+        entry.get("timestamp")
+        or entry.get("startedAt")
+        or entry.get("completedAt")
+        or entry.get("created_at")
+    )
+    ts_ms = _coerce_timestamp_ms(raw_ts)
+    status = str(entry.get("status", "")).upper()
+    success = entry.get("success")
+    if not isinstance(success, bool):
+        success = status in {"SUCCESS", "PARTIAL_SUCCESS", "COMPLETED", "DONE"}
+    message = entry.get("message") or entry.get("summary") or entry.get("details") or ""
+    if not message and status:
+        message = status.replace("_", " ").title()
+    return {
+        "timestamp": _format_timestamp(ts_ms),
+        "timestamp_raw": ts_ms,
+        "success": bool(success),
+        "status": status,
+        "message": message,
+        "details": entry.get("details"),
+        "duration_ms": entry.get("durationMs") or entry.get("duration_ms"),
+        "automation_id": entry.get("automationId") or entry.get("automation_id"),
+    }
 
 
 def _time_ago(ts: int) -> str:
@@ -651,6 +690,25 @@ def _session_title(session: Dict[str, Any]) -> str:
     return "New Session"
 
 
+def _normalize_backend_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return None
+
+
+def _extract_backend_meta(payload: Optional[Dict[str, Any]]) -> Dict[str, Optional[str]]:
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "backend_type": _normalize_backend_value(
+            payload.get("backend_type") or payload.get("backendType")
+        ),
+        "provider": _normalize_backend_value(payload.get("provider")),
+        "model": _normalize_backend_value(payload.get("model")),
+    }
+
+
 def get_sessions(
     device_id: Optional[str] = None,
     project_id: Optional[str] = None,
@@ -686,6 +744,10 @@ def get_sessions(
                 or session.get("backendType"),
                 "provider": session.get("provider"),
                 "model": session.get("model"),
+                "backend_last_changed_at": session.get("backend_last_changed_at"),
+                "backend_change_count": session.get("backend_change_count", 0),
+                "backend_switch_count": session.get("backend_switch_count", 0),
+                "model_switch_count": session.get("model_switch_count", 0),
                 "lastActivityAt": last_activity,
                 "time_ago": _time_ago(last_activity),
                 "message_count": len(messages) if isinstance(messages, list) else 0,
@@ -733,6 +795,21 @@ def upsert_session(session: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(existing) if isinstance(existing, dict) else {}
     merged.update(session)
     merged["id"] = session_id
+
+    if "pending_sync" not in session:
+        prefers_backend = any(
+            key in session
+            for key in (
+                "preferred_backend_key",
+                "preferred_backend_type",
+                "preferred_provider",
+                "preferred_model",
+                "preferred_model_key",
+                "backend_change_pending",
+            )
+        )
+        if session.get("backend_change_pending") or prefers_backend:
+            merged["pending_sync"] = True
 
     if "messages" not in session and "messages" in existing:
         merged["messages"] = existing.get("messages", [])
@@ -822,19 +899,26 @@ def append_session_message(
     data = _load_sessions_file()
     sessions = data.get("sessions", {})
 
+    if not isinstance(message, dict):
+        message = {}
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+
     session = sessions.get(session_id)
     if not isinstance(session, dict):
         session = {
             "id": session_id,
             "projectId": message.get("projectId") or message.get("project_id"),
-            "createdAt": int(datetime.now().timestamp() * 1000),
+            "createdAt": now_ms,
             "messages": [],
         }
+
+    prev_backend = _extract_backend_meta(session)
 
     if isinstance(session_meta, dict):
         session.update({k: v for k, v in session_meta.items() if v is not None})
 
-    if isinstance(message, dict):
+    if isinstance(session_meta, dict):
         for key in (
             "device_id",
             "deviceId",
@@ -845,9 +929,94 @@ def append_session_message(
             "provider",
             "model",
         ):
-            val = message.get(key)
-            if val is not None:
-                session[key] = val
+            if message.get(key) is None:
+                val = session_meta.get(key)
+                if val is not None:
+                    message[key] = val
+
+    for key in (
+        "device_id",
+        "deviceId",
+        "device_name",
+        "deviceName",
+    ):
+        val = message.get(key)
+        if val is not None:
+            session[key] = val
+
+    incoming_backend = _extract_backend_meta(session_meta)
+    message_backend = _extract_backend_meta(message)
+    for key, val in message_backend.items():
+        if val is not None:
+            incoming_backend[key] = val
+
+    timestamp = message.get("timestamp")
+    if not isinstance(timestamp, int) or timestamp <= 0:
+        timestamp = now_ms
+
+    if incoming_backend:
+        changes = {}
+        updated_backend = dict(prev_backend)
+        for key, val in incoming_backend.items():
+            if val is None:
+                continue
+            updated_backend[key] = val
+            if val != prev_backend.get(key):
+                changes[key] = {"from": prev_backend.get(key), "to": val}
+
+        if changes:
+            if updated_backend.get("backend_type"):
+                session["backend_type"] = updated_backend["backend_type"]
+            if updated_backend.get("provider"):
+                session["provider"] = updated_backend["provider"]
+            if updated_backend.get("model"):
+                session["model"] = updated_backend["model"]
+
+            history = session.get("backend_history")
+            if not isinstance(history, list):
+                history = []
+            history.append(
+                {
+                    "timestamp": timestamp,
+                    "from": prev_backend,
+                    "to": updated_backend,
+                    "changes": changes,
+                }
+            )
+            if len(history) > 50:
+                history = history[-50:]
+            session["backend_history"] = history
+            session["backend_last_changed_at"] = history[-1]["timestamp"]
+            session["backend_change_count"] = int(
+                session.get("backend_change_count", 0)
+            ) + 1
+            if any(key in changes for key in ("backend_type", "provider")):
+                session["backend_switch_count"] = int(
+                    session.get("backend_switch_count", 0)
+                ) + 1
+            if "model" in changes:
+                session["model_switch_count"] = int(
+                    session.get("model_switch_count", 0)
+                ) + 1
+
+    if session.get("backend_change_pending"):
+        pref_type = _normalize_backend_value(session.get("preferred_backend_type"))
+        pref_provider = _normalize_backend_value(session.get("preferred_provider"))
+        pref_model = _normalize_backend_value(
+            session.get("preferred_model") or session.get("preferred_model_key")
+        )
+        if pref_type or pref_provider or pref_model:
+            current_backend = _extract_backend_meta(session)
+            matches = True
+            if pref_type and current_backend.get("backend_type"):
+                matches = pref_type.lower() == str(current_backend.get("backend_type")).lower()
+            if matches and pref_provider and current_backend.get("provider"):
+                matches = pref_provider.lower() == str(current_backend.get("provider")).lower()
+            if matches and pref_model and current_backend.get("model"):
+                matches = pref_model.lower() == str(current_backend.get("model")).lower()
+            if matches:
+                session["backend_change_pending"] = False
+                session["backend_change_completed_at"] = timestamp
 
     messages = session.get("messages")
     if not isinstance(messages, list):
@@ -855,9 +1024,6 @@ def append_session_message(
 
     message_id = message.get("id") or message.get("messageId") or _generate_id()
     role = message.get("role", "assistant")
-    timestamp = message.get("timestamp")
-    if not isinstance(timestamp, int) or timestamp <= 0:
-        timestamp = int(datetime.now().timestamp() * 1000)
 
     content = message.get("content")
     if not isinstance(content, str):
@@ -918,7 +1084,7 @@ def append_session_message(
         threading.Thread(target=check_quality, daemon=True).start()
 
     _write_json_file(SESSIONS_FILE, data)
-    return session
+    return {"session": session, "message": message}
 
 
 def delete_note(note_id: str) -> Dict:
@@ -1032,8 +1198,43 @@ def get_automation(automation_id: str) -> Optional[Dict]:
 
 def get_automation_logs(automation_id: str) -> List[Dict]:
     """Get execution logs for an automation."""
-    # TODO: Implement log reading from device
-    return []
+    data = _read_json_file(AUTOMATION_LOGS_FILE)
+    if not data:
+        return []
+
+    raw_logs: List[Dict] = []
+    if isinstance(data, list):
+        raw_logs = data
+    elif isinstance(data, dict):
+        for key in ("logs", "automation_logs"):
+            entries = data.get(key)
+            if isinstance(entries, list):
+                raw_logs = entries
+                break
+        if not raw_logs:
+            for key in ("by_automation", "automations"):
+                entries = data.get(key)
+                if isinstance(entries, dict):
+                    automation_entries = entries.get(automation_id)
+                    if isinstance(automation_entries, list):
+                        raw_logs = automation_entries
+                        break
+    if not raw_logs:
+        return []
+
+    normalized = []
+    for entry in raw_logs:
+        normalized_entry = _normalize_automation_log(entry)
+        if not normalized_entry:
+            continue
+        if normalized_entry.get("automation_id") and (
+            normalized_entry["automation_id"] != automation_id
+        ):
+            continue
+        normalized.append(normalized_entry)
+
+    normalized.sort(key=lambda item: item.get("timestamp_raw", 0), reverse=True)
+    return normalized
 
 
 def update_automation(automation_id: str, data: Dict, device_id: str = "web") -> Dict:
@@ -1366,28 +1567,71 @@ def get_status() -> Dict:
     except (socket.gaierror, socket.herror, OSError):
         local_ip = "127.0.0.1"
 
-    # Check for debug mode
+    # Check for debug mode and thread health
     debug_mode = False
+    thread_health = {}
     try:
         # Import at function level to avoid circular import
         import shadow_bridge_gui
 
         debug_mode = getattr(shadow_bridge_gui, "DEBUG_BUILD", False)
+
+        # Check thread health if app instance exists
+        app = getattr(shadow_bridge_gui, "_app_instance", None)
+        if app:
+            # DataReceiver health
+            if hasattr(app, "data_receiver") and app.data_receiver:
+                thread_health["data_receiver"] = {
+                    "alive": app.data_receiver.is_alive(),
+                    "bind_failed": getattr(app.data_receiver, "bind_failed", False),
+                    "bind_error": getattr(app.data_receiver, "bind_error", None),
+                    "port": 19284
+                }
+
+            # CompanionRelay health
+            if hasattr(app, "companion_relay") and app.companion_relay:
+                thread_health["companion_relay"] = {
+                    "alive": app.companion_relay.is_alive(),
+                    "bind_failed": getattr(app.companion_relay, "bind_failed", False),
+                    "bind_error": getattr(app.companion_relay, "bind_error", None),
+                    "port": 19286
+                }
+
+            # DiscoveryServer health
+            if hasattr(app, "discovery_server") and app.discovery_server:
+                thread_health["discovery_server"] = {
+                    "alive": app.discovery_server.is_alive(),
+                    "bind_failed": getattr(app.discovery_server, "bind_failed", False),
+                    "bind_error": getattr(app.discovery_server, "bind_error", None),
+                    "port": 19283
+                }
     except (ImportError, AttributeError):
         pass
 
-    return {
+    result = {
         "shadowbridge_running": shadowbridge_running,
         "devices_connected": len(online_devices),
         "total_devices": len(devices),
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.039",
+        "version": "1.040",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,
     }
+
+    # Add thread health if available
+    if thread_health:
+        result["threads"] = thread_health
+        # Calculate overall health
+        all_healthy = all(
+            t.get("alive") and not t.get("bind_failed")
+            for t in thread_health.values()
+        )
+        result["all_threads_healthy"] = all_healthy
+
+    return result
 
 
 # ============ Data Files ============
