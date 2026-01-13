@@ -752,7 +752,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.044"
+APP_VERSION = "1.045"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -8075,7 +8075,44 @@ def run_web_dashboard_server(open_browser: bool):
         # Start discovery server
         log.info("Starting discovery server...")
         ssh_port = find_ssh_port() or 22
-        discovery_server = DiscoveryServer(ssh_port=ssh_port)
+
+        # Build connection_info for DiscoveryServer
+        all_ips = get_all_ips()
+        tailscale_ip = get_tailscale_ip()
+        local_ip = get_local_ip()
+        hostname_local = get_hostname_local()
+
+        # Get dynamic encryption salt
+        try:
+            from web.services.data_service import DYNAMIC_SALT
+            salt_b64 = base64.b64encode(DYNAMIC_SALT).decode("ascii")
+        except Exception:
+            salt_b64 = None
+
+        # Build hosts list
+        hosts_to_try = []
+        if tailscale_ip:
+            hosts_to_try.append({"host": tailscale_ip, "type": "tailscale", "stable": True})
+        if local_ip:
+            hosts_to_try.append({"host": local_ip, "type": "local", "stable": False})
+
+        connection_info = {
+            "type": "shadowai_connect",
+            "version": 3,
+            "mode": "tailscale" if tailscale_ip else "local",
+            "host": tailscale_ip or local_ip,
+            "port": ssh_port,
+            "username": get_username(),
+            "hostname": socket.gethostname(),
+            "hostname_local": hostname_local,
+            "hosts": hosts_to_try,
+            "local_ip": local_ip,
+            "tailscale_ip": tailscale_ip,
+            "encryption_salt": salt_b64,
+            "timestamp": int(time.time()),
+        }
+
+        discovery_server = DiscoveryServer(connection_info)
         discovery_server.start()
         log.info(f"Discovery server started on port {DISCOVERY_PORT}")
 
