@@ -467,10 +467,7 @@ body {
 }
 
 .connection-selection-hint {
-    font-size: 11px;
-    color: var(--md-sys-color-on-surface-variant);
-    opacity: 0.9;
-    white-space: nowrap;
+    display: none; /* Hidden - redundant with backend/model selectors */
 }
 
 .connection-controls {

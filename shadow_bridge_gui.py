@@ -752,7 +752,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.045"
+APP_VERSION = "1.046"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
