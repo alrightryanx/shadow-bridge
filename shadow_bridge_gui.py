@@ -752,7 +752,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.041"
+APP_VERSION = "1.042"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -5313,6 +5313,34 @@ class ShadowBridgeApp:
         else:
             self.ssh_label.configure(text=f"SSH :{self.ssh_port} ✗", fg=COLORS["error"])
 
+        # Merge active devices from Signaling Service (UDP)
+        if hasattr(self, "signaling_service") and self.signaling_service:
+            try:
+                # Use copy to avoid thread contention
+                signaling_devices = self.signaling_service.active_devices.copy()
+                for dev_id, info in signaling_devices.items():
+                    # Update if we have new info or it's a new device
+                    current_dev = self.devices.get(dev_id, {})
+                    last_seen_gui = float(current_dev.get("last_seen", 0) or 0)
+                    last_seen_udp = float(info.get("last_seen", 0) or 0)
+                    
+                    if last_seen_udp > last_seen_gui:
+                        # Extract name from status json if available
+                        name = dev_id
+                        status = info.get("status", {})
+                        if status and isinstance(status, dict):
+                            name = status.get("device_name", status.get("name", dev_id))
+                        
+                        current_dev.update({
+                            "id": dev_id,
+                            "name": name,
+                            "ip": info.get("ip"),
+                            "last_seen": last_seen_udp
+                        })
+                        self.devices[dev_id] = current_dev
+            except Exception as e:
+                log.debug(f"Error merging signaling devices: {e}")
+
         now = time.time()
         active_devices = [
             d
@@ -8056,6 +8084,40 @@ def run_web_dashboard_server(open_browser: bool):
 
         host = "0.0.0.0"  # Allow external access
         port = 6767
+
+        # CRITICAL FIX: Start DataReceiver and Discovery server for SSH key exchange
+        log.info("Starting DataReceiver for key exchange in web-server mode...")
+
+        # Create DataReceiver with auto-approval callback
+        data_receiver_ref = [None]  # Use list to allow mutation in nested function
+
+        def headless_key_approval(device_id, device_name, ip):
+            """Auto-approve SSH keys in headless mode (web-server only)."""
+            log.warning(f"HEADLESS MODE: Auto-approving SSH key for {device_name} ({device_id}) from {ip}")
+            log.warning("⚠️ Running in --web-server mode without GUI, auto-approving all SSH key requests")
+            log.warning("⚠️ For manual approval, run ShadowBridge.exe without --web-server flag")
+            # Auto-approve the device
+            if data_receiver_ref[0]:
+                result = data_receiver_ref[0].approve_device(device_id)
+                log.info(f"Auto-approval result: {result}")
+
+        data_receiver = DataReceiver(
+            on_data_received=lambda device_id, projects: log.info(f"Projects received from {device_id}"),
+            on_device_connected=lambda device_id, ip: log.info(f"Device connected: {device_id} from {ip}"),
+            on_notes_received=lambda device_id, notes: log.info(f"Notes received from {device_id}"),
+            on_sessions_received=lambda device_id, sessions: log.info(f"Sessions received from {device_id}"),
+            on_key_approval_needed=headless_key_approval
+        )
+        data_receiver_ref[0] = data_receiver  # Store reference for callback
+        data_receiver.start()
+        log.info(f"DataReceiver started on port {DATA_PORT}")
+
+        # Start discovery server
+        log.info("Starting discovery server...")
+        ssh_port = find_ssh_port() or 22
+        discovery_server = DiscoveryServer(ssh_port=ssh_port)
+        discovery_server.start()
+        log.info(f"Discovery server started on port {DISCOVERY_PORT}")
 
         def open_browser_delayed():
             time.sleep(1.5)
