@@ -759,7 +759,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.050"
+APP_VERSION = "1.051"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -5114,13 +5114,17 @@ class ShadowBridgeApp:
         header = tk.Frame(left_inner, bg=COLORS["bg_surface"])
         header.pack(fill=tk.X, pady=(0, 12))
 
-        tk.Label(
+        title_label = tk.Label(
             header,
             text="ShadowBridge",
             bg=COLORS["bg_surface"],
             fg=COLORS["text"],
-            font=("Segoe UI", 20, "bold")
-        ).pack(side=tk.LEFT)
+            font=("Segoe UI", 20, "bold"),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0
+        )
+        title_label.pack(side=tk.LEFT)
 
         # Version badge
         version_label = tk.Label(
@@ -5141,8 +5145,10 @@ class ShadowBridgeApp:
         # Host stack
         host_stack = tk.Frame(device_row, bg=COLORS["bg_surface"])
         host_stack.pack(side=tk.LEFT)
-        tk.Label(host_stack, text="HOST", bg=COLORS["bg_surface"], fg=COLORS["text_muted"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
-        tk.Label(host_stack, text=f"{socket.gethostname()}", bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], font=("Segoe UI", 10)).pack(anchor="w")
+        host_label = tk.Label(host_stack, text="HOST", bg=COLORS["bg_surface"], fg=COLORS["text_muted"], font=("Segoe UI", 8, "bold"), relief="flat", borderwidth=0, highlightthickness=0)
+        host_label.pack(anchor="w")
+        hostname_label = tk.Label(host_stack, text=f"{socket.gethostname()}", bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], font=("Segoe UI", 10), relief="flat", borderwidth=0, highlightthickness=0)
+        hostname_label.pack(anchor="w")
 
         # Status stack
         status_stack = tk.Frame(device_row, bg=COLORS["bg_surface"])
@@ -5193,13 +5199,17 @@ class ShadowBridgeApp:
         tools_card = tk.Frame(left_inner, bg=COLORS["bg_card"], padx=20, pady=15)
         tools_card.pack(fill=tk.X, pady=(0, 10))
 
-        tk.Label(
+        cli_tools_label = tk.Label(
             tools_card,
             text="CLI TOOLS",
             bg=COLORS["bg_card"],
             fg=COLORS["text_muted"],
-            font=("Segoe UI", 8, "bold")
-        ).pack(anchor="w", pady=(0, 12))
+            font=("Segoe UI", 8, "bold"),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0
+        )
+        cli_tools_label.pack(anchor="w", pady=(0, 12))
 
         # Tool buttons grid
         self.tool_buttons = {}
@@ -5235,7 +5245,9 @@ class ShadowBridgeApp:
                 pady=pady,
                 cursor="hand2",
                 activebackground=COLORS["accent_hover"],
-                activeforeground="white"
+                activeforeground="white",
+                highlightthickness=0,
+                overrelief="flat"
             )
             
             def on_enter(e):
@@ -5260,9 +5272,12 @@ class ShadowBridgeApp:
             status_canvas.create_oval(2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot")
             self.tool_status[tool_id] = status_canvas
 
-            tk.Label(
-                row, text=name, bg=COLORS["bg_card"], fg=COLORS["text_secondary"], font=("Segoe UI", 10), width=12, anchor="w"
-            ).pack(side=tk.LEFT)
+            tool_name_label = tk.Label(
+                row, text=name, bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
+                font=("Segoe UI", 10), width=12, anchor="w",
+                relief="flat", borderwidth=0, highlightthickness=0
+            )
+            tool_name_label.pack(side=tk.LEFT)
 
             btn = create_modern_button(
                 row,
