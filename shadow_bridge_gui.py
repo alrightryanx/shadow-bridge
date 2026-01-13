@@ -752,7 +752,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.042"
+APP_VERSION = "1.044"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -1856,7 +1856,7 @@ class DataReceiver(threading.Thread):
 
     # Rate limiting settings
     RATE_LIMIT_WINDOW = 60  # seconds
-    RATE_LIMIT_MAX = 5  # max attempts per window
+    RATE_LIMIT_MAX = 30  # max attempts per window (increased for retry flows)
 
     # SECURITY: Limit concurrent connections to prevent resource exhaustion
     MAX_WORKERS = 10
@@ -2162,11 +2162,71 @@ class DataReceiver(threading.Thread):
         """Get list of pending key approvals."""
         return dict(self._pending_keys)
 
+    def revoke_all_keys(self):
+        """Remove all Shadow-added keys from authorized_keys files."""
+        try:
+            # List of authorized_keys files to check
+            auth_keys_files = []
+            home_dir = os.path.expanduser("~")
+            ssh_dir = os.path.join(home_dir, ".ssh")
+            auth_keys_files.append(os.path.join(ssh_dir, "authorized_keys"))
+            if platform.system() == "Windows":
+                auth_keys_files.append(r"C:\ProgramData\ssh\administrators_authorized_keys")
+
+            removed_count = 0
+            for auth_keys_file in auth_keys_files:
+                if not os.path.exists(auth_keys_file):
+                    continue
+
+                try:
+                    with open(auth_keys_file, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+
+                    new_lines = []
+                    skip_next = False
+                    for line in lines:
+                        if skip_next:
+                            skip_next = False
+                            removed_count += 1
+                            continue
+                        
+                        if line.startswith("# Shadow device:"):
+                            skip_next = True
+                            continue
+                        
+                        new_lines.append(line)
+
+                    if len(new_lines) < len(lines):
+                        with open(auth_keys_file, "w", encoding="utf-8") as f:
+                            f.writelines(new_lines)
+                        log.info(f"Cleaned Shadow keys from {auth_keys_file}")
+
+                except Exception as e:
+                    log.warning(f"Failed to clean {auth_keys_file}: {e}")
+
+            # Also clear approved devices and pending keys
+            with self._devices_lock:
+                self._approved_devices.clear()
+                self._save_approved_devices()
+                self._pending_keys.clear()
+                self.connected_devices.clear()
+            
+            return {"success": True, "message": f"Revoked {removed_count} keys and cleared pairing data."}
+        except Exception as e:
+            return {"success": False, "message": f"Revocation failed: {str(e)}"}
+
     def _check_rate_limit(self, ip):
         """Check if IP is rate limited. Returns True if request is allowed."""
         # Skip rate limiting for localhost (internal web dashboard connections)
         if ip in ("127.0.0.1", "localhost", "::1"):
             return True
+
+        # Skip rate limiting for approved devices (check if any approved device has this IP)
+        with self._devices_lock:
+            for device_id in self._approved_devices:
+                device_info = self.connected_devices.get(device_id, {})
+                if device_info.get("ip") == ip:
+                    return True  # Approved device, no rate limit
 
         now = time.time()
         with self._rate_limit_lock:
@@ -2197,9 +2257,9 @@ class DataReceiver(threading.Thread):
             self.sock.bind(("", DATA_PORT))
             self.sock.listen(5)
             self.sock.settimeout(1.0)
-            log.info(f"✓ DataReceiver listening on port {DATA_PORT}")
+            log.info(f"[OK] DataReceiver listening on port {DATA_PORT}")
         except OSError as e:
-            log.error(f"❌ FATAL: DataReceiver cannot bind to port {DATA_PORT}: {e}")
+            log.error(f"[ERR] FATAL: DataReceiver cannot bind to port {DATA_PORT}: {e}")
             log.error(f"Another application may be using port {DATA_PORT}")
             log.error("Device sync will NOT work until this is resolved")
             # Set flag for GUI to detect failure
@@ -2207,7 +2267,7 @@ class DataReceiver(threading.Thread):
             self.bind_error = str(e)
             return  # Exit thread - cannot continue without port
         except Exception as e:
-            log.error(f"❌ FATAL: DataReceiver unexpected error during bind: {e}")
+            log.error(f"[ERR] FATAL: DataReceiver unexpected error during bind: {e}")
             self.bind_failed = True
             self.bind_error = str(e)
             return
@@ -2328,19 +2388,16 @@ class DataReceiver(threading.Thread):
                     # Handle different actions
                     log.info(f"Action: {action}, Device: {device_name}")
                     if action == "install_key":
-                        # SSH key installation request - SECURITY: Requires approval for new devices
+                        # SSH key installation request - SECURITY: Requires approval for new devices AND new keys
                         public_key = payload.get("public_key", "")
 
-                        # Check if device is already approved
-                        if device_id in self._approved_devices:
-                            log.info(
-                                f"Installing SSH key for approved device: {device_name}"
-                            )
-                            response = self._install_ssh_key(public_key, device_name)
-                            log.info(f"Install response: {response}")
+                        # Check if key is already installed (regardless of device approval)
+                        if self._is_key_installed(public_key):
+                            log.info(f"SSH key already installed for: {device_name}")
+                            response = {"success": True, "message": "Key already installed"}
                             self._send_response(conn, response)
                         else:
-                            # Queue for approval
+                            # Queue for approval (even if device is known, a new key requires approval)
                             log.info(
                                 f"Queueing SSH key for approval: {device_name} ({device_id})"
                             )
@@ -2527,6 +2584,45 @@ class DataReceiver(threading.Thread):
             conn.send(data)
         except (socket.error, BrokenPipeError, ConnectionResetError, OSError):
             log.debug("Failed to send response: connection closed")
+
+    def _is_key_installed(self, public_key):
+        """Check if the specific public key is already in any authorized_keys file."""
+        if not public_key:
+            return False
+
+        try:
+            key_parts = public_key.strip().split()
+            if len(key_parts) < 2:
+                return False
+            # Fingerprint is "type data" (e.g., "ssh-rsa AAA...")
+            key_fingerprint = f"{key_parts[0]} {key_parts[1]}"
+
+            # List of files to check (same as _install_ssh_key)
+            files_to_check = []
+            
+            # User's ~/.ssh/authorized_keys
+            home_dir = os.path.expanduser("~")
+            ssh_dir = os.path.join(home_dir, ".ssh")
+            files_to_check.append(os.path.join(ssh_dir, "authorized_keys"))
+
+            # On Windows, also check administrators_authorized_keys
+            if platform.system() == "Windows":
+                files_to_check.append(r"C:\ProgramData\ssh\administrators_authorized_keys")
+
+            for fpath in files_to_check:
+                if os.path.exists(fpath):
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            if key_fingerprint in content:
+                                return True
+                    except Exception:
+                        pass
+            
+            return False
+        except Exception as e:
+            log.error(f"Error checking if key installed: {e}")
+            return False
 
     def _validate_ssh_key(self, public_key):
         """Validate SSH public key format and structure.
@@ -3156,7 +3252,7 @@ class CompanionRelayServer(threading.Thread):
             self.sock.listen(5)
             self.sock.settimeout(1.0)
 
-            log.info(f"✓ Companion relay server listening on port {COMPANION_PORT}")
+            log.info(f"[OK] Companion relay server listening on port {COMPANION_PORT}")
             self.bind_failed = False
             self.bind_error = None
             if self.on_status_change:
@@ -3173,7 +3269,7 @@ class CompanionRelayServer(threading.Thread):
                     if self.running:
                         log.error(f"Companion accept error: {e}")
         except OSError as e:
-            log.error(f"❌ FATAL: CompanionRelay cannot bind to port {COMPANION_PORT}: {e}")
+            log.error(f"[ERR] FATAL: CompanionRelay cannot bind to port {COMPANION_PORT}: {e}")
             log.error(f"Another application may be using port {COMPANION_PORT}")
             log.error("Claude Code companion relay will NOT work until this is resolved")
             self.bind_failed = True
@@ -3181,7 +3277,7 @@ class CompanionRelayServer(threading.Thread):
             if self.on_status_change:
                 self.on_status_change("bind_failed", COMPANION_PORT)
         except Exception as e:
-            log.error(f"❌ FATAL: CompanionRelay unexpected error: {e}")
+            log.error(f"[ERR] FATAL: CompanionRelay unexpected error: {e}")
             self.bind_failed = True
             self.bind_error = str(e)
             if self.on_status_change:
@@ -4385,16 +4481,16 @@ class DiscoveryServer(threading.Thread):
         try:
             self.sock.bind(("", DISCOVERY_PORT))
             self.sock.settimeout(1.0)
-            log.info(f"✓ Discovery server listening on UDP {DISCOVERY_PORT}")
+            log.info(f"[OK] Discovery server listening on UDP {DISCOVERY_PORT}")
         except OSError as e:
-            log.error(f"❌ FATAL: DiscoveryServer cannot bind to port {DISCOVERY_PORT}: {e}")
+            log.error(f"[ERR] FATAL: DiscoveryServer cannot bind to port {DISCOVERY_PORT}: {e}")
             log.error(f"Another application may be using UDP port {DISCOVERY_PORT}")
             log.error("Network discovery will NOT work until this is resolved")
             self.bind_failed = True
             self.bind_error = str(e)
             return  # Exit thread - cannot continue without port
         except Exception as e:
-            log.error(f"❌ FATAL: DiscoveryServer unexpected error during bind: {e}")
+            log.error(f"[ERR] FATAL: DiscoveryServer unexpected error during bind: {e}")
             self.bind_failed = True
             self.bind_error = str(e)
             return
@@ -4631,9 +4727,11 @@ class ShadowBridgeApp:
         x = screen_w - self.window_width - 20
         y = screen_h - self.window_height - 100  # Above taskbar
 
-        # Set geometry - fixed size, bottom-right
-        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+        # Set geometry - start off-screen for animation
+        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{screen_h}")
         self.root.resizable(False, False)  # No resizing
+        self.target_y = y
+        self.current_y = screen_h
 
         # State - auto-detect SSH port
         detected_port = find_ssh_port()
@@ -4697,8 +4795,12 @@ class ShadowBridgeApp:
 
         # Force geometry AFTER widgets are created (no saved state - always bottom-right)
         self.root.update_idletasks()
-        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+        # Initial position for animation start
+        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{screen_h}")
         self.root.after(100, lambda: apply_windows_11_theme(self.root))
+        
+        # Start slide-up animation
+        self.root.after(200, self._animate_show)
 
         # Start data receiver for project sync
         self.start_data_receiver()
@@ -4713,91 +4815,100 @@ class ShadowBridgeApp:
         self.root.after(500, self.auto_start_broadcast)
         self.root.after(2000, self.check_for_updates_on_startup)
 
+    def _animate_show(self):
+        """Smooth slide-up animation from bottom with fade-in."""
+        step = 18
+        # Calculate alpha based on progress
+        total_dist = self.root.winfo_screenheight() - self.target_y
+        current_dist = self.current_y - self.target_y
+        alpha = max(0.1, 1.0 - (current_dist / total_dist))
+        
+        try:
+            self.root.attributes("-alpha", alpha)
+        except Exception:
+            pass
+
+        if self.current_y > self.target_y:
+            self.current_y -= step
+            if self.current_y < self.target_y:
+                self.current_y = self.target_y
+            
+            x = self.root.winfo_x()
+            self.root.geometry(f"+{x}+{self.current_y}")
+            self.root.after(8, self._animate_show)
+        else:
+            try:
+                self.root.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+
     def setup_styles(self):
         """Configure ttk styles for modern M3-inspired look."""
         style = ttk.Style()
-        style.theme_use("clam")
+        
+        if HAS_SV_TTK:
+            sv_ttk.set_theme("dark")
+        else:
+            style.theme_use("clam")
+
+        # Configure colors for themed widgets
+        style.configure(".", background=COLORS["bg_surface"], foreground=COLORS["text"])
+        style.configure("TFrame", background=COLORS["bg_surface"])
+        style.configure("Card.TFrame", background=COLORS["bg_card"], relief="flat")
+        
+        # Label styles
+        style.configure("TLabel", background=COLORS["bg_surface"], foreground=COLORS["text"], font=("Segoe UI", 10))
+        style.configure("Header.TLabel", font=("Segoe UI", 20, "bold"), foreground=COLORS["text"])
+        style.configure("Subheader.TLabel", foreground=COLORS["text_secondary"], font=("Segoe UI", 10))
+        style.configure("Caption.TLabel", foreground=COLORS["text_muted"], font=("Segoe UI", 8, "bold"))
+        style.configure("Badge.TLabel", background=COLORS["accent_container"], foreground=COLORS["accent_light"], font=("Segoe UI", 8, "bold"))
+        
+        # Button styles - Accent (Terracotta)
+        style.configure(
+            "Accent.TButton", 
+            font=("Segoe UI", 10, "bold"),
+            background=COLORS["accent"],
+            foreground="white"
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", COLORS["accent_hover"]), ("pressed", COLORS["accent"])],
+            foreground=[("active", "white")]
+        )
+        
+        # Button styles - Secondary
+        style.configure(
+            "Secondary.TButton", 
+            font=("Segoe UI", 9),
+            background=COLORS["bg_elevated"]
+        )
+        style.map(
+            "Secondary.TButton",
+            background=[("active", COLORS["accent"]), ("pressed", COLORS["bg_elevated"])],
+            foreground=[("active", "white")]
+        )
 
         # Scrollbar styling
         style.configure(
-            "Custom.Vertical.TScrollbar",
+            "Vertical.TScrollbar",
             background=COLORS["bg_elevated"],
             troughcolor=COLORS["bg_surface"],
             bordercolor=COLORS["bg_surface"],
-            lightcolor=COLORS["bg_elevated"],
-            darkcolor=COLORS["bg_elevated"],
-            arrowcolor=COLORS["bg_surface"],
+            arrowcolor=COLORS["text_dim"],
             relief="flat",
             borderwidth=0,
             width=10,
         )
-        style.map(
-            "Custom.Vertical.TScrollbar",
-            background=[
-                ("active", COLORS["accent"]),
-                ("!active", COLORS["bg_elevated"]),
-            ],
-            troughcolor=[
-                ("active", COLORS["bg_surface"]),
-                ("!active", COLORS["bg_surface"]),
-            ],
-        )
-        try:
-            style.layout(
-                "Custom.Vertical.TScrollbar",
-                [
-                    (
-                        "Vertical.Scrollbar.trough",
-                        {
-                            "children": [
-                                (
-                                    "Vertical.Scrollbar.thumb",
-                                    {"expand": "1", "sticky": "nswe"},
-                                )
-                            ],
-                            "sticky": "nswe",
-                        },
-                    )
-                ],
-            )
-        except Exception:
-            pass
-
-        # Entry styling
-        style.configure(
-            "Custom.TEntry",
-            fieldbackground=COLORS["bg_input"],
-            foreground=COLORS["text"],
-            bordercolor=COLORS["border"],
-            insertcolor=COLORS["text"],
-        )
-
-        # Combobox styling
-        style.configure(
-            "Custom.TCombobox",
-            fieldbackground=COLORS["bg_input"],
-            background=COLORS["bg_elevated"],
-            foreground=COLORS["text"],
-            arrowcolor=COLORS["text_dim"],
-            bordercolor=COLORS["border"],
-        )
-        style.map(
-            "Custom.TCombobox",
-            fieldbackground=[("readonly", COLORS["bg_input"])],
-            foreground=[("readonly", COLORS["text"])],
-        )
 
     def create_widgets(self):
-        """Create compact single-column layout for Quick Connect and CLI tools."""
-        # Simple non-scrollable content frame
-        left_inner = tk.Frame(self.root, bg=COLORS["bg_surface"], padx=20, pady=16)
-        left_inner.pack(fill=tk.BOTH, expand=True)
+        """Create compact single-column layout using tk for reliable dark theming."""
+        # Main container
+        main_container = tk.Frame(self.root, bg=COLORS["bg_surface"])
+        main_container.pack(fill=tk.BOTH, expand=True)
 
-        # --- LEFT PANE CONTENT ---
-        def add_divider(container, top=6, bottom=6):
-            divider = tk.Frame(container, bg=COLORS["divider"], height=1)
-            divider.pack(fill=tk.X, pady=(top, bottom))
-            return divider
+        # Inner padding frame
+        left_inner = tk.Frame(main_container, bg=COLORS["bg_surface"], padx=20, pady=16)
+        left_inner.pack(fill=tk.BOTH, expand=True)
 
         # Header with title
         header = tk.Frame(left_inner, bg=COLORS["bg_surface"])
@@ -4808,7 +4919,7 @@ class ShadowBridgeApp:
             text="ShadowBridge",
             bg=COLORS["bg_surface"],
             fg=COLORS["text"],
-            font=("Segoe UI", 18, "bold"),
+            font=("Segoe UI", 20, "bold")
         ).pack(side=tk.LEFT)
 
         # Version badge
@@ -4817,80 +4928,47 @@ class ShadowBridgeApp:
             text=f"v{APP_VERSION}",
             bg=COLORS["accent_container"],
             fg=COLORS["accent_light"],
-            font=("Segoe UI", 8),
-            padx=6,
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
             pady=2,
         )
-        version_label.pack(side=tk.LEFT, padx=(8, 0))
+        version_label.pack(side=tk.LEFT, padx=(10, 0))
 
-        # Host info row with broadcast status
+        # Host info row
         device_row = tk.Frame(left_inner, bg=COLORS["bg_surface"])
-        device_row.pack(fill=tk.X, pady=(0, 12))
+        device_row.pack(fill=tk.X, pady=(0, 15))
 
-        # Host stack on left (HOST label above hostname)
+        # Host stack
         host_stack = tk.Frame(device_row, bg=COLORS["bg_surface"])
         host_stack.pack(side=tk.LEFT)
-        tk.Label(
-            host_stack,
-            text="HOST",
-            bg=COLORS["bg_surface"],
-            fg=COLORS["text_muted"],
-            font=("Segoe UI", 8),
-            anchor="w",
-        ).pack(anchor="w")
-        tk.Label(
-            host_stack,
-            text=f"{socket.gethostname()}",
-            bg=COLORS["bg_surface"],
-            fg=COLORS["text_secondary"],
-            font=("Segoe UI", 9),
-            anchor="w",
-        ).pack(anchor="w")
+        tk.Label(host_stack, text="HOST", bg=COLORS["bg_surface"], fg=COLORS["text_muted"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Label(host_stack, text=f"{socket.gethostname()}", bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], font=("Segoe UI", 10)).pack(anchor="w")
 
-        # Status stack on right (device name above broadcast status)
+        # Status stack
         status_stack = tk.Frame(device_row, bg=COLORS["bg_surface"])
         status_stack.pack(side=tk.RIGHT)
 
-        # Connected device name (above broadcast)
         self.connected_device_label = tk.Label(
-            status_stack,
-            text="No device",
-            bg=COLORS["bg_surface"],
-            fg=COLORS["text_dim"],
-            font=("Segoe UI", 8),
-            anchor="e",
+            status_stack, text="No device", bg=COLORS["bg_surface"], fg=COLORS["text_muted"], font=("Segoe UI", 8), anchor="e"
         )
         self.connected_device_label.pack(anchor="e")
 
-        # Broadcast status below device name
         self.broadcast_status_label = tk.Label(
-            status_stack,
-            text="● Broadcasting",
-            bg=COLORS["bg_surface"],
-            fg=COLORS["success"],
-            font=("Segoe UI", 8),
-            anchor="e",
+            status_stack, text="● Broadcasting", bg=COLORS["bg_surface"], fg=COLORS["success"], font=("Segoe UI", 8, "bold"), anchor="e"
         )
         self.broadcast_status_label.pack(anchor="e")
 
-        # QR Code card - elevated with subtle border
-        qr_card = tk.Frame(left_inner, bg=COLORS["bg_card"], padx=16, pady=12)
-        qr_card.pack(fill=tk.X, pady=(0, 10))
-        # QR Label title
-        qr_title = tk.Label(
-            qr_card,
-            text="QUICK CONNECT",
-            bg=COLORS["bg_card"],
-            fg=COLORS["text_muted"],
-            font=("Segoe UI", 8, "bold"),
-        )
-        qr_title.pack(anchor="w", pady=(0, 8))
+        # QR Code card
+        qr_card = tk.Frame(left_inner, bg=COLORS["bg_card"], padx=20, pady=15)
+        qr_card.pack(fill=tk.X, pady=(0, 12))
+        
+        tk.Label(qr_card, text="QUICK CONNECT", bg=COLORS["bg_card"], fg=COLORS["text_muted"], font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 10))
 
-        self.qr_label = tk.Label(qr_card, bg=COLORS["bg_card"], text="Loading...")
-        self.qr_label.pack(pady=(0, 12))
+        self.qr_label = tk.Label(qr_card, bg=COLORS["bg_card"], text="Loading...", fg=COLORS["text_dim"])
+        self.qr_label.pack(pady=(0, 15))
 
-        # Connection info - styled row
-        info_row = tk.Frame(qr_card, bg=COLORS["bg_elevated"], padx=12, pady=8)
+        # Connection info
+        info_row = tk.Frame(qr_card, bg=COLORS["bg_elevated"], padx=15, pady=10)
         info_row.pack(fill=tk.X)
 
         self.ip_label = tk.Label(
@@ -4898,7 +4976,7 @@ class ShadowBridgeApp:
             text=f"{get_local_ip()}",
             bg=COLORS["bg_elevated"],
             fg=COLORS["accent_light"],
-            font=("Consolas", 11, "bold"),
+            font=("Consolas", 12, "bold"),
         )
         self.ip_label.pack(side=tk.LEFT)
 
@@ -4907,341 +4985,208 @@ class ShadowBridgeApp:
             text="SSH: ...",
             bg=COLORS["bg_elevated"],
             fg=COLORS["text_dim"],
-            font=("Consolas", 9),
+            font=("Consolas", 10),
         )
         self.ssh_label.pack(side=tk.RIGHT)
 
-        # Tools section - elevated card
-        tools_card = tk.Frame(left_inner, bg=COLORS["bg_card"], padx=16, pady=10)
-        tools_card.pack(fill=tk.X, pady=(0, 8))
+        # Tools section
+        tools_card = tk.Frame(left_inner, bg=COLORS["bg_card"], padx=20, pady=15)
+        tools_card.pack(fill=tk.X, pady=(0, 10))
 
         tk.Label(
             tools_card,
             text="CLI TOOLS",
             bg=COLORS["bg_card"],
             fg=COLORS["text_muted"],
-            font=("Segoe UI", 8, "bold"),
-        ).pack(anchor="w", pady=(0, 10))
+            font=("Segoe UI", 8, "bold")
+        ).pack(anchor="w", pady=(0, 12))
 
         # Tool buttons grid
         self.tool_buttons = {}
         self.tool_status = {}
         self._tool_specs = {}
-        self._tool_install_procs = {}  # tool_id -> subprocess.Popen
+        self._tool_install_procs = {}
         self._tool_install_lock = threading.Lock()
 
         tools = [
-            (
-                "Claude Code",
-                "claude",
-                {
-                    "type": "npm",
-                    "commands": ["npm install -g @anthropic-ai/claude-code"],
-                    "uninstall_commands": [
-                        "npm uninstall -g @anthropic-ai/claude-code"
-                    ],
-                },
-            ),
-            (
-                "Codex",
-                "codex",
-                {
-                    "type": "npm",
-                    "commands": ["npm install -g @openai/codex"],
-                    "uninstall_commands": ["npm uninstall -g @openai/codex"],
-                },
-            ),
-            (
-                "Gemini",
-                "gemini",
-                {
-                    "type": "npm",
-                    "commands": ["npm install -g @google/gemini-cli"],
-                    "uninstall_commands": ["npm uninstall -g @google/gemini-cli"],
-                },
-            ),
-            (
-                "Aider",
-                "aider",
-                {
-                    "type": "pip",
-                    "commands": [
-                        "py -m pip install -U aider-chat",
-                        "python -m pip install -U aider-chat",
-                    ],
-                    "uninstall_commands": [
-                        "py -m pip uninstall -y aider-chat",
-                        "python -m pip uninstall -y aider-chat",
-                    ],
-                    "fallback_url": "https://aider.chat/",
-                },
-            ),
-            (
-                "Ollama",
-                "ollama",
-                {
-                    "type": "winget",
-                    "commands": [
-                        "winget install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements"
-                    ],
-                    "uninstall_commands": [
-                        "winget uninstall -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements"
-                    ],
-                    "fallback_url": "https://ollama.com/download/windows",
-                },
-            ),
+            ("Claude Code", "claude", {"type": "npm", "commands": ["npm install -g @anthropic-ai/claude-code"]}),
+            ("Codex", "codex", {"type": "npm", "commands": ["npm install -g @openai/codex"]}),
+            ("Gemini", "gemini", {"type": "npm", "commands": ["npm install -g @google/gemini-cli"]}),
+            ("Aider", "aider", {"type": "pip", "commands": ["py -m pip install -U aider-chat"]}),
+            ("Ollama", "ollama", {"type": "winget", "commands": ["winget install -e --id Ollama.Ollama"]}),
         ]
+
+        # Function to create modern tk buttons
+        def create_modern_button(container, text, command, width=12, primary=False, pady=5, font_size=9):
+            bg_color = COLORS["accent"] if primary else COLORS["bg_elevated"]
+            fg_color = "white" if primary else COLORS["text"]
+            
+            btn = tk.Button(
+                container,
+                text=text,
+                command=command,
+                width=width,
+                bg=bg_color,
+                fg=fg_color,
+                font=("Segoe UI", font_size, "bold") if primary else ("Segoe UI", font_size),
+                relief="flat",
+                bd=0,
+                padx=10,
+                pady=pady,
+                cursor="hand2",
+                activebackground=COLORS["accent_hover"],
+                activeforeground="white"
+            )
+            
+            def on_enter(e):
+                btn.configure(bg=COLORS["accent_hover"], fg="white")
+            def on_leave(e):
+                btn.configure(bg=bg_color, fg=fg_color)
+            
+            btn.bind("<Enter>", on_enter)
+            btn.bind("<Leave>", on_leave)
+            return btn
 
         for name, tool_id, spec in tools:
             self._tool_specs[tool_id] = spec
             row = tk.Frame(tools_card, bg=COLORS["bg_card"])
-            row.pack(fill=tk.X, pady=3)
+            row.pack(fill=tk.X, pady=4)
 
-            # Status indicator with glow effect container
             status_frame = tk.Frame(row, bg=COLORS["bg_card"])
-            status_frame.pack(side=tk.LEFT, padx=(0, 10))
+            status_frame.pack(side=tk.LEFT, padx=(0, 12))
 
-            status_canvas = tk.Canvas(
-                status_frame,
-                width=10,
-                height=10,
-                bg=COLORS["bg_card"],
-                highlightthickness=0,
-            )
-            status_canvas.pack(pady=4)
-            status_canvas.create_oval(1, 1, 9, 9, fill=COLORS["text_muted"], outline="")
+            status_canvas = tk.Canvas(status_frame, width=12, height=12, bg=COLORS["bg_card"], highlightthickness=0)
+            status_canvas.pack(pady=6)
+            status_canvas.create_oval(2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot")
             self.tool_status[tool_id] = status_canvas
 
-            # Tool name with secondary text color
             tk.Label(
-                row,
-                text=name,
-                bg=COLORS["bg_card"],
-                fg=COLORS["text_secondary"],
-                font=("Segoe UI", 9),
-                width=12,
-                anchor="w",
+                row, text=name, bg=COLORS["bg_card"], fg=COLORS["text_secondary"], font=("Segoe UI", 10), width=12, anchor="w"
             ).pack(side=tk.LEFT)
 
-            # Modern button styling
-            btn = tk.Button(
+            btn = create_modern_button(
                 row,
-                text="Install",
-                bg=COLORS["bg_elevated"],
-                fg=COLORS["text"],
-                font=("Segoe UI", 8),
-                relief="flat",
-                cursor="hand2",
-                width=14,
-                pady=3,
-                activebackground=COLORS["accent"],
-                activeforeground="white",
-                bd=0,
-                highlightthickness=0,
-                command=lambda s=spec, n=name, t=tool_id: self.install_tool(t, n, s),
+                "Install",
+                lambda s=spec, n=name, t=tool_id: self.install_tool(t, n, s)
             )
             btn.pack(side=tk.RIGHT)
-
-            # Hover effects - handle both Install and Uninstall states
-            def on_enter(e, b=btn):
-                b.configure(bg=COLORS["accent_hover"], fg="white")
-
-            def on_leave(e, b=btn):
-                if b.cget("text") == "Install":
-                    b.configure(bg=COLORS["accent"], fg="white")
-                elif b.cget("text") == "Uninstall":
-                    b.configure(bg=COLORS["accent"], fg="white")
-
-            btn.bind("<Enter>", on_enter)
-            btn.bind("<Leave>", on_leave)
             self.tool_buttons[tool_id] = btn
-
-        # Divider
-        tk.Frame(tools_card, bg=COLORS["border"], height=1).pack(
-            fill=tk.X, pady=(10, 8)
-        )
 
         # Tailscale row
         ts_row = tk.Frame(tools_card, bg=COLORS["bg_card"])
-        ts_row.pack(fill=tk.X, pady=3)
-
+        ts_row.pack(fill=tk.X, pady=4)
+        
         ts_status_frame = tk.Frame(ts_row, bg=COLORS["bg_card"])
-        ts_status_frame.pack(side=tk.LEFT, padx=(0, 10))
+        ts_status_frame.pack(side=tk.LEFT, padx=(0, 12))
 
-        self.tailscale_status = tk.Canvas(
-            ts_status_frame,
-            width=10,
-            height=10,
-            bg=COLORS["bg_card"],
-            highlightthickness=0,
-        )
-        self.tailscale_status.pack(pady=4)
-        self.tailscale_status.create_oval(
-            1, 1, 9, 9, fill=COLORS["text_muted"], outline=""
-        )
+        self.tailscale_status = tk.Canvas(ts_status_frame, width=12, height=12, bg=COLORS["bg_card"], highlightthickness=0)
+        self.tailscale_status.pack(pady=6)
+        self.tailscale_status.create_oval(2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot")
 
         tk.Label(
-            ts_row,
-            text="Tailscale",
-            bg=COLORS["bg_card"],
-            fg=COLORS["text_secondary"],
-            font=("Segoe UI", 9),
-            width=12,
-            anchor="w",
+            ts_row, text="Tailscale", bg=COLORS["bg_card"], fg=COLORS["text_secondary"], font=("Segoe UI", 10), width=12, anchor="w"
         ).pack(side=tk.LEFT)
 
-        self.tailscale_btn = tk.Button(
+        self.tailscale_btn = create_modern_button(
             ts_row,
-            text="Install",
-            bg=COLORS["bg_elevated"],
-            fg=COLORS["text"],
-            font=("Segoe UI", 8),
-            relief="flat",
-            cursor="hand2",
-            width=14,
-            pady=3,
-            activebackground=COLORS["accent"],
-            activeforeground="white",
-            bd=0,
-            highlightthickness=0,
-            command=self.install_tailscale,
+            "Install",
+            self.install_tailscale
         )
         self.tailscale_btn.pack(side=tk.RIGHT)
 
-        def ts_on_enter(e):
-            if self.tailscale_btn.cget("text") == "Install":
-                self.tailscale_btn.configure(bg=COLORS["accent_hover"], fg="white")
-            else:
-                self.tailscale_btn.configure(bg=COLORS["accent_hover"], fg="white")
-
-        def ts_on_leave(e):
-            if self.tailscale_btn.cget("text") == "Install":
-                self.tailscale_btn.configure(
-                    bg=COLORS["bg_elevated"], fg=COLORS["text"]
-                )
-            else:
-                self.tailscale_btn.configure(bg=COLORS["accent"], fg="white")
-
-        self.tailscale_btn.bind("<Enter>", ts_on_enter)
-        self.tailscale_btn.bind("<Leave>", ts_on_leave)
-
-        # Check tool status
-        self.root.after(300, self.check_tools)
-
-        # Bottom section (Broadcast & Settings) - In scrollable content
+        # Bottom section
         bottom = tk.Frame(left_inner, bg=COLORS["bg_surface"])
-        bottom.pack(fill=tk.X, pady=(16, 0))
+        bottom.pack(fill=tk.X, pady=(20, 0))
 
-        # Web Dashboard button (primary action)
-        self.web_dashboard_btn = tk.Button(
+        self.web_dashboard_btn = create_modern_button(
             bottom,
-            text="Open Web Dashboard",
-            bg=COLORS["accent"],
-            fg="#ffffff",
-            font=("Segoe UI", 10, "bold"),
-            relief="flat",
-            cursor="hand2",
-            padx=20,
-            pady=8,
-            bd=0,
-            highlightthickness=0,
-            activebackground=COLORS["accent_hover"],
-            activeforeground="white",
-            command=self.launch_web_dashboard,
+            "Open Web Dashboard",
+            self.launch_web_dashboard,
+            width=30,
+            primary=True,
+            pady=12,
+            font_size=11
         )
-        self.web_dashboard_btn.pack(fill=tk.X)
-        self.web_dashboard_btn.bind(
-            "<Enter>",
-            lambda e: self.web_dashboard_btn.configure(bg=COLORS["accent_hover"]),
-        )
-        self.web_dashboard_btn.bind(
-            "<Leave>", lambda e: self.web_dashboard_btn.configure(bg=COLORS["accent"])
-        )
+        self.web_dashboard_btn.pack(fill=tk.X, pady=(0, 8))
 
-        # Exit button
-        exit_btn = tk.Button(
+        exit_btn = create_modern_button(
             bottom,
-            text="Exit",
-            bg=COLORS["bg_elevated"],
-            fg=COLORS["text"],
-            font=("Segoe UI", 10),
-            relief="flat",
-            cursor="hand2",
-            padx=20,
-            pady=8,
-            bd=0,
-            highlightthickness=0,
-            activebackground=COLORS["error"],
-            activeforeground="white",
-            command=self.force_exit,
+            "Exit",
+            self.force_exit,
+            width=30,
+            pady=12,
+            font_size=11
         )
-        exit_btn.pack(fill=tk.X, pady=(6, 8))
-        exit_btn.bind(
-            "<Enter>", lambda e: exit_btn.configure(bg=COLORS["error"], fg="white")
-        )
-        exit_btn.bind(
-            "<Leave>",
-            lambda e: exit_btn.configure(bg=COLORS["bg_elevated"], fg=COLORS["text"]),
-        )
+        exit_btn.pack(fill=tk.X, pady=(0, 15))
 
-        # Options row with better styling
+        # Options row
         opts = tk.Frame(bottom, bg=COLORS["bg_surface"])
         opts.pack(fill=tk.X)
 
         if IS_WINDOWS:
             self.startup_var = tk.BooleanVar(value=is_startup_enabled())
             startup_cb = tk.Checkbutton(
-                opts,
-                text="Start with Windows",
-                variable=self.startup_var,
-                command=self.toggle_startup,
-                bg=COLORS["bg_surface"],
-                fg=COLORS["text_secondary"],
-                selectcolor=COLORS["bg_elevated"],
-                activebackground=COLORS["bg_surface"],
-                activeforeground=COLORS["text"],
-                font=("Segoe UI", 9),
-                cursor="hand2",
-                highlightthickness=0,
-                bd=0,
+                opts, text="Auto-start", variable=self.startup_var, command=self.toggle_startup,
+                bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], selectcolor=COLORS["bg_card"],
+                activebackground=COLORS["bg_surface"], activeforeground=COLORS["text"],
+                font=("Segoe UI", 9), highlightthickness=0, bd=0
             )
             startup_cb.pack(side=tk.LEFT)
 
             self.auto_update_var = tk.BooleanVar(value=is_auto_update_enabled())
             auto_update_cb = tk.Checkbutton(
-                opts,
-                text="Auto-update",
-                variable=self.auto_update_var,
-                command=self.toggle_auto_update,
-                bg=COLORS["bg_surface"],
-                fg=COLORS["text_secondary"],
-                selectcolor=COLORS["bg_elevated"],
-                activebackground=COLORS["bg_surface"],
-                activeforeground=COLORS["text"],
-                font=("Segoe UI", 9),
-                cursor="hand2",
-                highlightthickness=0,
-                bd=0,
+                opts, text="Updates", variable=self.auto_update_var, command=self.toggle_auto_update,
+                bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], selectcolor=COLORS["bg_card"],
+                activebackground=COLORS["bg_surface"], activeforeground=COLORS["text"],
+                font=("Segoe UI", 9), highlightthickness=0, bd=0
             )
-            auto_update_cb.pack(side=tk.LEFT, padx=(10, 0))
+            auto_update_cb.pack(side=tk.LEFT, padx=(12, 0))
 
-        # Help link with hover effect
-        help_link = tk.Label(
-            opts,
-            text="SSH Help",
-            bg=COLORS["bg_surface"],
-            fg=COLORS["accent_light"],
-            font=("Segoe UI", 9),
-            cursor="hand2",
-        )
+        # Revoke Keys link
+        revoke_link = tk.Label(opts, text="Revoke Keys", bg=COLORS["bg_surface"], fg=COLORS["error"], font=("Segoe UI", 9, "underline"), cursor="hand2")
+        revoke_link.pack(side=tk.RIGHT, padx=(0, 12))
+        revoke_link.bind("<Button-1>", lambda e: self.revoke_all_keys_ui())
+
+        help_link = tk.Label(opts, text="Help", bg=COLORS["bg_surface"], fg=COLORS["accent_light"], font=("Segoe UI", 9, "underline"), cursor="hand2")
         help_link.pack(side=tk.RIGHT)
         help_link.bind("<Button-1>", lambda e: self.show_ssh_help())
-        help_link.bind(
-            "<Enter>", lambda e: help_link.configure(fg=COLORS["accent_hover"])
-        )
-        help_link.bind(
-            "<Leave>", lambda e: help_link.configure(fg=COLORS["accent_light"])
-        )
+
+        # Start animations
+        self._pulse_alpha = 0
+        self._pulse_dir = 1
+        self._animate_pulse()
+
+    def _animate_pulse(self):
+        """Animate status dots with a subtle color pulse."""
+        self._pulse_alpha += 0.08 * self._pulse_dir
+        if self._pulse_alpha >= 1.0:
+            self._pulse_alpha = 1.0
+            self._pulse_dir = -1
+        elif self._pulse_alpha <= 0.2:
+            self._pulse_alpha = 0.2
+            self._pulse_dir = 1
+        
+        # Interpolate color between text_muted and accent
+        def interpolate_color(c1, c2, factor):
+            def to_rgb(hex_color):
+                hex_color = hex_color.lstrip("#")
+                return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            
+            rgb1 = to_rgb(c1)
+            rgb2 = to_rgb(c2)
+            res = tuple(int(rgb1[i] + (rgb2[i] - rgb1[i]) * factor) for i in range(3))
+            return f"#{res[0]:02x}{res[1]:02x}{res[2]:02x}"
+
+        pulse_color = interpolate_color(COLORS["text_muted"], COLORS["accent"], self._pulse_alpha)
+        
+        # Apply to all status dots
+        for canvas in self.tool_status.values():
+            canvas.itemconfig("dot", fill=pulse_color)
+        
+        if hasattr(self, "tailscale_status"):
+            self.tailscale_status.itemconfig("dot", fill=pulse_color)
+            
+        self.root.after(60, self._animate_pulse)
 
         self._web_dashboard_monitor_stop_event = threading.Event()
         self._web_dashboard_monitor_thread = None
@@ -5308,10 +5253,10 @@ class ShadowBridgeApp:
         # Update SSH label with port info
         if ssh_ok:
             self.ssh_label.configure(
-                text=f"SSH :{self.ssh_port} ✓", fg=COLORS["success"]
+                text=f"SSH :{self.ssh_port} [OK]", fg=COLORS["success"]
             )
         else:
-            self.ssh_label.configure(text=f"SSH :{self.ssh_port} ✗", fg=COLORS["error"])
+            self.ssh_label.configure(text=f"SSH :{self.ssh_port} [X]", fg=COLORS["error"])
 
         # Merge active devices from Signaling Service (UDP)
         if hasattr(self, "signaling_service") and self.signaling_service:
@@ -5678,26 +5623,19 @@ class ShadowBridgeApp:
                 def update_ui(c=canvas, col=color, t=tool_id, n=name, inst=installed):
                     self._update_tool_dot(c, col)
                     # Button state: Install vs Uninstall
+                    btn = self.tool_buttons[t]
                     if inst:
-                        self.tool_buttons[t].configure(
+                        btn.configure(
                             text="Uninstall",
-                            state="normal",
                             bg=COLORS["accent"],
-                            fg="#ffffff",
-                            activebackground=COLORS["accent_hover"],
-                        )
-                        self.tool_buttons[t].configure(
+                            fg="white",
                             command=lambda tid=t, nm=n: self.uninstall_tool(tid, nm)
                         )
                     else:
-                        self.tool_buttons[t].configure(
+                        btn.configure(
                             text="Install",
-                            state="normal",
-                            bg=COLORS["accent"],
-                            fg="#ffffff",
-                            activebackground=COLORS["accent_hover"],
-                        )
-                        self.tool_buttons[t].configure(
+                            bg=COLORS["bg_elevated"],
+                            fg=COLORS["text"],
                             command=lambda tid=t, nm=n: self.install_tool(
                                 tid, nm, self._tool_specs.get(tid, {})
                             )
@@ -5713,14 +5651,10 @@ class ShadowBridgeApp:
                     self.tailscale_btn.configure(
                         text=f"{ts_ip}",
                         state="disabled",
-                        bg=COLORS["bg_elevated"],
-                        fg="#ffffff",
-                        disabledforeground="#ffffff",
+                        bg=COLORS["bg_card"],
+                        disabledforeground="white"
                     )
-                    self.tailscale_status.delete("all")
-                    self.tailscale_status.create_oval(
-                        0, 0, 8, 8, fill=COLORS["success"], outline=""
-                    )
+                    self._update_tool_dot(self.tailscale_status, COLORS["success"])
 
             self.root.after(0, update_tailscale)
 
@@ -5733,8 +5667,8 @@ class ShadowBridgeApp:
         self._tool_poll_job = self.root.after(30000, self.check_tools)
 
     def _update_tool_dot(self, canvas, color):
-        canvas.delete("all")
-        canvas.create_oval(0, 0, 8, 8, fill=color, outline="")
+        """Update dot color without deleting the tag for pulse animation."""
+        canvas.itemconfig("dot", fill=color)
 
     def get_connection_info(self):
         """Get connection info with ALL fallback options for auto-reconnection."""
@@ -6097,27 +6031,26 @@ class ShadowBridgeApp:
 
     def check_web_server_status(self):
         """Check if web dashboard server is running and update status indicator."""
-        if not hasattr(self, "web_status_dot") or self.web_status_dot is None:
-            # Widget not created, skip status check
+        # Use a more generic check for the dashboard button which we know exists
+        if not hasattr(self, "web_dashboard_btn"):
             self.root.after(3000, self.check_web_server_status)
             return
 
         try:
             import urllib.request
-
-            urllib.request.urlopen("http://127.0.0.1:6767", timeout=1)
+            # Create a request to avoid some bot detection/WAF if present
+            req = urllib.request.Request("http://127.0.0.1:6767")
+            with urllib.request.urlopen(req, timeout=1) as response:
+                pass
+            
             # Server is running
-            self.web_status_dot.delete("dot")
-            self.web_status_dot.create_oval(
-                1, 1, 9, 9, fill=COLORS["success"], outline="", tags="dot"
-            )
+            if hasattr(self, "web_status_dot") and self.web_status_dot:
+                self.web_status_dot.itemconfig("dot", fill=COLORS["success"])
             self.web_dashboard_btn.configure(text="Open Web Dashboard")
         except Exception:
             # Server not running
-            self.web_status_dot.delete("dot")
-            self.web_status_dot.create_oval(
-                1, 1, 9, 9, fill=COLORS["text_muted"], outline="", tags="dot"
-            )
+            if hasattr(self, "web_status_dot") and self.web_status_dot:
+                self.web_status_dot.itemconfig("dot", fill=COLORS["text_muted"])
             self.web_dashboard_btn.configure(text="Launch Web Dashboard")
             log.debug("Web dashboard down; triggering monitor to restart it")
             self._ensure_web_dashboard_running()
@@ -6504,9 +6437,7 @@ class ShadowBridgeApp:
         """Install Tailscale for stable connections."""
         # Check if already installed
         if get_tailscale_ip():
-            self.tailscale_btn.configure(
-                text="✓ Connected", state="disabled", bg=COLORS["success"]
-            )
+            self.connect_button.config(text="[OK] Connected", state="disabled", bg=COLORS["success"])
             self.tailscale_status.delete("all")
             self.tailscale_status.create_oval(
                 0, 0, 8, 8, fill=COLORS["success"], outline=""
@@ -6588,6 +6519,26 @@ class ShadowBridgeApp:
         """Toggle auto-update setting."""
         enabled = self.auto_update_var.get()
         set_auto_update_enabled(enabled)
+
+    def revoke_all_keys_ui(self):
+        """Prompt user and revoke all SSH keys."""
+        if not messagebox.askyesno(
+            "Revoke All SSH Keys?",
+            "This will remove all Shadow-added keys from your PC's authorized_keys files and clear all pairing data.\n\n"
+            "Your Android app will need to re-pair before it can connect again.\n\n"
+            "Proceed?",
+            icon="warning"
+        ):
+            return
+
+        if hasattr(self, "data_receiver") and self.data_receiver:
+            result = self.data_receiver.revoke_all_keys()
+            if result.get("success"):
+                messagebox.showinfo("Keys Revoked", result.get("message"))
+                self.refresh_connected_devices_ui()
+                self.update_status()
+            else:
+                messagebox.showerror("Error", result.get("message"))
 
     def check_for_updates_on_startup(self):
         """Check for updates on startup (runs in background thread)."""
@@ -6707,10 +6658,10 @@ class ShadowBridgeApp:
 
         text = """Windows SSH Setup:
 
-1. Open Settings → Apps → Optional Features
+1. Open Settings -> Apps -> Optional Features
 2. Click "Add a feature"
 3. Find and install "OpenSSH Server"
-4. Open Services (Win+R → services.msc)
+4. Open Services (Win+R -> services.msc)
 5. Find "OpenSSH SSH Server"
 6. Set to "Automatic" and click "Start"
 
@@ -6908,7 +6859,7 @@ Or run in PowerShell (Admin):
 
         if not active:
             self.connected_device_label.configure(
-                text="No device", fg=COLORS["text_dim"]
+                text="No device", foreground=COLORS["text_dim"]
             )
             return
 
@@ -6917,11 +6868,11 @@ Or run in PowerShell (Admin):
         name = device.get("name") or device.get("id") or "Unknown"
         if len(active) > 1:
             self.connected_device_label.configure(
-                text=f"● {name} +{len(active) - 1}", fg=COLORS["success"]
+                text=f"● {name} +{len(active) - 1}", foreground=COLORS["success"]
             )
         else:
             self.connected_device_label.configure(
-                text=f"● {name}", fg=COLORS["success"]
+                text=f"● {name}", foreground=COLORS["success"]
             )
 
     def refresh_project_device_menu(self):
@@ -7070,6 +7021,13 @@ Or run in PowerShell (Admin):
         try:
             import tkinter.messagebox as messagebox
 
+            # Ensure main window is visible so dialog has a parent and user sees it
+            if self.root.state() == "withdrawn" or self.root.state() == "iconic":
+                self.show_window()
+            
+            self.root.lift()
+            self.root.focus_force()
+
             # Create approval dialog
             result = messagebox.askyesno(
                 "SSH Key Approval Required",
@@ -7079,6 +7037,7 @@ Or run in PowerShell (Admin):
                 f"This will allow the device to connect via SSH.\n\n"
                 f"Do you want to approve this device?",
                 icon="warning",
+                parent=self.root
             )
 
             if result:
@@ -7087,19 +7046,20 @@ Or run in PowerShell (Admin):
                     response = self.data_receiver.approve_device(device_id)
                     if response.get("success"):
                         messagebox.showinfo(
-                            "Approved", f"SSH key installed for {device_name}"
+                            "Approved", f"SSH key installed for {device_name}", parent=self.root
                         )
                     else:
                         messagebox.showwarning(
                             "Note",
                             f"Device approved but key installation pending.\n{response.get('message', '')}",
+                            parent=self.root
                         )
             else:
                 # User rejected
                 if hasattr(self, "data_receiver") and self.data_receiver:
                     self.data_receiver.reject_device(device_id)
                 messagebox.showinfo(
-                    "Rejected", f"SSH key request from {device_name} was rejected."
+                    "Rejected", f"SSH key request from {device_name} was rejected.", parent=self.root
                 )
 
         except Exception as e:
@@ -8094,8 +8054,8 @@ def run_web_dashboard_server(open_browser: bool):
         def headless_key_approval(device_id, device_name, ip):
             """Auto-approve SSH keys in headless mode (web-server only)."""
             log.warning(f"HEADLESS MODE: Auto-approving SSH key for {device_name} ({device_id}) from {ip}")
-            log.warning("⚠️ Running in --web-server mode without GUI, auto-approving all SSH key requests")
-            log.warning("⚠️ For manual approval, run ShadowBridge.exe without --web-server flag")
+            log.warning("[WARN] Running in --web-server mode without GUI, auto-approving all SSH key requests")
+            log.warning("[WARN] For manual approval, run ShadowBridge.exe without --web-server flag")
             # Auto-approve the device
             if data_receiver_ref[0]:
                 result = data_receiver_ref[0].approve_device(device_id)

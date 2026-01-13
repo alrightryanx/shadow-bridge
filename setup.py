@@ -106,18 +106,15 @@ bdist_msi_options = {
         ],
         "Feature": [
             ("MainFeature", None, "ShadowBridge", "Main application and dashboard", 1, 1, "TARGETDIR", 0),
-            ("AIDependencies", "MainFeature", "AI Dependencies (2.5GB)", "Optional PyTorch and AudioCraft for audio/video generation. Requires internet.", 3, 1, "TARGETDIR", 0),
         ],
         "CustomAction": [
-            ("LaunchApp", 210, "TARGETDIR", "[TARGETDIR]ShadowBridge.exe"),
-            ("InstallAIDeps", 210, "TARGETDIR", '[TARGETDIR]ShadowBridge.exe audio setup'),
+            ("LaunchApp", 226, "TARGETDIR", "[TARGETDIR]ShadowBridge.exe"),
         ],
         "Property": [
             ("LAUNCHAPP", "1"),
         ],
         "ControlEvent": [
             ("ExitDialog", "Finish", "DoAction", "LaunchApp", 'LAUNCHAPP="1"', 1),
-            ("ExitDialog", "Finish", "DoAction", "InstallAIDeps", "&AIDependencies=3", 2),
         ],
     },
 }
