@@ -37,6 +37,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from io import BytesIO
 
+# Import Zeroconf for mDNS discovery
+try:
+    from zeroconf import IPVersion, ServiceInfo, Zeroconf
+    HAS_ZEROCONF = True
+except ImportError:
+    HAS_ZEROCONF = False
+
 # Import Ouroboros Sentinel
 try:
     from ouroboros.sentinel import Sentinel
@@ -752,7 +759,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.046"
+APP_VERSION = "1.050"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -1088,64 +1095,12 @@ def get_username():
 
 
 def find_ssh_port():
-    """Find which port SSH is running on by checking common ports and netstat."""
-    # First try netstat to find sshd
-    try:
-        # Avoid shell=True and pipes for security
-        result = subprocess.run(
-            ["netstat", "-an"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
-        )
-        # Parse netstat output to find SSH ports (filtering for LISTENING and :22)
-        lines = [
-            line
-            for line in result.stdout.splitlines()
-            if "LISTENING" in line and ":22" in line
-        ]
-        for line in lines:
-            parts = line.split()
-            for part in parts:
-                if ":" in part:
-                    try:
-                        port = int(part.split(":")[-1])
-                        if port > 0:
-                            # Verify it's actually listening
-                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            sock.settimeout(0.5)
-                            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                                sock.close()
-                                return port
-                            sock.close()
-                    except (ValueError, socket.error):
-                        continue
-    except Exception:
-        pass
-
-    # Check sshd_config for Port setting
-    sshd_config_paths = [
-        r"C:\ProgramData\ssh\sshd_config",
-        r"C:\Windows\System32\OpenSSH\sshd_config",
-        os.path.expanduser("~/.ssh/sshd_config"),
-    ]
-    for config_path in sshd_config_paths:
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("Port ") and not line.startswith("#"):
-                        port = int(line.split()[1])
-                        return port
-        except Exception:
-            continue
-
-    # Try common SSH ports
+    """Find which port SSH is running on by checking common ports first, then netstat."""
+    # Fast path: Check common ports directly
     common_ports = [22, 2222, 2269, 22022, 8022]
     for port in common_ports:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
+        sock.settimeout(0.1)  # Very fast check
         try:
             if sock.connect_ex(("127.0.0.1", port)) == 0:
                 sock.close()
@@ -1154,6 +1109,63 @@ def find_ssh_port():
             pass
         finally:
             sock.close()
+
+    # Slow path: Check sshd_config
+    sshd_config_paths = [
+        r"C:\ProgramData\ssh\sshd_config",
+        r"C:\Windows\System32\OpenSSH\sshd_config",
+        os.path.expanduser("~/.ssh/sshd_config"),
+    ]
+    for config_path in sshd_config_paths:
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("Port ") and not line.startswith("#"):
+                            try:
+                                port = int(line.split()[1])
+                                # Verify it's listening
+                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                sock.settimeout(0.1)
+                                if sock.connect_ex(("127.0.0.1", port)) == 0:
+                                    sock.close()
+                                    return port
+                                sock.close()
+                            except ValueError:
+                                pass
+        except Exception:
+            continue
+
+    # Fallback: netstat (slowest)
+    try:
+        # Avoid shell=True and pipes for security
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        
+        result = subprocess.run(
+            ["netstat", "-an"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            startupinfo=startupinfo,
+            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+        )
+        # Parse netstat output
+        if result.stdout:
+            for line in result.stdout.splitlines():
+                if "LISTENING" in line and ":22" in line:
+                    parts = line.split()
+                    for part in parts:
+                        if ":" in part:
+                            try:
+                                port_str = part.split(":")[-1]
+                                if port_str.isdigit():
+                                    return int(port_str)
+                            except ValueError:
+                                continue
+    except Exception:
+        pass
 
     return None  # No SSH found
 
@@ -4465,7 +4477,7 @@ class CompanionRelayServer(threading.Thread):
 
 
 class DiscoveryServer(threading.Thread):
-    """UDP server that responds to discovery requests."""
+    """UDP server that responds to discovery requests and registers mDNS service."""
 
     def __init__(self, connection_info):
         super().__init__(daemon=True)
@@ -4474,8 +4486,39 @@ class DiscoveryServer(threading.Thread):
         self.sock = None
         self.bind_failed = False  # Track if port binding failed
         self.bind_error = None  # Store error message
+        self.zeroconf = None
+        self.service_info = None
 
     def run(self):
+        # 1. Register mDNS service
+        if HAS_ZEROCONF:
+            try:
+                self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
+                desc = {
+                    "username": self.connection_info.get("username", "root"),
+                    "version": str(self.connection_info.get("version", 1)),
+                    "mode": self.connection_info.get("mode", "local")
+                }
+                
+                hostname = socket.gethostname()
+                local_ip = get_local_ip()
+                ssh_port = self.connection_info.get("port", 22)
+                
+                self.service_info = ServiceInfo(
+                    "_shadowai._tcp.local.",
+                    f"{hostname}._shadowai._tcp.local.",
+                    addresses=[socket.inet_aton(local_ip)],
+                    port=ssh_port,
+                    properties=desc,
+                    server=f"{hostname}.local.",
+                )
+                
+                self.zeroconf.register_service(self.service_info)
+                log.info(f"[OK] mDNS service registered: {hostname}._shadowai._tcp.local.")
+            except Exception as e:
+                log.warning(f"Failed to register mDNS service: {e}")
+
+        # 2. Start UDP discovery responder
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -4518,6 +4561,12 @@ class DiscoveryServer(threading.Thread):
         finally:
             if self.sock:
                 self.sock.close()
+            if self.zeroconf:
+                try:
+                    self.zeroconf.unregister_service(self.service_info)
+                    self.zeroconf.close()
+                except Exception:
+                    pass
 
     def stop(self):
         self.running = False
@@ -4681,15 +4730,95 @@ class ShadowBridgeApp:
     """Main application - compact popup style."""
 
     def __init__(self):
-        set_app_user_model_id("ShadowBridge")
-        self.root = tk.Tk()
-        self.root.title(APP_NAME)
-        self.root.configure(bg=COLORS["bg_dark"])
-        self.root.overrideredirect(False)
+        log.info("=" * 60)
+        log.info("ShadowBridgeApp initializing...")
+        log.info(f"Python version: {sys.version}")
+        log.info(f"Frozen: {getattr(sys, 'frozen', False)}")
+        log.info(f"Executable: {sys.executable}")
+        log.info(f"HAS_SV_TTK: {HAS_SV_TTK}")
+        log.info(f"HAS_PIL: {HAS_PIL}")
+        log.info(f"HAS_QRCODE: {HAS_QRCODE}")
+        log.info(f"HAS_TRAY: {HAS_TRAY}")
+        log.info("=" * 60)
+
+        try:
+            set_app_user_model_id("ShadowBridge")
+            log.info("Creating tk.Tk() root window...")
+            self.root = tk.Tk()
+            log.info(f"✓ tk.Tk() instance created successfully: {self.root}")
+            self.root.title(APP_NAME)
+            log.info(f"✓ Window title set to: {APP_NAME}")
+            self.root.configure(bg=COLORS["bg_dark"])
+            log.info(f"✓ Root background set to: {COLORS['bg_dark']}")
+            self.root.overrideredirect(False)
+            log.info("✓ Window decorations enabled")
+
+            # Enable Windows 11 dark titlebar
+            if IS_WINDOWS:
+                try:
+                    import ctypes
+                    DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+                    hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                    value = ctypes.c_int(1)  # 1 = dark mode, 0 = light mode
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        hwnd,
+                        DWMWA_USE_IMMERSIVE_DARK_MODE,
+                        ctypes.byref(value),
+                        ctypes.sizeof(value)
+                    )
+                    log.info("✓ Windows 11 dark titlebar enabled")
+                except Exception as e:
+                    log.warning(f"Could not set dark titlebar: {e}")
+        except Exception as e:
+            log.critical(f"✗ FATAL: Failed to create root window: {e}", exc_info=True)
+            raise
 
         # Apply modern Windows theme if available
+        log.info("Configuring theme...")
+        theme_applied = False
         if HAS_SV_TTK:
-            sv_ttk.set_theme("dark")
+            try:
+                # Debug paths for frozen app
+                import sv_ttk
+                log.info(f"sv_ttk module found at: {sv_ttk.__file__}")
+                theme_path = os.path.join(os.path.dirname(sv_ttk.__file__), "theme")
+                log.info(f"Checking theme path: {theme_path}")
+                if os.path.exists(theme_path):
+                    log.info("✓ Theme folder found")
+                    try:
+                        contents = os.listdir(theme_path)
+                        log.info(f"Theme folder contents: {contents}")
+                    except Exception as e:
+                        log.warning(f"Could not list theme folder: {e}")
+                else:
+                    log.warning("✗ Theme folder NOT found - sv_ttk will likely fail")
+
+                log.info("Attempting to set sv_ttk theme to 'dark'...")
+                sv_ttk.set_theme("dark")
+                log.info("✓ sv_ttk theme 'dark' applied successfully")
+                theme_applied = True
+            except Exception as e:
+                log.error(f"✗ Failed to set sv_ttk theme: {e}", exc_info=True)
+                log.info("Falling back to manual theme configuration...")
+
+        # Fallback theme if sv_ttk failed or not available
+        if not theme_applied:
+            log.info("Applying fallback theme configuration...")
+            try:
+                style = ttk.Style()
+                log.info(f"Available themes: {style.theme_names()}")
+                log.info("Setting theme to 'clam'...")
+                style.theme_use("clam")
+                log.info("✓ Fallback theme 'clam' applied")
+
+                # Manually configure colors for fallback theme
+                log.info("Configuring fallback colors...")
+                style.configure(".", background=COLORS["bg_surface"], foreground=COLORS["text"])
+                style.configure("TFrame", background=COLORS["bg_surface"])
+                style.configure("TLabel", background=COLORS["bg_surface"], foreground=COLORS["text"])
+                log.info("✓ Fallback colors configured")
+            except Exception as ex:
+                log.error(f"✗ Fallback theme configuration failed: {ex}", exc_info=True)
 
         # Set window icon from logo.png
         icon_path = get_app_icon_path()
@@ -4704,6 +4833,7 @@ class ShadowBridgeApp:
                 )
                 self.app_icon = ImageTk.PhotoImage(icon_img)
                 self.root.iconphoto(True, self.app_icon)
+                log.info(f"App icon loaded from {icon_path}")
             except (FileNotFoundError, IOError, OSError) as e:
                 log.debug(f"Could not load app icon: {e}")
 
@@ -4712,8 +4842,10 @@ class ShadowBridgeApp:
         try:
             dpi = self.root.winfo_fpixels("1i")
             scale = dpi / 96.0  # 96 is standard DPI
+            log.info(f"Detected DPI: {dpi}, Scale factor: {scale}")
         except (tk.TclError, ValueError):
             scale = 1.0
+            log.warning("Failed to detect DPI, defaulting to scale 1.0")
 
         # Fixed compact size for quick connect utility
         self.window_width = int(375 * scale)
@@ -4722,6 +4854,7 @@ class ShadowBridgeApp:
         # Get screen size and taskbar offset
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
+        log.info(f"Screen size: {screen_w}x{screen_h}")
 
         # Position at bottom-right, above taskbar
         x = screen_w - self.window_width - 20
@@ -4736,6 +4869,8 @@ class ShadowBridgeApp:
         # State - auto-detect SSH port
         detected_port = find_ssh_port()
         self.ssh_port = detected_port if detected_port else 22
+        log.info(f"Using SSH port: {self.ssh_port}")
+        
         self.is_broadcasting = False
         self.discovery_server = None
         self.data_receiver = None
@@ -4760,12 +4895,20 @@ class ShadowBridgeApp:
         self._auto_web_dashboard_attempts = 0
 
         # Start Signaling Service for instant discovery/roaming
-        self.signaling_service = SignalingService()
-        self.signaling_service.start()
+        try:
+            self.signaling_service = SignalingService()
+            self.signaling_service.start()
+            log.info("SignalingService started")
+        except Exception as e:
+            log.error(f"Failed to start SignalingService: {e}")
 
         # Start UPnP Port Mapping
-        self.upnp_manager = UPnPManager()
-        self.upnp_manager.discover_and_map()
+        try:
+            self.upnp_manager = UPnPManager()
+            self.upnp_manager.discover_and_map()
+            log.info("UPnP manager started")
+        except Exception as e:
+            log.error(f"Failed to start UPnP manager: {e}")
 
         # Start Ouroboros Sentinel
         self.sentinel = None
@@ -4788,10 +4931,21 @@ class ShadowBridgeApp:
             self.watchdog = None
 
         # Setup modern styles
-        self.setup_styles()
+        log.info("Setting up widget styles...")
+        try:
+            self.setup_styles()
+            log.info("✓ Styles setup completed successfully")
+        except Exception as e:
+            log.error(f"✗ Failed to setup styles: {e}", exc_info=True)
 
         # Build UI
-        self.create_widgets()
+        log.info("Creating widgets...")
+        try:
+            self.create_widgets()
+            log.info("✓ Widgets created successfully")
+        except Exception as e:
+            log.critical(f"✗ FATAL: Failed to create widgets: {e}", exc_info=True)
+            raise
 
         # Force geometry AFTER widgets are created (no saved state - always bottom-right)
         self.root.update_idletasks()
@@ -4844,67 +4998,113 @@ class ShadowBridgeApp:
 
     def setup_styles(self):
         """Configure ttk styles for modern M3-inspired look."""
+        log.info("Initializing ttk.Style()...")
         style = ttk.Style()
-        
+        log.info(f"✓ ttk.Style created, current theme: {style.theme_use()}")
+        log.info(f"Available themes: {style.theme_names()}")
+
+        # Apply theme
+        theme_set = False
         if HAS_SV_TTK:
-            sv_ttk.set_theme("dark")
-        else:
-            style.theme_use("clam")
+            try:
+                log.info("Attempting to apply sv_ttk dark theme in setup_styles...")
+                sv_ttk.set_theme("dark")
+                log.info(f"✓ sv_ttk theme applied, current theme: {style.theme_use()}")
+                theme_set = True
+            except Exception as e:
+                log.error(f"✗ sv_ttk theme failed in setup_styles: {e}")
+
+        if not theme_set:
+            log.info("Applying fallback 'clam' theme...")
+            try:
+                style.theme_use("clam")
+                log.info(f"✓ 'clam' theme applied, current theme: {style.theme_use()}")
+            except Exception as e:
+                log.error(f"✗ Failed to set 'clam' theme: {e}")
 
         # Configure colors for themed widgets
-        style.configure(".", background=COLORS["bg_surface"], foreground=COLORS["text"])
-        style.configure("TFrame", background=COLORS["bg_surface"])
-        style.configure("Card.TFrame", background=COLORS["bg_card"], relief="flat")
-        
+        log.info("Configuring widget styles...")
+        try:
+            style.configure(".", background=COLORS["bg_surface"], foreground=COLORS["text"])
+            style.configure("TFrame", background=COLORS["bg_surface"])
+            style.configure("Card.TFrame", background=COLORS["bg_card"], relief="flat")
+            log.info("✓ Base widget styles configured")
+        except Exception as e:
+            log.error(f"✗ Failed to configure base styles: {e}")
+
         # Label styles
-        style.configure("TLabel", background=COLORS["bg_surface"], foreground=COLORS["text"], font=("Segoe UI", 10))
-        style.configure("Header.TLabel", font=("Segoe UI", 20, "bold"), foreground=COLORS["text"])
-        style.configure("Subheader.TLabel", foreground=COLORS["text_secondary"], font=("Segoe UI", 10))
-        style.configure("Caption.TLabel", foreground=COLORS["text_muted"], font=("Segoe UI", 8, "bold"))
-        style.configure("Badge.TLabel", background=COLORS["accent_container"], foreground=COLORS["accent_light"], font=("Segoe UI", 8, "bold"))
-        
+        try:
+            style.configure("TLabel", background=COLORS["bg_surface"], foreground=COLORS["text"], font=("Segoe UI", 10))
+            style.configure("Header.TLabel", font=("Segoe UI", 20, "bold"), foreground=COLORS["text"])
+            style.configure("Subheader.TLabel", foreground=COLORS["text_secondary"], font=("Segoe UI", 10))
+            style.configure("Caption.TLabel", foreground=COLORS["text_muted"], font=("Segoe UI", 8, "bold"))
+            style.configure("Badge.TLabel", background=COLORS["accent_container"], foreground=COLORS["accent_light"], font=("Segoe UI", 8, "bold"))
+            log.info("✓ Label styles configured")
+        except Exception as e:
+            log.error(f"✗ Failed to configure label styles: {e}")
+
         # Button styles - Accent (Terracotta)
-        style.configure(
-            "Accent.TButton", 
-            font=("Segoe UI", 10, "bold"),
-            background=COLORS["accent"],
-            foreground="white"
-        )
-        style.map(
-            "Accent.TButton",
-            background=[("active", COLORS["accent_hover"]), ("pressed", COLORS["accent"])],
-            foreground=[("active", "white")]
-        )
-        
+        try:
+            style.configure(
+                "Accent.TButton",
+                font=("Segoe UI", 10, "bold"),
+                background=COLORS["accent"],
+                foreground="white"
+            )
+            style.map(
+                "Accent.TButton",
+                background=[("active", COLORS["accent_hover"]), ("pressed", COLORS["accent"])],
+                foreground=[("active", "white")]
+            )
+            log.info("✓ Accent button styles configured")
+        except Exception as e:
+            log.error(f"✗ Failed to configure accent button styles: {e}")
+
         # Button styles - Secondary
-        style.configure(
-            "Secondary.TButton", 
-            font=("Segoe UI", 9),
-            background=COLORS["bg_elevated"]
-        )
-        style.map(
-            "Secondary.TButton",
-            background=[("active", COLORS["accent"]), ("pressed", COLORS["bg_elevated"])],
-            foreground=[("active", "white")]
-        )
+        try:
+            style.configure(
+                "Secondary.TButton",
+                font=("Segoe UI", 9),
+                background=COLORS["bg_elevated"]
+            )
+            style.map(
+                "Secondary.TButton",
+                background=[("active", COLORS["accent"]), ("pressed", COLORS["bg_elevated"])],
+                foreground=[("active", "white")]
+            )
+            log.info("✓ Secondary button styles configured")
+        except Exception as e:
+            log.error(f"✗ Failed to configure secondary button styles: {e}")
 
         # Scrollbar styling
-        style.configure(
-            "Vertical.TScrollbar",
-            background=COLORS["bg_elevated"],
-            troughcolor=COLORS["bg_surface"],
-            bordercolor=COLORS["bg_surface"],
-            arrowcolor=COLORS["text_dim"],
-            relief="flat",
-            borderwidth=0,
-            width=10,
-        )
+        try:
+            style.configure(
+                "Vertical.TScrollbar",
+                background=COLORS["bg_elevated"],
+                troughcolor=COLORS["bg_surface"],
+                bordercolor=COLORS["bg_surface"],
+                arrowcolor=COLORS["text_dim"],
+                relief="flat",
+                borderwidth=0,
+                width=10,
+            )
+            log.info("✓ Scrollbar styles configured")
+        except Exception as e:
+            log.error(f"✗ Failed to configure scrollbar styles: {e}")
+
+        log.info("✓ setup_styles() completed")
 
     def create_widgets(self):
         """Create compact single-column layout using tk for reliable dark theming."""
+        log.info("Creating main container...")
         # Main container
-        main_container = tk.Frame(self.root, bg=COLORS["bg_surface"])
-        main_container.pack(fill=tk.BOTH, expand=True)
+        try:
+            main_container = tk.Frame(self.root, bg=COLORS["bg_surface"])
+            main_container.pack(fill=tk.BOTH, expand=True)
+            log.info("✓ Main container created")
+        except Exception as e:
+            log.error(f"✗ Failed to create main container: {e}", exc_info=True)
+            raise
 
         # Inner padding frame
         left_inner = tk.Frame(main_container, bg=COLORS["bg_surface"], padx=20, pady=16)
