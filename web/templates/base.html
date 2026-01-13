@@ -38,13 +38,13 @@
                     <span class="material-symbols-outlined">movie</span> <span class="nav-label">Video</span>
                  </a></li>
                  <li><a href="/automations" class="{% if request.path == '/automations' %}active{% endif %}">
-                     <span class="material-symbols-outlined nav-icon">auto_awesome</span> <span class="nav-label">Automations</span>
+                     <span class="material-symbols-outlined nav-icon">auto_awesome</span> <span class="nav-label">Automations</span> <span class="pro-badge">PRO</span>
                 </a></li>
                 <li><a href="/teams" class="{% if request.path == '/teams' %}active{% endif %}">
-                    <span class="material-symbols-outlined nav-icon">group</span> <span class="nav-label">AI Teams</span>
+                    <span class="material-symbols-outlined nav-icon">group</span> <span class="nav-label">Agents</span> <span class="pro-badge">PRO</span>
                 </a></li>
                 <li><a href="/audits" class="{% if request.path == '/audits' %}active{% endif %}">
-                    <span class="material-symbols-outlined nav-icon">fact_check</span> <span class="nav-label">Audits</span>
+                    <span class="material-symbols-outlined nav-icon">fact_check</span> <span class="nav-label">Audits</span> <span class="pro-badge">PRO</span>
                 </a></li>
                 <li><a href="/analytics" class="{% if request.path == '/analytics' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">analytics</span> <span class="nav-label">Analytics</span>
@@ -65,13 +65,34 @@
                         <input type="text" id="global-search" class="global-search-input" placeholder="Search..." onkeyup="handleSearchKeyup(event)" onfocus="showSearchResults()" onblur="hideSearchResultsDelayed()">
                         <div id="search-results" class="search-results-dropdown hidden"></div>
                     </div>
-                    <div class="status-indicator" id="status-indicator">
-                        <span class="status-dot offline"></span>
-                        <span class="status-text">Connecting...</span>
+                    <div class="connection-banner">
+                        <div class="connection-controls">
+                            <div class="connection-control">
+                                <span class="connection-control-label">Backend</span>
+                                <select id="backend-selector" class="device-selector connection-select"></select>
+                            </div>
+                            <div class="connection-control">
+                                <span class="connection-control-label">Model</span>
+                                <select id="model-selector" class="device-selector connection-select"></select>
+                            </div>
+                        </div>
+                        <span class="connection-selection-hint" id="connection-selection-hint">Switch backend/model anytime</span>
+                        <div class="connection-health" id="connection-health">
+                            <span class="status-dot idle" id="connection-health-dot"></span>
+                            <span class="connection-health-text" id="connection-health-text">Backend: Unknown</span>
+                        </div>
                     </div>
-                    <select id="device-selector" class="device-selector">
-                        <option value="__ALL__">All Devices</option>
-                    </select>
+                    <div class="device-switcher" id="device-switcher">
+                        <button class="device-switcher-button" id="device-switcher-button" type="button" aria-haspopup="listbox" aria-expanded="false">
+                            <span class="status-dot offline" id="device-status-dot"></span>
+                            <div class="device-switcher-text">
+                                <span class="device-switcher-title" id="device-switcher-title">All Devices</span>
+                                <span class="device-switcher-status" id="device-switcher-status">Connecting...</span>
+                            </div>
+                            <span class="material-symbols-outlined device-switcher-icon">devices</span>
+                        </button>
+                        <div class="device-switcher-menu hidden" id="device-switcher-menu" role="listbox"></div>
+                    </div>
                     <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
                         <span class="material-symbols-outlined sun-icon">light_mode</span>
                         <span class="material-symbols-outlined moon-icon">dark_mode</span>
