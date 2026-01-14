@@ -764,7 +764,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.055"
+APP_VERSION = "1.056"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -4643,8 +4643,8 @@ class ShadowBridgeApp:
             log.info(f"✓ Window title set to: {APP_NAME}")
 
             # Additional root hardening
-            self.root.overrideredirect(False)
-            log.info("✓ Window decorations enabled")
+            # self.root.overrideredirect(False)  # REMOVED: Allow window to be movable
+            log.info("✓ Window decorations enabled, window can be moved")
         except Exception as e:
             log.critical(f"✗ FATAL: Failed to create root window: {e}", exc_info=True)
             raise
@@ -4679,7 +4679,7 @@ class ShadowBridgeApp:
             except Exception as e:
                 log.debug(f"Could not load app icon: {e}")
 
-        # Window sizing - fixed compact size, bottom-right position
+        # Window sizing - compact size, ALLOW MOVABLE AND RESIZABLE
         self.root.update_idletasks()
         try:
             dpi = self.root.winfo_fpixels("1i")
@@ -4692,26 +4692,8 @@ class ShadowBridgeApp:
         self.window_width = int(375 * scale)
         self.window_height = int(820 * scale)
 
-        # Get screen size and taskbar offset
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-
-        # Position at bottom-right, above taskbar
-        x = screen_w - self.window_width - 20
-        y = screen_h - self.window_height - 100  # Above taskbar
-
-        # Validate position is on screen (clamping)
-        if x < 0:
-            x = 20
-        if y < 30:
-            y = 50  # Ensure title bar is visible
-
-        # Set geometry - fixed size, bottom-right
-        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
-        self.root.resizable(True, True)  # Enabled resizing
-        self.root.minsize(320, 600)  # Set minimum size
-
-        self.target_y = y
+        # Set minimum size
+        self.root.minsize(320, 600)
         self.current_y = y
 
         # State - auto-detect SSH port
