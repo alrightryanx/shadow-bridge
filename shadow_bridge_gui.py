@@ -4720,7 +4720,6 @@ class ShadowBridgeApp:
         self.collections_devices = {}  # device_id -> {name, ip, last_seen, collections}
         self.selected_notes_device_id = "__ALL__"
         self._device_menu_updating = False
-        self._tool_poll_job = None
 
         self._auto_web_dashboard_attempts = 0
 
@@ -4796,6 +4795,7 @@ class ShadowBridgeApp:
         self.root.after(500, self.auto_start_broadcast)
         self.root.after(1000, lambda: apply_windows_11_theme(self.root))
         self.root.after(2000, self.check_for_updates_on_startup)
+        self.root.after(2500, self.check_tools)  # Check tool status once at startup
 
     def _animate_show(self):
         """Smooth slide-up animation from bottom with fade-in."""
@@ -5927,12 +5927,7 @@ class ShadowBridgeApp:
             self.root.after(0, update_tailscale)
 
         threading.Thread(target=check, daemon=True).start()
-        if self._tool_poll_job:
-            try:
-                self.root.after_cancel(self._tool_poll_job)
-            except Exception:
-                pass
-        self._tool_poll_job = self.root.after(30000, self.check_tools)
+        # NOTE: Removed auto-polling - only check at startup and after install/uninstall clicks
 
     def _update_tool_dot(self, canvas, color):
         """Update dot color without deleting the tag for pulse animation."""
