@@ -4694,7 +4694,6 @@ class ShadowBridgeApp:
 
         # Set minimum size
         self.root.minsize(320, 600)
-        self.current_y = y
 
         # State - auto-detect SSH port
         detected_port = find_ssh_port()
@@ -4796,33 +4795,6 @@ class ShadowBridgeApp:
         self.root.after(1000, lambda: apply_windows_11_theme(self.root))
         self.root.after(2000, self.check_for_updates_on_startup)
         self.root.after(2500, self.check_tools)  # Check tool status once at startup
-
-    def _animate_show(self):
-        """Smooth slide-up animation from bottom with fade-in."""
-        step = 18
-        # Calculate alpha based on progress
-        total_dist = self.root.winfo_screenheight() - self.target_y
-        current_dist = self.current_y - self.target_y
-        alpha = max(0.1, 1.0 - (current_dist / total_dist))
-
-        try:
-            self.root.attributes("-alpha", alpha)
-        except Exception:
-            pass
-
-        if self.current_y > self.target_y:
-            self.current_y -= step
-            if self.current_y < self.target_y:
-                self.current_y = self.target_y
-
-            x = self.root.winfo_x()
-            self.root.geometry(f"+{x}+{self.current_y}")
-            self.root.after(8, self._animate_show)
-        else:
-            try:
-                self.root.attributes("-alpha", 1.0)
-            except Exception:
-                pass
 
     def setup_styles(self):
         """Configure ttk styles for modern M3-inspired look."""
