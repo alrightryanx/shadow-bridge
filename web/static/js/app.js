@@ -8,6 +8,82 @@ let currentNoteContent = null;
 let currentNoteTitle = null;
 let isEditMode = false;
 let selectedDevice = '__ALL__';  // '__ALL__' means show all devices
+let lastStatusSnapshot = null;
+const deviceNameMap = new Map();
+const CONNECTION_BACKEND_OPTIONS = [
+    { value: 'shadowbridge', label: 'ShadowBridge Local' },
+    { value: 'ssh_gemini_cli', label: 'Gemini CLI (SSH)' },
+    { value: 'ssh_claude_code', label: 'Claude Code (SSH)' },
+    { value: 'openai_api', label: 'OpenAI API' },
+    { value: 'anthropic_api', label: 'Anthropic API' }
+];
+const CONNECTION_MODEL_OPTIONS = {
+    shadowbridge: [
+        { value: 'shadowbridge-core', label: 'ShadowBridge Core' }
+    ],
+    ssh_gemini_cli: [
+        { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+        { value: 'gemini-1.5-mini', label: 'Gemini 1.5 Mini' }
+    ],
+    ssh_claude_code: [
+        { value: 'claude-3.5-pro', label: 'Claude 3.5 Pro' },
+        { value: 'claude-3.1', label: 'Claude 3.1' }
+    ],
+    openai_api: [
+        { value: 'gpt-4o', label: 'gpt-4o' },
+        { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+        { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' }
+    ],
+    anthropic_api: [
+        { value: 'claude-3.6', label: 'Claude 3.6' },
+        { value: 'claude-instant', label: 'Claude Instant' }
+    ],
+    default: [
+        { value: 'default-model', label: 'Default model' }
+    ]
+};
+const CONNECTION_STATE_KEY = 'shadow-connection-selection';
+function getModelOptionsForBackend(backend) {
+    return CONNECTION_MODEL_OPTIONS[backend] || CONNECTION_MODEL_OPTIONS.default || [];
+}
+function loadConnectionSelection() {
+    const defaultBackend = CONNECTION_BACKEND_OPTIONS[0]?.value || '';
+    const defaultModel = getModelOptionsForBackend(defaultBackend)[0]?.value || '';
+
+    if (!defaultBackend) {
+        return { backend: '', model: '' };
+    }
+
+    if (typeof localStorage === 'undefined') {
+        return { backend: defaultBackend, model: defaultModel };
+    }
+
+    try {
+        const stored = localStorage.getItem(CONNECTION_STATE_KEY);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            const backend = CONNECTION_BACKEND_OPTIONS.some(o => o.value === parsed.backend)
+                ? parsed.backend
+                : defaultBackend;
+            const models = getModelOptionsForBackend(backend);
+            const modelValue = models.some(m => m.value === parsed.model)
+                ? parsed.model
+                : models[0]?.value || '';
+            return {
+                backend,
+                model: modelValue || models[0]?.value || defaultModel
+            };
+        }
+    } catch (error) {
+        console.warn('Failed to restore connection selection', error);
+    }
+
+    return { backend: defaultBackend, model: defaultModel };
+}
+let connectionSelection = loadConnectionSelection();
+if (typeof window !== 'undefined') {
+    window.deviceNameMap = deviceNameMap;
+}
 
 // ============ Theme Management ============
 
@@ -57,6 +133,7 @@ initTheme();
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initDeviceSelector();
+    initConnectionControls();
     updateStatus();
 
     // Refresh status periodically
@@ -111,35 +188,315 @@ let connectionOfflineToastShown = false;
 // ============ Device Selector ============
 
 async function initDeviceSelector() {
-    const selector = document.getElementById('device-selector');
-    if (!selector) return;
+    const menu = document.getElementById('device-switcher-menu');
+    const button = document.getElementById('device-switcher-button');
+    const title = document.getElementById('device-switcher-title');
+    if (!menu || !button || !title) return;
 
     const devices = await api.getDevices();
-    selector.innerHTML = '<option value="__ALL__">All Devices</option>';
-
+    deviceNameMap.clear();
     devices.forEach(device => {
-        const option = document.createElement('option');
-        option.value = device.id;
-        // Show shortened device name with status
-        const shortName = device.name.length > 30 ? device.name.substring(0, 27) + '...' : device.name;
-        const statusIcon = device.status === 'online' ? ' ●' : ' ○';
-        option.textContent = shortName + statusIcon;
-        option.title = device.name;  // Full name on hover
-        selector.appendChild(option);
+        if (device?.id) {
+            deviceNameMap.set(device.id, device.name || device.displayName || device.id);
+        }
     });
 
-    // Restore previously selected device
     const savedDevice = localStorage.getItem('selectedDevice');
-    if (savedDevice) {
-        selector.value = savedDevice;
+    if (savedDevice && (savedDevice === '__ALL__' || devices.some(d => d.id === savedDevice))) {
         selectedDevice = savedDevice;
+    } else {
+        selectedDevice = '__ALL__';
+        localStorage.setItem('selectedDevice', selectedDevice);
     }
 
-    selector.addEventListener('change', function() {
-        selectedDevice = this.value;
-        localStorage.setItem('selectedDevice', selectedDevice);
-        refreshData();
+    renderDeviceMenu(devices);
+    updateDeviceSwitcherTitle();
+
+    if (!button.dataset.bound) {
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            toggleDeviceMenu(true);
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!menu.contains(event.target) && !button.contains(event.target)) {
+                toggleDeviceMenu(false);
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                toggleDeviceMenu(false);
+            }
+        });
+
+        button.dataset.bound = 'true';
+    }
+}
+
+function renderDeviceMenu(devices) {
+    const menu = document.getElementById('device-switcher-menu');
+    if (!menu) return;
+
+    const onlineCount = devices.filter(d => d.status === 'online').length;
+    const allStatus = onlineCount > 0 ? 'online' : (devices.length > 0 ? 'offline' : 'idle');
+    const allStatusLabel = devices.length > 0 ? `${onlineCount} online` : 'No devices';
+
+    const items = [
+        { id: '__ALL__', name: 'All Devices', status: allStatus, state: allStatusLabel },
+        ...devices.map(device => ({
+            id: device.id,
+            name: device.name || device.id,
+            status: device.status === 'online' ? 'online' : 'offline',
+            state: device.status === 'online' ? 'Online' : 'Offline'
+        }))
+    ];
+
+    menu.innerHTML = items.map(item => `
+        <button type="button" class="device-switcher-item ${item.id === selectedDevice ? 'active' : ''}" data-device-id="${escapeHtml(item.id)}">
+            <span class="status-dot ${item.status}"></span>
+            <span class="device-name">${escapeHtml(item.name)}</span>
+            <span class="device-state">${escapeHtml(item.state)}</span>
+        </button>
+    `).join('');
+
+    menu.querySelectorAll('.device-switcher-item').forEach(entry => {
+        entry.addEventListener('click', () => {
+            const deviceId = entry.getAttribute('data-device-id');
+            if (!deviceId) return;
+            if (deviceId === selectedDevice) {
+                toggleDeviceMenu(false);
+                return;
+            }
+            selectedDevice = deviceId;
+            localStorage.setItem('selectedDevice', selectedDevice);
+            updateDeviceSwitcherTitle();
+            toggleDeviceMenu(false);
+            refreshData();
+        });
     });
+}
+
+function updateDeviceSwitcherTitle() {
+    const title = document.getElementById('device-switcher-title');
+    const button = document.getElementById('device-switcher-button');
+    if (!title) return;
+
+    const label = selectedDevice === '__ALL__'
+        ? 'All Devices'
+        : (deviceNameMap.get(selectedDevice) || selectedDevice);
+    title.textContent = label;
+    if (button) {
+        button.title = label;
+    }
+}
+
+function toggleDeviceMenu(shouldOpen) {
+    const menu = document.getElementById('device-switcher-menu');
+    const button = document.getElementById('device-switcher-button');
+    if (!menu || !button) return;
+
+    const isOpen = !menu.classList.contains('hidden');
+    const nextState = shouldOpen === undefined ? !isOpen : shouldOpen;
+
+    menu.classList.toggle('hidden', !nextState);
+    button.setAttribute('aria-expanded', String(nextState));
+}
+
+function initConnectionControls() {
+    const backendSelect = document.getElementById('backend-selector');
+    const modelSelect = document.getElementById('model-selector');
+    if (!backendSelect || !modelSelect) return;
+
+    backendSelect.innerHTML = CONNECTION_BACKEND_OPTIONS.map(option => `
+        <option value="${option.value}">${option.label}</option>
+    `).join('');
+
+    if (!CONNECTION_BACKEND_OPTIONS.some(option => option.value === connectionSelection.backend)) {
+        connectionSelection.backend = CONNECTION_BACKEND_OPTIONS[0]?.value || '';
+    }
+
+    backendSelect.value = connectionSelection.backend;
+    backendSelect.addEventListener('change', function() {
+        const value = this.value;
+        connectionSelection.backend = value;
+        updateModelOptions(value);
+    });
+
+    modelSelect.addEventListener('change', function() {
+        connectionSelection.model = this.value;
+        persistConnectionSelection();
+        updateConnectionSelectionHint();
+    });
+
+    updateModelOptions(connectionSelection.backend, connectionSelection.model);
+    updateConnectionSelectionHint();
+}
+
+function updateModelOptions(backend, preferredModel = null) {
+    const modelSelect = document.getElementById('model-selector');
+    if (!modelSelect) return;
+
+    const options = getModelOptionsForBackend(backend);
+    if (options.length === 0) {
+        modelSelect.innerHTML = '<option value="">Unavailable</option>';
+        connectionSelection.model = '';
+        persistConnectionSelection();
+        updateConnectionSelectionHint();
+        return;
+    }
+
+    modelSelect.innerHTML = options.map(option => `
+        <option value="${option.value}">${option.label}</option>
+    `).join('');
+
+    const desiredValue = preferredModel && options.some(option => option.value === preferredModel)
+        ? preferredModel
+        : options[0].value;
+    modelSelect.value = desiredValue;
+    connectionSelection.model = desiredValue;
+    persistConnectionSelection();
+    updateConnectionSelectionHint();
+}
+
+function persistConnectionSelection() {
+    if (typeof localStorage === 'undefined') return;
+    try {
+        localStorage.setItem(CONNECTION_STATE_KEY, JSON.stringify(connectionSelection));
+    } catch (error) {
+        console.warn('Could not persist connection selection', error);
+    }
+}
+
+function updateConnectionSelectionHint() {
+    const hint = document.getElementById('connection-selection-hint');
+    if (!hint) return;
+
+    const activeSession = resolveActiveSessionMeta();
+    if (activeSession) {
+        const backendLabel = getBackendLabelForBanner(activeSession);
+        const modelLabel = getModelLabelForBanner(activeSession);
+        if (backendLabel && modelLabel) {
+            hint.textContent = `Active: ${backendLabel} Â· ${modelLabel}`;
+            return;
+        }
+        if (backendLabel) {
+            hint.textContent = `Active: ${backendLabel}`;
+            return;
+        }
+    }
+
+    const backendLabel = getConnectionBackendLabel(connectionSelection.backend);
+    const modelLabel = getConnectionModelLabel(connectionSelection.backend, connectionSelection.model);
+
+    if (backendLabel && modelLabel) {
+        hint.textContent = `${backendLabel} · ${modelLabel}`;
+    } else if (backendLabel) {
+        hint.textContent = backendLabel;
+    } else {
+        hint.textContent = 'Switch backend/model anytime';
+    }
+}
+
+function getConnectionBackendLabel(value) {
+    const option = CONNECTION_BACKEND_OPTIONS.find(item => item.value === value);
+    return option ? option.label : '';
+}
+
+function getConnectionModelLabel(backend, value) {
+    const option = getModelOptionsForBackend(backend).find(item => item.value === value);
+    return option ? option.label : '';
+}
+
+function resolveActiveSessionMeta() {
+    if (typeof currentSessionDetail !== 'undefined' && currentSessionDetail) {
+        return currentSessionDetail;
+    }
+    if (
+        typeof selectedSessionId !== 'undefined' &&
+        selectedSessionId &&
+        typeof dashboardSessions !== 'undefined' &&
+        Array.isArray(dashboardSessions)
+    ) {
+        return dashboardSessions.find(s => s.id === selectedSessionId) || null;
+    }
+    return null;
+}
+
+function getBackendLabelForBanner(session) {
+    if (session && typeof window.formatBackendLabel === 'function') {
+        return window.formatBackendLabel(session);
+    }
+    const rawType = String(session?.backend_type || session?.backendType || '').toLowerCase();
+    const provider = String(session?.provider || '').trim();
+    if (rawType.includes('ssh')) return provider ? `SSH - ${provider}` : 'SSH';
+    if (rawType.includes('api')) return provider || 'API';
+    if (rawType.includes('local')) return 'On-device LLM';
+    if (provider) return provider;
+    if (rawType) return rawType.toUpperCase();
+    return '';
+}
+
+function getModelLabelForBanner(session) {
+    if (session && typeof window.formatModelLabel === 'function') {
+        return window.formatModelLabel(session);
+    }
+    return String(session?.model || '').trim();
+}
+
+function updateConnectionBanner(status = null) {
+    const dot = document.getElementById('connection-health-dot');
+    const text = document.getElementById('connection-health-text');
+    if (!dot || !text) return;
+
+    const statusSnapshot = status || lastStatusSnapshot;
+    const session = resolveActiveSessionMeta();
+    const backendLabel = session ? getBackendLabelForBanner(session) : '';
+    const modelLabel = session ? getModelLabelForBanner(session) : '';
+    const activeLabel = backendLabel
+        ? `${backendLabel}${modelLabel ? ` Â· ${modelLabel}` : ''}`
+        : 'No active session';
+
+    let dotClass = 'status-dot idle';
+    let healthLabel = 'Unknown health';
+
+    if (!api.isOnline) {
+        dotClass = 'status-dot offline';
+        healthLabel = 'Bridge offline';
+    } else if (session) {
+        const rawType = String(session.backend_type || session.backendType || '').toLowerCase();
+        if (rawType.includes('ssh')) {
+            const sshStatus = statusSnapshot?.ssh_status || 'unknown';
+            if (sshStatus === 'connected') {
+                dotClass = 'status-dot online';
+                healthLabel = 'SSH connected';
+            } else if (sshStatus === 'offline') {
+                dotClass = 'status-dot offline';
+                healthLabel = 'SSH offline';
+            } else if (sshStatus === 'no_devices') {
+                dotClass = 'status-dot idle';
+                healthLabel = 'No devices';
+            } else {
+                dotClass = 'status-dot idle';
+                healthLabel = 'SSH unknown';
+            }
+        } else if (rawType.includes('api')) {
+            dotClass = api.isOnline ? 'status-dot online' : 'status-dot offline';
+            healthLabel = api.isOnline ? 'API reachable' : 'API offline';
+        } else if (rawType.includes('local')) {
+            dotClass = 'status-dot idle';
+            healthLabel = 'Local device';
+        } else {
+            dotClass = api.isOnline ? 'status-dot online' : 'status-dot offline';
+            healthLabel = api.isOnline ? 'Bridge online' : 'Bridge offline';
+        }
+    } else {
+        dotClass = api.isOnline ? 'status-dot idle' : 'status-dot offline';
+        healthLabel = api.isOnline ? 'Bridge online' : 'Bridge offline';
+    }
+
+    dot.className = dotClass;
+    text.textContent = `${activeLabel} Â· ${healthLabel}`;
 }
 
 // Get device ID for API calls (null for all devices)
@@ -187,11 +544,22 @@ async function refreshData() {
 
 async function updateStatus() {
     const status = await api.getStatus();
-    const indicator = document.getElementById('status-indicator');
-    if (indicator) {
-        const dot = indicator.querySelector('.status-dot');
-        const text = indicator.querySelector('.status-text');
-
+    lastStatusSnapshot = status;
+    const dot = document.getElementById('device-status-dot');
+    const text = document.getElementById('device-switcher-status');
+    if (status && status.error && !status._offline) {
+        showToast(`Status error: ${status.error}`, 'warning', 5000);
+        if (typeof api.trackActivity === 'function') {
+            api.trackActivity(
+                'status_error',
+                'bridge',
+                'status',
+                'Status endpoint error',
+                { error: status.error }
+            ).catch(() => {});
+        }
+    }
+    if (dot && text) {
         // Check both API reachability AND device connections for accurate status
         const isApiReachable = api.isOnline;
         const hasConnectedDevices = status.devices_connected > 0;
@@ -214,6 +582,12 @@ async function updateStatus() {
     // Update sidebar counts
     await updateSidebarCounts();
     updateConnectionStatus();
+    updateConnectionBanner(status);
+}
+
+if (typeof window !== 'undefined') {
+    window.updateConnectionBanner = updateConnectionBanner;
+    window.updateConnectionSelectionHint = updateConnectionSelectionHint;
 }
 
 async function updateSidebarCounts() {
@@ -670,16 +1044,17 @@ function insertMarkdown(before, after) {
 // ============ Offline Status Indicator ============
 
 function updateConnectionStatus() {
-    const indicator = document.getElementById('status-indicator');
-    if (!indicator) return;
-
-    const dot = indicator.querySelector('.status-dot');
-    const text = indicator.querySelector('.status-text');
+    const dot = document.getElementById('device-status-dot');
+    const text = document.getElementById('device-switcher-status');
+    const button = document.getElementById('device-switcher-button');
+    if (!dot || !text) return;
 
     if (!api.isOnline) {
         dot.className = 'status-dot offline';
         text.textContent = 'Offline (cached)';
-        indicator.title = 'Using cached data - connection unavailable';
+        if (button) {
+            button.title = 'Using cached data - connection unavailable';
+        }
 
         if (!connectionOfflineToastShown) {
             showToast('ShadowBridge is unreachable. Working with cached data.', 'warning', 6000);
@@ -692,3 +1067,46 @@ function updateConnectionStatus() {
         }
     }
 }
+
+// ============ Mobile Menu Toggle ============
+
+function toggleMobileMenu() {
+    const sidebar = document.querySelector('.sidebar');
+    const isOpen = sidebar.classList.contains('mobile-open');
+
+    if (isOpen) {
+        sidebar.classList.remove('mobile-open');
+        document.getElementById('mobile-menu-toggle').innerHTML = '<span class="material-symbols-outlined">menu</span>';
+    } else {
+        sidebar.classList.add('mobile-open');
+        document.getElementById('mobile-menu-toggle').innerHTML = '<span class="material-symbols-outlined">close</span>';
+    }
+}
+
+// Close mobile menu when clicking outside
+document.addEventListener('click', function(event) {
+    const sidebar = document.querySelector('.sidebar');
+    const menuToggle = document.getElementById('mobile-menu-toggle');
+
+    if (sidebar && menuToggle && sidebar.classList.contains('mobile-open')) {
+        if (!sidebar.contains(event.target) && !menuToggle.contains(event.target)) {
+            sidebar.classList.remove('mobile-open');
+            menuToggle.innerHTML = '<span class="material-symbols-outlined">menu</span>';
+        }
+    }
+});
+
+// Close mobile menu on navigation
+document.querySelectorAll('.nav-links a').forEach(link => {
+    link.addEventListener('click', function() {
+        const sidebar = document.querySelector('.sidebar');
+        const menuToggle = document.getElementById('mobile-menu-toggle');
+        if (sidebar && sidebar.classList.contains('mobile-open')) {
+            sidebar.classList.remove('mobile-open');
+            if (menuToggle) {
+                menuToggle.innerHTML = '<span class="material-symbols-outlined">menu</span>';
+            }
+        }
+    });
+});
+

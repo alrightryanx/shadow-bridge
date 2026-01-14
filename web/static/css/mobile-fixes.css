@@ -1,0 +1,655 @@
+/* ============================================
+   MOBILE & RESPONSIVE LAYOUT FIXES
+   ShadowBridge Web Dashboard v1.047
+   ============================================ */
+
+/* ============ Session Console Fixes ============ */
+
+.session-console {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    padding: var(--spacing-lg);
+    margin-bottom: var(--spacing-xl);
+}
+
+.session-console-grid {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: var(--spacing-lg);
+    min-height: 500px;
+    max-height: 900px;
+}
+
+.session-list {
+    overflow-y: auto;
+    padding-right: var(--spacing-sm);
+    border-right: 1px solid var(--glass-border);
+}
+
+.session-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.session-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.session-list::-webkit-scrollbar-thumb {
+    background: var(--md-sys-color-outline-variant);
+    border-radius: 3px;
+}
+
+.session-chat {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.session-meta {
+    padding: var(--spacing-md);
+    background: var(--glass-bg-elevated);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--spacing-md);
+    font-size: 14px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.session-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--spacing-md);
+    min-height: 300px;
+    max-height: 700px;
+}
+
+.session-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+.session-messages::-webkit-scrollbar-thumb {
+    background: var(--md-sys-color-outline-variant);
+    border-radius: 3px;
+}
+
+.session-compose {
+    display: flex;
+    gap: var(--spacing-sm);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--glass-border);
+}
+
+.session-compose textarea {
+    flex: 1;
+    min-height: 60px;
+    resize: vertical;
+}
+
+.session-header-left {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.session-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.session-title-editor {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+}
+
+.session-title-editor input {
+    flex: 1;
+    min-width: 200px;
+}
+
+/* ============ Projects Page Fixes ============ */
+
+.page-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-lg);
+    flex-wrap: wrap;
+}
+
+.search-input {
+    flex: 1;
+    min-width: 200px;
+}
+
+.view-toggle {
+    display: flex;
+    gap: 0;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.view-toggle .btn {
+    border-radius: 0;
+    border-right: 1px solid var(--glass-border);
+}
+
+.view-toggle .btn:last-child {
+    border-right: none;
+}
+
+.projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+.projects-list {
+    display: block;
+    overflow-x: auto;
+}
+
+.project-card {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    padding: var(--spacing-lg);
+    transition: all 0.2s ease;
+}
+
+.project-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.project-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+}
+
+.project-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin-bottom: var(--spacing-xs);
+}
+
+.project-path {
+    font-size: 13px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: var(--spacing-sm);
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.project-meta {
+    font-size: 12px;
+    color: var(--md-sys-color-outline);
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: var(--spacing-md);
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--glass-bg);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+
+.data-table thead {
+    background: var(--glass-bg-elevated);
+}
+
+.data-table th {
+    padding: var(--spacing-md);
+    text-align: left;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface-variant);
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.data-table td {
+    padding: var(--spacing-md);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.data-table tbody tr {
+    transition: background 0.15s ease;
+}
+
+.data-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* ============ Connection Banner Fixes ============ */
+
+.connection-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.connection-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.connection-control {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.connection-control-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--md-sys-color-on-surface-variant);
+    letter-spacing: 0.5px;
+}
+
+.connection-select {
+    min-width: 160px;
+}
+
+.connection-health {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 6px 12px;
+    background: var(--glass-bg-elevated);
+    border-radius: var(--radius-md);
+}
+
+.connection-health-text {
+    font-size: 13px;
+    color: var(--md-sys-color-on-surface-variant);
+    white-space: nowrap;
+}
+
+/* ============ Top Bar Mobile Improvements ============ */
+
+.top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-lg);
+    background: var(--glass-bg);
+    border-bottom: 1px solid var(--glass-border);
+    flex-wrap: wrap;
+    gap: var(--spacing-md);
+}
+
+.top-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.global-search-container {
+    position: relative;
+}
+
+.global-search-input {
+    min-width: 200px;
+}
+
+/* ============ Dashboard Grid Improvements ============ */
+
+.dashboard-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: var(--spacing-lg);
+    margin-bottom: var(--spacing-xl);
+}
+
+.dashboard-card {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl);
+    padding: var(--spacing-lg);
+}
+
+.mini-grid {
+    display: grid;
+    gap: var(--spacing-sm);
+}
+
+/* ============ Responsive Design - Tablet ============ */
+
+@media (max-width: 1024px) {
+    .session-console-grid {
+        grid-template-columns: 280px 1fr;
+    }
+
+    .connection-banner {
+        width: 100%;
+    }
+
+    .top-bar {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .top-bar-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+
+@media (max-width: 900px) {
+    .session-console-grid {
+        grid-template-columns: 1fr;
+        min-height: auto;
+    }
+
+    .session-list {
+        border-right: none;
+        border-bottom: 1px solid var(--glass-border);
+        padding-bottom: var(--spacing-md);
+        margin-bottom: var(--spacing-md);
+        max-height: 300px;
+    }
+
+    .dashboard-columns {
+        grid-template-columns: 1fr;
+    }
+
+    .connection-banner {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .connection-controls {
+        width: 100%;
+    }
+
+    .connection-control {
+        flex: 1;
+    }
+}
+
+/* ============ Responsive Design - Mobile ============ */
+
+@media (max-width: 768px) {
+    .sidebar {
+        width: 60px;
+    }
+
+    .main-content {
+        margin-left: 60px;
+        width: calc(100% - 60px);
+    }
+
+    .content {
+        padding: var(--spacing-md);
+    }
+
+    .session-console {
+        padding: var(--spacing-md);
+    }
+
+    .session-header-left {
+        flex-direction: column;
+        align-items: flex-start;
+        width: 100%;
+    }
+
+    .session-controls {
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .session-controls select,
+    .session-controls .btn {
+        width: 100%;
+    }
+
+    .session-title-editor {
+        width: 100%;
+        flex-direction: column;
+    }
+
+    .session-title-editor input {
+        width: 100%;
+    }
+
+    .page-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .search-input {
+        width: 100%;
+    }
+
+    .view-toggle {
+        width: 100%;
+    }
+
+    .view-toggle .btn {
+        flex: 1;
+    }
+
+    .projects-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .connection-controls {
+        flex-direction: column;
+        width: 100%;
+    }
+
+    .connection-select {
+        width: 100%;
+    }
+}
+
+@media (max-width: 640px) {
+    .sidebar {
+        position: fixed;
+        left: -60px;
+        transition: left 0.3s ease;
+        z-index: 1000;
+    }
+
+    .sidebar.mobile-open {
+        left: 0;
+    }
+
+    .main-content {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .top-bar {
+        padding: var(--spacing-md);
+    }
+
+    .page-title {
+        font-size: 20px;
+    }
+
+    .session-console {
+        padding: var(--spacing-sm);
+    }
+
+    .session-messages {
+        max-height: 300px;
+    }
+
+    .session-compose {
+        flex-direction: column;
+    }
+
+    .session-compose .btn {
+        width: 100%;
+    }
+
+    .project-card {
+        padding: var(--spacing-md);
+    }
+
+    .data-table {
+        font-size: 13px;
+    }
+
+    .data-table th,
+    .data-table td {
+        padding: var(--spacing-sm);
+    }
+
+    .modal-content {
+        width: 95%;
+        max-width: 95%;
+        margin: var(--spacing-sm);
+    }
+
+    .device-switcher-button {
+        padding: var(--spacing-sm);
+    }
+
+    .global-search-input {
+        min-width: 150px;
+    }
+}
+
+/* ============ Fix Overlapping Issues ============ */
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.section-header h2 {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    flex-shrink: 0;
+}
+
+.view-all {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* Fix action buttons overflow */
+.action-buttons {
+    display: flex;
+    gap: var(--spacing-xs);
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Ensure cards don't overflow */
+.mini-card,
+.project-card,
+.stat-card,
+.dashboard-card {
+    overflow: hidden;
+    word-wrap: break-word;
+}
+
+/* Fix long text overflow */
+.project-path,
+.device-id,
+.path-cell {
+    overflow-wrap: break-word;
+    word-break: break-all;
+    max-width: 100%;
+}
+
+/* ============ Mobile Menu Toggle ============ */
+
+.mobile-menu-toggle {
+    display: none;
+    position: fixed;
+    bottom: var(--spacing-lg);
+    left: var(--spacing-lg);
+    z-index: 999;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: white;
+    border: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+}
+
+@media (max-width: 640px) {
+    .mobile-menu-toggle {
+        display: flex;
+    }
+}
+
+/* ============ Better Touch Targets for Mobile ============ */
+
+@media (max-width: 768px) {
+    .btn,
+    .btn-small,
+    .btn-icon-small {
+        min-height: 44px;
+        min-width: 44px;
+        padding: var(--spacing-sm) var(--spacing-md);
+    }
+
+    .pin-btn,
+    .modal-close {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    select,
+    input,
+    textarea {
+        min-height: 44px;
+        font-size: 16px; /* Prevents zoom on iOS */
+    }
+}
+
+/* ============ Accessibility Improvements ============ */
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .glass-bg,
+    .glass-bg-elevated {
+        background: var(--md-sys-color-surface);
+        border: 2px solid var(--md-sys-color-outline);
+    }
+}
