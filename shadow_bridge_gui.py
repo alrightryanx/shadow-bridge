@@ -40,6 +40,7 @@ from io import BytesIO
 # Import Zeroconf for mDNS discovery
 try:
     from zeroconf import IPVersion, ServiceInfo, Zeroconf
+
     HAS_ZEROCONF = True
 except ImportError:
     HAS_ZEROCONF = False
@@ -47,6 +48,7 @@ except ImportError:
 # Import Ouroboros Sentinel
 try:
     from ouroboros.sentinel import Sentinel
+
     HAS_SENTINEL = True
 except ImportError:
     HAS_SENTINEL = False
@@ -746,6 +748,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("ShadowBridge")
 
+# Silence Werkzeug/Flask access logs
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
 # Platform detection
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -759,7 +764,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.051"
+APP_VERSION = "1.055"
 # Windows Registry path for autostart
 _app_instance = None
 PROJECTS_FILE = os.path.join(
@@ -892,20 +897,25 @@ def apply_windows_11_theme(root):
     if not IS_WINDOWS:
         return
     try:
-        hwnd = root.winfo_id()
-        # Dark title bar
+        root.update_idletasks()
+        # Get actual window handle (GA_ROOT = 2)
+        hwnd = ctypes.windll.user32.GetAncestor(root.winfo_id(), 2)
+
+        # Dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE)
         use_dark = ctypes.c_int(1)
         for attr in (20, 19):  # 20 is Win10 20H1+, 19 is older fallback
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, attr, ctypes.byref(use_dark), ctypes.sizeof(use_dark)
             )
-        # Mica backdrop (Windows 11)
-        backdrop = ctypes.c_int(2)  # DWMSBT_MAINWINDOW
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)
-        )
-    except Exception:
-        pass
+
+        # Mica backdrop (Windows 11) - DWMWA_SYSTEMBACKDROP_TYPE = 38
+        # backdrop = ctypes.c_int(2)  # DWMSBT_MAINWINDOW (Mica)
+        # ctypes.windll.dwmapi.DwmSetWindowAttribute(
+        #     hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)
+        # )
+        log.info(f"✓ Applied Windows 11 dark theme to HWND {hwnd}")
+    except Exception as e:
+        log.warning(f"Could not apply Windows 11 theme: {e}")
 
 
 # Try to import optional dependencies
@@ -1015,18 +1025,58 @@ def get_all_ips():
 
 
 def get_local_ip():
-    """Get primary local IP address."""
-    all_ips = get_all_ips()
-    if all_ips["local"]:
-        return all_ips["local"][0]
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
+    """Get primary local IP address - non-blocking cached version."""
+    global _cached_local_ip
+    if _cached_local_ip and _cached_local_ip != "Detecting...":
+        return _cached_local_ip
+
+    # Return placeholder while detecting in background if not already done
+    if not hasattr(get_local_ip, "_detecting"):
+        get_local_ip._detecting = True
+
+        def detect():
+            global _cached_local_ip
+            try:
+                # 1. Try fast local hostname resolution first
+                try:
+                    _cached_local_ip = socket.gethostbyname(socket.gethostname())
+                except Exception:
+                    pass
+
+                # 2. Check for primary network IP (socket method) - most reliable for LAN
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(1)
+                try:
+                    s.connect(("8.8.8.8", 80))
+                    _cached_local_ip = s.getsockname()[0]
+                except Exception:
+                    pass
+                finally:
+                    s.close()
+
+                # 3. If socket failed, try get_all_ips
+                if not _cached_local_ip or _cached_local_ip.startswith("127."):
+                    all_ips = get_all_ips()
+                    if all_ips["local"]:
+                        _cached_local_ip = all_ips["local"][0]
+                    elif all_ips["other"]:
+                        _cached_local_ip = all_ips["other"][0]
+
+                # 4. Final fallback
+                if not _cached_local_ip:
+                    _cached_local_ip = "127.0.0.1"
+
+            except Exception:
+                _cached_local_ip = "127.0.0.1"
+            finally:
+                get_local_ip._detecting = False
+
+        threading.Thread(target=detect, daemon=True).start()
+
+    return _cached_local_ip if _cached_local_ip else "Detecting..."
+
+
+_cached_local_ip = None
 
 
 def get_tailscale_ip():
@@ -1142,7 +1192,7 @@ def find_ssh_port():
         # Avoid shell=True and pipes for security
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        
+
         result = subprocess.run(
             ["netstat", "-an"],
             capture_output=True,
@@ -1708,18 +1758,20 @@ def create_app_icon(size=64):
 import upnpy
 import requests
 
+
 class UPnPManager:
     """
     Handles automatic port forwarding via UPnP and Public IP discovery.
     Ensures SSH (22) and Signaling (19287) are reachable from outside.
     """
+
     def __init__(self):
         self.upnp = upnpy.UPnP()
         self.public_ip = None
         self.is_mapped = False
         self.mappings = [
             {"port": 22, "proto": "TCP", "desc": "Shadow SSH"},
-            {"port": 19287, "proto": "UDP", "desc": "Shadow Signaling"}
+            {"port": 19287, "proto": "UDP", "desc": "Shadow Signaling"},
         ]
 
     def discover_and_map(self):
@@ -1750,36 +1802,42 @@ class UPnPManager:
                 return
 
             # Get the AddPortMapping service
-            service = device.get_service('WANIPConnection.1') or device.get_service('WANPPPConnection.1')
+            service = device.get_service("WANIPConnection.1") or device.get_service(
+                "WANPPPConnection.1"
+            )
             if not service:
                 log.info("UPnP Connection service not found.")
                 return
 
             local_ip = get_local_ip()
             success_count = 0
-            
+
             for mapping in self.mappings:
                 try:
                     # Check if already mapped (best effort)
                     # We try to add it; if it exists, most routers just update/ignore
                     service.AddPortMapping(
-                        NewRemoteHost='',
+                        NewRemoteHost="",
                         NewExternalPort=mapping["port"],
                         NewProtocol=mapping["proto"],
                         NewInternalPort=mapping["port"],
                         NewInternalClient=local_ip,
                         NewEnabled=1,
                         NewPortMappingDescription=mapping["desc"],
-                        NewLeaseDuration=0 # Permanent until reboot
+                        NewLeaseDuration=0,  # Permanent until reboot
                     )
-                    log.info(f"UPnP: Mapped {mapping['proto']} {mapping['port']} to {local_ip}")
+                    log.info(
+                        f"UPnP: Mapped {mapping['proto']} {mapping['port']} to {local_ip}"
+                    )
                     success_count += 1
                 except Exception as e:
                     log.warning(f"UPnP mapping failed for {mapping['port']}: {e}")
 
             self.is_mapped = success_count > 0
             if self.is_mapped:
-                log.info(f"UPnP auto-mapping successful ({success_count}/{len(self.mappings)})")
+                log.info(
+                    f"UPnP auto-mapping successful ({success_count}/{len(self.mappings)})"
+                )
 
         except Exception as e:
             log.error(f"UPnP discovery error: {e}")
@@ -1791,9 +1849,10 @@ class UPnPManager:
 class SignalingService(threading.Thread):
     """
     UDP Signaling Service for rapid roaming and instant discovery.
-    Listens for heartbeats from the Android app and maintains active 
+    Listens for heartbeats from the Android app and maintains active
     NAT mappings to ensure SSH can connect instantly.
     """
+
     PORT = 19287
     MAGIC = b"SHADOW_SIGNAL_V1"
 
@@ -1810,7 +1869,7 @@ class SignalingService(threading.Thread):
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.bind(("", self.PORT))
             self.sock.settimeout(1.0)
-            
+
             while self.running:
                 try:
                     data, addr = self.sock.recvfrom(1024)
@@ -1828,26 +1887,33 @@ class SignalingService(threading.Thread):
     def _handle_signal(self, data, addr):
         try:
             # Format: MAGIC | device_id | status_json
-            parts = data[len(self.MAGIC):].split(b"|", 1)
-            if len(parts) < 2: return
-            
-            device_id = parts[0].decode('utf-8')
-            status_json = json.loads(parts[1].decode('utf-8'))
-            
+            parts = data[len(self.MAGIC) :].split(b"|", 1)
+            if len(parts) < 2:
+                return
+
+            device_id = parts[0].decode("utf-8")
+            status_json = json.loads(parts[1].decode("utf-8"))
+
             with self._lock:
                 is_new = device_id not in self.active_devices
                 self.active_devices[device_id] = {
                     "ip": addr[0],
                     "last_seen": time.time(),
-                    "status": status_json
+                    "status": status_json,
                 }
-                
+
             # Send immediate ACK to help Android app measure RTT and confirm NAT mapping
-            ack_data = self.MAGIC + b"ACK|" + json.dumps({"timestamp": time.time()}).encode('utf-8')
+            ack_data = (
+                self.MAGIC
+                + b"ACK|"
+                + json.dumps({"timestamp": time.time()}).encode("utf-8")
+            )
             self.sock.sendto(ack_data, addr)
-            
+
             if is_new:
-                log.info(f"Instant discovery: New device {device_id} signaled from {addr[0]}")
+                log.info(
+                    f"Instant discovery: New device {device_id} signaled from {addr[0]}"
+                )
         except Exception as e:
             log.debug(f"Failed to handle signal: {e}")
 
@@ -1879,6 +1945,8 @@ class DataReceiver(threading.Thread):
         on_device_connected,
         on_notes_received=None,
         on_sessions_received=None,
+        on_cards_received=None,
+        on_collections_received=None,
         on_key_approval_needed=None,
     ):
         super().__init__(daemon=True)
@@ -1886,6 +1954,8 @@ class DataReceiver(threading.Thread):
         self.on_device_connected = on_device_connected
         self.on_notes_received = on_notes_received
         self.on_sessions_received = on_sessions_received
+        self.on_cards_received = on_cards_received
+        self.on_collections_received = on_collections_received
         self.on_key_approval_needed = (
             on_key_approval_needed  # Callback for key approval UI
         )
@@ -2183,7 +2253,9 @@ class DataReceiver(threading.Thread):
             ssh_dir = os.path.join(home_dir, ".ssh")
             auth_keys_files.append(os.path.join(ssh_dir, "authorized_keys"))
             if platform.system() == "Windows":
-                auth_keys_files.append(r"C:\ProgramData\ssh\administrators_authorized_keys")
+                auth_keys_files.append(
+                    r"C:\ProgramData\ssh\administrators_authorized_keys"
+                )
 
             removed_count = 0
             for auth_keys_file in auth_keys_files:
@@ -2201,11 +2273,11 @@ class DataReceiver(threading.Thread):
                             skip_next = False
                             removed_count += 1
                             continue
-                        
+
                         if line.startswith("# Shadow device:"):
                             skip_next = True
                             continue
-                        
+
                         new_lines.append(line)
 
                     if len(new_lines) < len(lines):
@@ -2222,8 +2294,11 @@ class DataReceiver(threading.Thread):
                 self._save_approved_devices()
                 self._pending_keys.clear()
                 self.connected_devices.clear()
-            
-            return {"success": True, "message": f"Revoked {removed_count} keys and cleared pairing data."}
+
+            return {
+                "success": True,
+                "message": f"Revoked {removed_count} keys and cleared pairing data.",
+            }
         except Exception as e:
             return {"success": False, "message": f"Revocation failed: {str(e)}"}
 
@@ -2327,28 +2402,59 @@ class DataReceiver(threading.Thread):
             while len(length_bytes) < 4:
                 chunk = conn.recv(4 - len(length_bytes))
                 if not chunk:
-                    log.error(f"Connection closed while reading length prefix")
+                    log.error(
+                        f"Connection closed while reading length prefix from {addr}"
+                    )
                     return
                 length_bytes += chunk
 
             log.debug(
-                f"Received length bytes: {len(length_bytes)}, value: {int.from_bytes(length_bytes, 'big')}"
+                f"[RAW_DATA] From {addr}: Length bytes (hex): {length_bytes.hex()}, Decoded: {int.from_bytes(length_bytes, 'big')}"
             )
 
             msg_length = int.from_bytes(length_bytes, "big")
             if msg_length > 10 * 1024 * 1024:  # 10MB limit for sessions payloads
-                log.error(f"Message too large: {msg_length}")
+                log.error(f"Message too large from {addr}: {msg_length} bytes")
                 return
 
             data = b""
             while len(data) < msg_length:
                 chunk = conn.recv(min(4096, msg_length - len(data)))
                 if not chunk:
-                    log.error(f"Connection closed while reading message body")
+                    log.error(
+                        f"Connection closed while reading message body from {addr}"
+                    )
                     break
                 data += chunk
 
-            log.debug(f"Received {len(data)} bytes of message data")
+            # Log raw data for debugging
+            log.debug(
+                f"[RAW_DATA] From {addr}: Received {len(data)} bytes, expecting {msg_length} bytes"
+            )
+            if len(data) < msg_length:
+                log.error(
+                    f"[RAW_DATA] From {addr}: Incomplete message - got {len(data)}/{msg_length} bytes"
+                )
+            else:
+                # Log first 500 bytes of raw data (hex) and as text for debugging
+                try:
+                    data_preview = data[:500]
+                    log.debug(
+                        f"[RAW_DATA] From {addr}: First 500 bytes (hex): {data_preview.hex()}"
+                    )
+                    try:
+                        decoded_preview = data_preview.decode("utf-8", errors="replace")
+                        log.debug(
+                            f"[RAW_DATA] From {addr}: First 500 bytes (text): {decoded_preview}"
+                        )
+                    except:
+                        log.debug(
+                            f"[RAW_DATA] From {addr}: Could not decode preview as UTF-8"
+                        )
+                except Exception as e:
+                    log.error(
+                        f"[RAW_DATA] From {addr}: Error logging raw data preview: {e}"
+                    )
 
             if data:
                 try:
@@ -2398,15 +2504,24 @@ class DataReceiver(threading.Thread):
                         self.on_device_connected(device_id, device_name, ip)
 
                     # Handle different actions
-                    log.info(f"Action: {action}, Device: {device_name}")
-                    if action == "install_key":
+                    # Reduce log flooding: Only log non-ping actions at info level
+                    if action != "ping":
+                        log.info(f"Action: {action}, Device: {device_name}")
+                    else:
+                        log.debug(f"Action: {action}, Device: {device_name}")
+                    if action == "ping":
+                        self._send_response(conn, {"success": True, "message": "PONG"})
+                    elif action == "install_key":
                         # SSH key installation request - SECURITY: Requires approval for new devices AND new keys
                         public_key = payload.get("public_key", "")
 
                         # Check if key is already installed (regardless of device approval)
                         if self._is_key_installed(public_key):
                             log.info(f"SSH key already installed for: {device_name}")
-                            response = {"success": True, "message": "Key already installed"}
+                            response = {
+                                "success": True,
+                                "message": "Key already installed",
+                            }
                             self._send_response(conn, response)
                         else:
                             # Queue for approval (even if device is known, a new key requires approval)
@@ -2611,7 +2726,7 @@ class DataReceiver(threading.Thread):
 
             # List of files to check (same as _install_ssh_key)
             files_to_check = []
-            
+
             # User's ~/.ssh/authorized_keys
             home_dir = os.path.expanduser("~")
             ssh_dir = os.path.join(home_dir, ".ssh")
@@ -2619,7 +2734,9 @@ class DataReceiver(threading.Thread):
 
             # On Windows, also check administrators_authorized_keys
             if platform.system() == "Windows":
-                files_to_check.append(r"C:\ProgramData\ssh\administrators_authorized_keys")
+                files_to_check.append(
+                    r"C:\ProgramData\ssh\administrators_authorized_keys"
+                )
 
             for fpath in files_to_check:
                 if os.path.exists(fpath):
@@ -2630,7 +2747,7 @@ class DataReceiver(threading.Thread):
                                 return True
                     except Exception:
                         pass
-            
+
             return False
         except Exception as e:
             log.error(f"Error checking if key installed: {e}")
@@ -3281,9 +3398,13 @@ class CompanionRelayServer(threading.Thread):
                     if self.running:
                         log.error(f"Companion accept error: {e}")
         except OSError as e:
-            log.error(f"[ERR] FATAL: CompanionRelay cannot bind to port {COMPANION_PORT}: {e}")
+            log.error(
+                f"[ERR] FATAL: CompanionRelay cannot bind to port {COMPANION_PORT}: {e}"
+            )
             log.error(f"Another application may be using port {COMPANION_PORT}")
-            log.error("Claude Code companion relay will NOT work until this is resolved")
+            log.error(
+                "Claude Code companion relay will NOT work until this is resolved"
+            )
             self.bind_failed = True
             self.bind_error = str(e)
             if self.on_status_change:
@@ -3334,9 +3455,15 @@ class CompanionRelayServer(threading.Thread):
             else:
                 # Linux/Mac: Set keepalive parameters
                 try:
-                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)  # 10 seconds idle
-                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)  # 3 second intervals
-                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)  # 3 probes before giving up
+                    conn.setsockopt(
+                        socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10
+                    )  # 10 seconds idle
+                    conn.setsockopt(
+                        socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3
+                    )  # 3 second intervals
+                    conn.setsockopt(
+                        socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3
+                    )  # 3 probes before giving up
                 except (AttributeError, OSError):
                     # Some platforms don't support these options
                     pass
@@ -3650,277 +3777,67 @@ class CompanionRelayServer(threading.Thread):
 
                 threading.Thread(target=do_notify, daemon=True).start()
 
-        
-
-        
-
         def _notify_web_dashboard_session_message(
-
-        
-
-        
-
             self, session_id, message, is_update=False
-
-        
-
-        
-
         ):
-
-        
-
-        
-
             """Send a session message update to the web dashboard."""
 
-        
-
-        
-
-    
-
-        
-
-        
-
             def do_notify():
-
-        
-
-        
-
                 try:
-
-        
-
-        
-
                     import urllib.request
-
-        
-
-        
 
                     import json as json_module
 
-        
-
-        
-
-    
-
-        
-
-        
-
                     payload = json_module.dumps(
-
-        
-
-        
-
                         {
-
-        
-
-        
-
                             "session_id": session_id,
-
-        
-
-        
-
                             "message": message,
-
-        
-
-        
-
                             "is_update": bool(is_update),
-
-        
-
-        
-
                         }
-
-        
-
-        
-
                     ).encode("utf-8")
 
-        
-
-        
-
                     req = urllib.request.Request(
-
-        
-
-        
-
                         "http://127.0.0.1:6767/api/sessions/message",
-
-        
-
-        
-
                         data=payload,
-
-        
-
-        
-
                         headers={"Content-Type": "application/json"},
-
-        
-
-        
-
                         method="POST",
-
-        
-
-        
-
                     )
-
-        
-
-        
 
                     urllib.request.urlopen(req, timeout=2)
 
-        
-
-        
-
                 except Exception as e:
-
-        
-
-        
-
                     log.debug(f"Could not notify web dashboard: {e}")
-
-        
-
-        
-
-    
-
-        
-
-        
 
             # Run in background thread to not block the relay
 
-        
-
-        
-
             threading.Thread(target=do_notify, daemon=True).start()
 
-        
-
-        
-
-    
-
-        
-
-        
-
         def _start_transcript_watcher(self, transcript_path):
-
-        
-
-        
-
             """Start watching a transcript file for new content."""
 
-        
-
-        
-
             if not transcript_path or not os.path.exists(transcript_path):
-
-        
-
-        
-
-                log.warning(f"Transcript path invalid or doesn't exist: {transcript_path}")
-
-        
-
-        
+                log.warning(
+                    f"Transcript path invalid or doesn't exist: {transcript_path}"
+                )
 
                 return
 
-        
-
-        
-
-    
-
-        
-
-        
-
             self._stop_transcript_watcher()
-
-        
-
-        
-
-    
-
-        
-
-        
 
             self._transcript_path = transcript_path
 
-        
-
-        
-
             self._transcript_last_pos = (
-
-        
-
-        
-
-                os.path.getsize(transcript_path) if os.path.exists(transcript_path) else 0
-
-        
-
-        
-
+                os.path.getsize(transcript_path)
+                if os.path.exists(transcript_path)
+                else 0
             )
-
-        
-
-        
 
             self._transcript_stop_event.clear()
 
-        
-
-        
-
-    
-
-        
-
-        
-
             self._transcript_watcher_thread = threading.Thread(
-            target=self._watch_transcript, daemon=True
-        )
+                target=self._watch_transcript, daemon=True
+            )
+
         self._transcript_watcher_thread.start()
         log.info(f"Started transcript watcher for: {transcript_path}")
 
@@ -4487,34 +4404,54 @@ class DiscoveryServer(threading.Thread):
         self.bind_failed = False  # Track if port binding failed
         self.bind_error = None  # Store error message
         self.zeroconf = None
-        self.service_info = None
+        self.service_infos = []  # Store multiple service infos
 
     def run(self):
-        # 1. Register mDNS service
+        # 1. Register mDNS services
         if HAS_ZEROCONF:
             try:
                 self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
                 desc = {
                     "username": self.connection_info.get("username", "root"),
                     "version": str(self.connection_info.get("version", 1)),
-                    "mode": self.connection_info.get("mode", "local")
+                    "mode": self.connection_info.get("mode", "local"),
                 }
-                
+
                 hostname = socket.gethostname()
                 local_ip = get_local_ip()
+                tailscale_ip = get_tailscale_ip()
                 ssh_port = self.connection_info.get("port", 22)
-                
-                self.service_info = ServiceInfo(
-                    "_shadowai._tcp.local.",
-                    f"{hostname}._shadowai._tcp.local.",
-                    addresses=[socket.inet_aton(local_ip)],
-                    port=ssh_port,
-                    properties=desc,
-                    server=f"{hostname}.local.",
-                )
-                
-                self.zeroconf.register_service(self.service_info)
-                log.info(f"[OK] mDNS service registered: {hostname}._shadowai._tcp.local.")
+
+                # Register Local IP
+                if local_ip:
+                    info_local = ServiceInfo(
+                        "_shadowai._tcp.local.",
+                        f"{hostname} (Local)._shadowai._tcp.local.",
+                        addresses=[socket.inet_aton(local_ip)],
+                        port=ssh_port,
+                        properties=desc,
+                        server=f"{hostname}.local.",
+                    )
+                    self.zeroconf.register_service(info_local)
+                    self.service_infos.append(info_local)
+                    log.info(f"[OK] mDNS service registered (Local): {local_ip}")
+
+                # Register Tailscale IP if available
+                if tailscale_ip:
+                    info_ts = ServiceInfo(
+                        "_shadowai._tcp.local.",
+                        f"{hostname} (Tailscale)._shadowai._tcp.local.",
+                        addresses=[socket.inet_aton(tailscale_ip)],
+                        port=ssh_port,
+                        properties=desc,
+                        server=f"{hostname}-ts.local.",
+                    )
+                    self.zeroconf.register_service(info_ts)
+                    self.service_infos.append(info_ts)
+                    log.info(
+                        f"[OK] mDNS service registered (Tailscale): {tailscale_ip}"
+                    )
+
             except Exception as e:
                 log.warning(f"Failed to register mDNS service: {e}")
 
@@ -4526,7 +4463,9 @@ class DiscoveryServer(threading.Thread):
             self.sock.settimeout(1.0)
             log.info(f"[OK] Discovery server listening on UDP {DISCOVERY_PORT}")
         except OSError as e:
-            log.error(f"[ERR] FATAL: DiscoveryServer cannot bind to port {DISCOVERY_PORT}: {e}")
+            log.error(
+                f"[ERR] FATAL: DiscoveryServer cannot bind to port {DISCOVERY_PORT}: {e}"
+            )
             log.error(f"Another application may be using UDP port {DISCOVERY_PORT}")
             log.error("Network discovery will NOT work until this is resolved")
             self.bind_failed = True
@@ -4563,7 +4502,8 @@ class DiscoveryServer(threading.Thread):
                 self.sock.close()
             if self.zeroconf:
                 try:
-                    self.zeroconf.unregister_service(self.service_info)
+                    for info in self.service_infos:
+                        self.zeroconf.unregister_service(info)
                     self.zeroconf.close()
                 except Exception:
                     pass
@@ -4575,10 +4515,7 @@ class DiscoveryServer(threading.Thread):
         self.connection_info = info
 
 
-
-
 class CloudSyncService(threading.Thread):
-
     """
 
     Background service that pushes local ShadowBridge data (~/.shadowai/*.json)
@@ -4589,10 +4526,7 @@ class CloudSyncService(threading.Thread):
 
     SYNC_INTERVAL = 300  # 5 minutes
 
-        
-
     def __init__(self):
-
         super().__init__(daemon=True)
 
         self.running = True
@@ -4603,105 +4537,70 @@ class CloudSyncService(threading.Thread):
 
         self._load_token()
 
-        
-
     def _load_token(self):
-
         """Try to find the API token from connected devices or settings."""
 
         try:
-
             if os.path.exists(SETTINGS_FILE):
-
                 with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-
                     settings = json.load(f)
 
                     self.api_token = settings.get("cloud_api_token")
 
         except Exception:
-
             pass
 
-        
-
     def run(self):
-
         log.info("Cloud Sync Service starting...")
 
         while self.running:
-
             if self.api_token:
-
                 try:
-
                     self._perform_sync()
 
                 except Exception as e:
-
                     log.error(f"Cloud sync error: {e}")
-
-                    
 
             time.sleep(self.SYNC_INTERVAL)
 
-        
-
     def _perform_sync(self):
-
         """Push local JSON data to cloud."""
 
         # Sync Projects
 
         if os.path.exists(PROJECTS_FILE):
-
             with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
-
                 data = json.load(f)
 
                 # Projects are under devices in this file
 
                 for device_id, device_info in data.get("devices", {}).items():
-
                     projects = device_info.get("projects", [])
 
                     for proj in projects:
-
                         self._push_to_cloud("projects", proj)
-
-        
 
         # Sync Notes
 
         if os.path.exists(NOTES_FILE):
-
             with open(NOTES_FILE, "r", encoding="utf-8") as f:
-
                 data = json.load(f)
 
                 for device_id, device_info in data.get("devices", {}).items():
-
                     notes = device_info.get("notes", [])
 
                     for note in notes:
-
                         self._push_to_cloud("notes", note)
 
-        
-
     def _push_to_cloud(self, endpoint, payload):
-
         """HTTP POST to cloud backend."""
 
         try:
-
             import requests
 
             headers = {"Authorization": f"Bearer {self.api_token}"}
 
             url = f"{self.base_url}/{endpoint}"
-
-                    
 
             # Re-map local fields to backend fields if necessary
 
@@ -4709,21 +4608,13 @@ class CloudSyncService(threading.Thread):
 
             # Backend expects note: {title, content, project_id, category, tags}
 
-                    
-
             res = requests.post(url, json=payload, headers=headers, timeout=10)
 
             if res.status_code == 201:
-
                 log.debug(f"Synced {endpoint} item to cloud: {payload.get('id')}")
 
         except Exception as e:
-
             log.debug(f"Cloud sync item failed: {e}")
-
-        
-
-        
 
 
 class ShadowBridgeApp:
@@ -4745,30 +4636,15 @@ class ShadowBridgeApp:
             set_app_user_model_id("ShadowBridge")
             log.info("Creating tk.Tk() root window...")
             self.root = tk.Tk()
+            # Set background IMMEDIATELY to prevent white flash
+            self.root.configure(bg=COLORS["bg_surface"])
             log.info(f"✓ tk.Tk() instance created successfully: {self.root}")
             self.root.title(APP_NAME)
             log.info(f"✓ Window title set to: {APP_NAME}")
-            self.root.configure(bg=COLORS["bg_dark"])
-            log.info(f"✓ Root background set to: {COLORS['bg_dark']}")
+
+            # Additional root hardening
             self.root.overrideredirect(False)
             log.info("✓ Window decorations enabled")
-
-            # Enable Windows 11 dark titlebar
-            if IS_WINDOWS:
-                try:
-                    import ctypes
-                    DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-                    hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-                    value = ctypes.c_int(1)  # 1 = dark mode, 0 = light mode
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        hwnd,
-                        DWMWA_USE_IMMERSIVE_DARK_MODE,
-                        ctypes.byref(value),
-                        ctypes.sizeof(value)
-                    )
-                    log.info("✓ Windows 11 dark titlebar enabled")
-                except Exception as e:
-                    log.warning(f"Could not set dark titlebar: {e}")
         except Exception as e:
             log.critical(f"✗ FATAL: Failed to create root window: {e}", exc_info=True)
             raise
@@ -4778,47 +4654,13 @@ class ShadowBridgeApp:
         theme_applied = False
         if HAS_SV_TTK:
             try:
-                # Debug paths for frozen app
                 import sv_ttk
-                log.info(f"sv_ttk module found at: {sv_ttk.__file__}")
-                theme_path = os.path.join(os.path.dirname(sv_ttk.__file__), "theme")
-                log.info(f"Checking theme path: {theme_path}")
-                if os.path.exists(theme_path):
-                    log.info("✓ Theme folder found")
-                    try:
-                        contents = os.listdir(theme_path)
-                        log.info(f"Theme folder contents: {contents}")
-                    except Exception as e:
-                        log.warning(f"Could not list theme folder: {e}")
-                else:
-                    log.warning("✗ Theme folder NOT found - sv_ttk will likely fail")
 
-                log.info("Attempting to set sv_ttk theme to 'dark'...")
                 sv_ttk.set_theme("dark")
                 log.info("✓ sv_ttk theme 'dark' applied successfully")
                 theme_applied = True
             except Exception as e:
-                log.error(f"✗ Failed to set sv_ttk theme: {e}", exc_info=True)
-                log.info("Falling back to manual theme configuration...")
-
-        # Fallback theme if sv_ttk failed or not available
-        if not theme_applied:
-            log.info("Applying fallback theme configuration...")
-            try:
-                style = ttk.Style()
-                log.info(f"Available themes: {style.theme_names()}")
-                log.info("Setting theme to 'clam'...")
-                style.theme_use("clam")
-                log.info("✓ Fallback theme 'clam' applied")
-
-                # Manually configure colors for fallback theme
-                log.info("Configuring fallback colors...")
-                style.configure(".", background=COLORS["bg_surface"], foreground=COLORS["text"])
-                style.configure("TFrame", background=COLORS["bg_surface"])
-                style.configure("TLabel", background=COLORS["bg_surface"], foreground=COLORS["text"])
-                log.info("✓ Fallback colors configured")
-            except Exception as ex:
-                log.error(f"✗ Fallback theme configuration failed: {ex}", exc_info=True)
+                log.error(f"✗ Failed to set sv_ttk theme: {e}")
 
         # Set window icon from logo.png
         icon_path = get_app_icon_path()
@@ -4834,7 +4676,7 @@ class ShadowBridgeApp:
                 self.app_icon = ImageTk.PhotoImage(icon_img)
                 self.root.iconphoto(True, self.app_icon)
                 log.info(f"App icon loaded from {icon_path}")
-            except (FileNotFoundError, IOError, OSError) as e:
+            except Exception as e:
                 log.debug(f"Could not load app icon: {e}")
 
         # Window sizing - fixed compact size, bottom-right position
@@ -4843,34 +4685,40 @@ class ShadowBridgeApp:
             dpi = self.root.winfo_fpixels("1i")
             scale = dpi / 96.0  # 96 is standard DPI
             log.info(f"Detected DPI: {dpi}, Scale factor: {scale}")
-        except (tk.TclError, ValueError):
+        except Exception:
             scale = 1.0
-            log.warning("Failed to detect DPI, defaulting to scale 1.0")
 
         # Fixed compact size for quick connect utility
         self.window_width = int(375 * scale)
-        self.window_height = int(780 * scale)
+        self.window_height = int(820 * scale)
 
         # Get screen size and taskbar offset
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        log.info(f"Screen size: {screen_w}x{screen_h}")
 
         # Position at bottom-right, above taskbar
         x = screen_w - self.window_width - 20
         y = screen_h - self.window_height - 100  # Above taskbar
 
-        # Set geometry - start off-screen for animation
-        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{screen_h}")
-        self.root.resizable(False, False)  # No resizing
+        # Validate position is on screen (clamping)
+        if x < 0:
+            x = 20
+        if y < 30:
+            y = 50  # Ensure title bar is visible
+
+        # Set geometry - fixed size, bottom-right
+        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+        self.root.resizable(True, True)  # Enabled resizing
+        self.root.minsize(320, 600)  # Set minimum size
+
         self.target_y = y
-        self.current_y = screen_h
+        self.current_y = y
 
         # State - auto-detect SSH port
         detected_port = find_ssh_port()
         self.ssh_port = detected_port if detected_port else 22
         log.info(f"Using SSH port: {self.ssh_port}")
-        
+
         self.is_broadcasting = False
         self.discovery_server = None
         self.data_receiver = None
@@ -4923,6 +4771,7 @@ class ShadowBridgeApp:
         # Start Thread Watchdog for server health monitoring
         try:
             from utils.watchdog import ThreadWatchdog
+
             self.watchdog = ThreadWatchdog(check_interval=5)
             self.watchdog.start()
             log.info("Thread watchdog started")
@@ -4949,12 +4798,8 @@ class ShadowBridgeApp:
 
         # Force geometry AFTER widgets are created (no saved state - always bottom-right)
         self.root.update_idletasks()
-        # Initial position for animation start
-        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{screen_h}")
+        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
         self.root.after(100, lambda: apply_windows_11_theme(self.root))
-        
-        # Start slide-up animation
-        self.root.after(200, self._animate_show)
 
         # Start data receiver for project sync
         self.start_data_receiver()
@@ -4967,6 +4812,7 @@ class ShadowBridgeApp:
         self.root.after(100, self.update_qr_code)
         self.root.after(200, self.update_status)
         self.root.after(500, self.auto_start_broadcast)
+        self.root.after(1000, lambda: apply_windows_11_theme(self.root))
         self.root.after(2000, self.check_for_updates_on_startup)
 
     def _animate_show(self):
@@ -4976,7 +4822,7 @@ class ShadowBridgeApp:
         total_dist = self.root.winfo_screenheight() - self.target_y
         current_dist = self.current_y - self.target_y
         alpha = max(0.1, 1.0 - (current_dist / total_dist))
-        
+
         try:
             self.root.attributes("-alpha", alpha)
         except Exception:
@@ -4986,7 +4832,7 @@ class ShadowBridgeApp:
             self.current_y -= step
             if self.current_y < self.target_y:
                 self.current_y = self.target_y
-            
+
             x = self.root.winfo_x()
             self.root.geometry(f"+{x}+{self.current_y}")
             self.root.after(8, self._animate_show)
@@ -5025,20 +4871,75 @@ class ShadowBridgeApp:
         # Configure colors for themed widgets
         log.info("Configuring widget styles...")
         try:
-            style.configure(".", background=COLORS["bg_surface"], foreground=COLORS["text"])
+            # Root and basic elements
+            style.configure(
+                ".", background=COLORS["bg_surface"], foreground=COLORS["text"]
+            )
             style.configure("TFrame", background=COLORS["bg_surface"])
             style.configure("Card.TFrame", background=COLORS["bg_card"], relief="flat")
+
+            # Form elements (fallbacks for when sv_ttk is not present)
+            style.configure(
+                "TCheckbutton",
+                background=COLORS["bg_surface"],
+                foreground=COLORS["text"],
+            )
+            style.configure(
+                "TRadiobutton",
+                background=COLORS["bg_surface"],
+                foreground=COLORS["text"],
+            )
+            style.configure(
+                "TEntry",
+                fieldbackground=COLORS["bg_elevated"],
+                foreground=COLORS["text"],
+                insertcolor=COLORS["text"],
+            )
+            style.configure(
+                "TCombobox",
+                fieldbackground=COLORS["bg_elevated"],
+                foreground=COLORS["text"],
+            )
+            style.configure(
+                "Horizontal.TProgressbar",
+                background=COLORS["accent"],
+                troughcolor=COLORS["bg_elevated"],
+                borderwidth=0,
+            )
+
             log.info("✓ Base widget styles configured")
         except Exception as e:
             log.error(f"✗ Failed to configure base styles: {e}")
 
         # Label styles
         try:
-            style.configure("TLabel", background=COLORS["bg_surface"], foreground=COLORS["text"], font=("Segoe UI", 10))
-            style.configure("Header.TLabel", font=("Segoe UI", 20, "bold"), foreground=COLORS["text"])
-            style.configure("Subheader.TLabel", foreground=COLORS["text_secondary"], font=("Segoe UI", 10))
-            style.configure("Caption.TLabel", foreground=COLORS["text_muted"], font=("Segoe UI", 8, "bold"))
-            style.configure("Badge.TLabel", background=COLORS["accent_container"], foreground=COLORS["accent_light"], font=("Segoe UI", 8, "bold"))
+            style.configure(
+                "TLabel",
+                background=COLORS["bg_surface"],
+                foreground=COLORS["text"],
+                font=("Segoe UI", 10),
+            )
+            style.configure(
+                "Header.TLabel",
+                font=("Segoe UI", 20, "bold"),
+                foreground=COLORS["text"],
+            )
+            style.configure(
+                "Subheader.TLabel",
+                foreground=COLORS["text_secondary"],
+                font=("Segoe UI", 10),
+            )
+            style.configure(
+                "Caption.TLabel",
+                foreground=COLORS["text_muted"],
+                font=("Segoe UI", 8, "bold"),
+            )
+            style.configure(
+                "Badge.TLabel",
+                background=COLORS["accent_container"],
+                foreground=COLORS["accent_light"],
+                font=("Segoe UI", 8, "bold"),
+            )
             log.info("✓ Label styles configured")
         except Exception as e:
             log.error(f"✗ Failed to configure label styles: {e}")
@@ -5049,12 +4950,15 @@ class ShadowBridgeApp:
                 "Accent.TButton",
                 font=("Segoe UI", 10, "bold"),
                 background=COLORS["accent"],
-                foreground="white"
+                foreground="white",
             )
             style.map(
                 "Accent.TButton",
-                background=[("active", COLORS["accent_hover"]), ("pressed", COLORS["accent"])],
-                foreground=[("active", "white")]
+                background=[
+                    ("active", COLORS["accent_hover"]),
+                    ("pressed", COLORS["accent"]),
+                ],
+                foreground=[("active", "white")],
             )
             log.info("✓ Accent button styles configured")
         except Exception as e:
@@ -5065,12 +4969,15 @@ class ShadowBridgeApp:
             style.configure(
                 "Secondary.TButton",
                 font=("Segoe UI", 9),
-                background=COLORS["bg_elevated"]
+                background=COLORS["bg_elevated"],
             )
             style.map(
                 "Secondary.TButton",
-                background=[("active", COLORS["accent"]), ("pressed", COLORS["bg_elevated"])],
-                foreground=[("active", "white")]
+                background=[
+                    ("active", COLORS["accent"]),
+                    ("pressed", COLORS["bg_elevated"]),
+                ],
+                foreground=[("active", "white")],
             )
             log.info("✓ Secondary button styles configured")
         except Exception as e:
@@ -5086,7 +4993,14 @@ class ShadowBridgeApp:
                 arrowcolor=COLORS["text_dim"],
                 relief="flat",
                 borderwidth=0,
-                width=10,
+                width=12,
+            )
+            style.map(
+                "Vertical.TScrollbar",
+                background=[
+                    ("active", COLORS["accent"]),
+                    ("pressed", COLORS["accent_hover"]),
+                ],
             )
             log.info("✓ Scrollbar styles configured")
         except Exception as e:
@@ -5097,21 +5011,64 @@ class ShadowBridgeApp:
     def create_widgets(self):
         """Create compact single-column layout using tk for reliable dark theming."""
         log.info("Creating main container...")
-        # Main container
+        # Main container with scrolling support
         try:
-            main_container = tk.Frame(self.root, bg=COLORS["bg_surface"])
-            main_container.pack(fill=tk.BOTH, expand=True)
-            log.info("✓ Main container created")
+            self.canvas = tk.Canvas(
+                self.root, bg=COLORS["bg_surface"], highlightthickness=0, borderwidth=0
+            )
+            self.scrollbar = ttk.Scrollbar(
+                self.root, orient="vertical", command=self.canvas.yview
+            )
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+            # Inner padding frame (the scrollable content)
+            left_inner = tk.Frame(
+                self.canvas,
+                bg=COLORS["bg_surface"],
+                padx=20,
+                pady=16,
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+            )
+            self.canvas_window = self.canvas.create_window(
+                (0, 0), window=left_inner, anchor="nw", width=self.window_width
+            )
+
+            # Update scrollregion when content changes
+            def _on_frame_configure(event):
+                self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+            left_inner.bind("<Configure>", _on_frame_configure)
+
+            # Update window width when canvas is resized
+            def _on_canvas_configure(event):
+                self.canvas.itemconfig(self.canvas_window, width=event.width)
+
+            self.canvas.bind("<Configure>", _on_canvas_configure)
+
+            # Enable mouse wheel scrolling
+            def _on_mousewheel(event):
+                self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+            self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+            log.info("✓ Scrollable main container created")
         except Exception as e:
-            log.error(f"✗ Failed to create main container: {e}", exc_info=True)
+            log.error(f"✗ Failed to create scrollable container: {e}", exc_info=True)
             raise
 
-        # Inner padding frame
-        left_inner = tk.Frame(main_container, bg=COLORS["bg_surface"], padx=20, pady=16)
-        left_inner.pack(fill=tk.BOTH, expand=True)
-
         # Header with title
-        header = tk.Frame(left_inner, bg=COLORS["bg_surface"])
+        header = tk.Frame(
+            left_inner,
+            bg=COLORS["bg_surface"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         header.pack(fill=tk.X, pady=(0, 12))
 
         title_label = tk.Label(
@@ -5122,7 +5079,7 @@ class ShadowBridgeApp:
             font=("Segoe UI", 20, "bold"),
             relief="flat",
             borderwidth=0,
-            highlightthickness=0
+            highlightthickness=0,
         )
         title_label.pack(side=tk.LEFT)
 
@@ -5135,46 +5092,134 @@ class ShadowBridgeApp:
             font=("Segoe UI", 8, "bold"),
             padx=8,
             pady=2,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         version_label.pack(side=tk.LEFT, padx=(10, 0))
 
         # Host info row
-        device_row = tk.Frame(left_inner, bg=COLORS["bg_surface"])
+        device_row = tk.Frame(
+            left_inner,
+            bg=COLORS["bg_surface"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         device_row.pack(fill=tk.X, pady=(0, 15))
 
         # Host stack
-        host_stack = tk.Frame(device_row, bg=COLORS["bg_surface"])
+        host_stack = tk.Frame(
+            device_row,
+            bg=COLORS["bg_surface"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         host_stack.pack(side=tk.LEFT)
-        host_label = tk.Label(host_stack, text="HOST", bg=COLORS["bg_surface"], fg=COLORS["text_muted"], font=("Segoe UI", 8, "bold"), relief="flat", borderwidth=0, highlightthickness=0)
+        host_label = tk.Label(
+            host_stack,
+            text="HOST",
+            bg=COLORS["bg_surface"],
+            fg=COLORS["text_muted"],
+            font=("Segoe UI", 8, "bold"),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         host_label.pack(anchor="w")
-        hostname_label = tk.Label(host_stack, text=f"{socket.gethostname()}", bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], font=("Segoe UI", 10), relief="flat", borderwidth=0, highlightthickness=0)
+        hostname_label = tk.Label(
+            host_stack,
+            text=f"{socket.gethostname()}",
+            bg=COLORS["bg_surface"],
+            fg=COLORS["text_secondary"],
+            font=("Segoe UI", 10),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         hostname_label.pack(anchor="w")
 
         # Status stack
-        status_stack = tk.Frame(device_row, bg=COLORS["bg_surface"])
+        status_stack = tk.Frame(
+            device_row,
+            bg=COLORS["bg_surface"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         status_stack.pack(side=tk.RIGHT)
 
         self.connected_device_label = tk.Label(
-            status_stack, text="No device", bg=COLORS["bg_surface"], fg=COLORS["text_muted"], font=("Segoe UI", 8), anchor="e"
+            status_stack,
+            text="No device",
+            bg=COLORS["bg_surface"],
+            fg=COLORS["text_muted"],
+            font=("Segoe UI", 8),
+            anchor="e",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         self.connected_device_label.pack(anchor="e")
 
         self.broadcast_status_label = tk.Label(
-            status_stack, text="● Broadcasting", bg=COLORS["bg_surface"], fg=COLORS["success"], font=("Segoe UI", 8, "bold"), anchor="e"
+            status_stack,
+            text="● Broadcasting",
+            bg=COLORS["bg_surface"],
+            fg=COLORS["success"],
+            font=("Segoe UI", 8, "bold"),
+            anchor="e",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         self.broadcast_status_label.pack(anchor="e")
 
         # QR Code card
-        qr_card = tk.Frame(left_inner, bg=COLORS["bg_card"], padx=20, pady=15)
+        qr_card = tk.Frame(
+            left_inner,
+            bg=COLORS["bg_card"],
+            padx=20,
+            pady=15,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         qr_card.pack(fill=tk.X, pady=(0, 12))
-        
-        tk.Label(qr_card, text="QUICK CONNECT", bg=COLORS["bg_card"], fg=COLORS["text_muted"], font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 10))
 
-        self.qr_label = tk.Label(qr_card, bg=COLORS["bg_card"], text="Loading...", fg=COLORS["text_dim"])
+        tk.Label(
+            qr_card,
+            text="QUICK CONNECT",
+            bg=COLORS["bg_card"],
+            fg=COLORS["text_muted"],
+            font=("Segoe UI", 8, "bold"),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        ).pack(anchor="w", pady=(0, 10))
+
+        self.qr_label = tk.Label(
+            qr_card,
+            bg=COLORS["bg_card"],
+            text="Loading...",
+            fg=COLORS["text_dim"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         self.qr_label.pack(pady=(0, 15))
 
         # Connection info
-        info_row = tk.Frame(qr_card, bg=COLORS["bg_elevated"], padx=15, pady=10)
+        info_row = tk.Frame(
+            qr_card,
+            bg=COLORS["bg_elevated"],
+            padx=15,
+            pady=10,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         info_row.pack(fill=tk.X)
 
         self.ip_label = tk.Label(
@@ -5183,6 +5228,9 @@ class ShadowBridgeApp:
             bg=COLORS["bg_elevated"],
             fg=COLORS["accent_light"],
             font=("Consolas", 12, "bold"),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         self.ip_label.pack(side=tk.LEFT)
 
@@ -5192,11 +5240,22 @@ class ShadowBridgeApp:
             bg=COLORS["bg_elevated"],
             fg=COLORS["text_dim"],
             font=("Consolas", 10),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         self.ssh_label.pack(side=tk.RIGHT)
 
         # Tools section
-        tools_card = tk.Frame(left_inner, bg=COLORS["bg_card"], padx=20, pady=15)
+        tools_card = tk.Frame(
+            left_inner,
+            bg=COLORS["bg_card"],
+            padx=20,
+            pady=15,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         tools_card.pack(fill=tk.X, pady=(0, 10))
 
         cli_tools_label = tk.Label(
@@ -5207,7 +5266,7 @@ class ShadowBridgeApp:
             font=("Segoe UI", 8, "bold"),
             relief="flat",
             borderwidth=0,
-            highlightthickness=0
+            highlightthickness=0,
         )
         cli_tools_label.pack(anchor="w", pady=(0, 12))
 
@@ -5219,18 +5278,74 @@ class ShadowBridgeApp:
         self._tool_install_lock = threading.Lock()
 
         tools = [
-            ("Claude Code", "claude", {"type": "npm", "commands": ["npm install -g @anthropic-ai/claude-code"]}),
-            ("Codex", "codex", {"type": "npm", "commands": ["npm install -g @openai/codex"]}),
-            ("Gemini", "gemini", {"type": "npm", "commands": ["npm install -g @google/gemini-cli"]}),
-            ("Aider", "aider", {"type": "pip", "commands": ["py -m pip install -U aider-chat"]}),
-            ("Ollama", "ollama", {"type": "winget", "commands": ["winget install -e --id Ollama.Ollama"]}),
+            (
+                "Claude Code",
+                "claude",
+                {
+                    "type": "npm",
+                    "commands": ["npm install -g @anthropic-ai/claude-code"],
+                    "uninstall_commands": [
+                        "npm uninstall -g @anthropic-ai/claude-code"
+                    ],
+                },
+            ),
+            (
+                "Codex",
+                "codex",
+                {
+                    "type": "npm",
+                    "commands": ["npm install -g @openai/codex"],
+                    "uninstall_commands": ["npm uninstall -g @openai/codex"],
+                },
+            ),
+            (
+                "Gemini",
+                "gemini",
+                {
+                    "type": "npm",
+                    "commands": ["npm install -g @google/gemini-cli"],
+                    "uninstall_commands": ["npm uninstall -g @google/gemini-cli"],
+                },
+            ),
+            (
+                "Aider",
+                "aider",
+                {
+                    "type": "pip",
+                    "commands": [
+                        "py -m pip install -U aider-chat",
+                        "python -m pip install -U aider-chat",
+                    ],
+                    "uninstall_commands": [
+                        "py -m pip uninstall -y aider-chat",
+                        "python -m pip uninstall -y aider-chat",
+                    ],
+                    "fallback_url": "https://aider.chat/",
+                },
+            ),
+            (
+                "Ollama",
+                "ollama",
+                {
+                    "type": "winget",
+                    "commands": [
+                        "winget install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements"
+                    ],
+                    "uninstall_commands": [
+                        "winget uninstall -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements"
+                    ],
+                    "fallback_url": "https://ollama.com/download/windows",
+                },
+            ),
         ]
 
         # Function to create modern tk buttons
-        def create_modern_button(container, text, command, width=12, primary=False, pady=5, font_size=9):
+        def create_modern_button(
+            container, text, command, width=12, primary=False, pady=5, font_size=9
+        ):
             bg_color = COLORS["accent"] if primary else COLORS["bg_elevated"]
             fg_color = "white" if primary else COLORS["text"]
-            
+
             btn = tk.Button(
                 container,
                 text=text,
@@ -5238,7 +5353,9 @@ class ShadowBridgeApp:
                 width=width,
                 bg=bg_color,
                 fg=fg_color,
-                font=("Segoe UI", font_size, "bold") if primary else ("Segoe UI", font_size),
+                font=("Segoe UI", font_size, "bold")
+                if primary
+                else ("Segoe UI", font_size),
                 relief="flat",
                 bd=0,
                 padx=10,
@@ -5247,70 +5364,137 @@ class ShadowBridgeApp:
                 activebackground=COLORS["accent_hover"],
                 activeforeground="white",
                 highlightthickness=0,
-                overrelief="flat"
+                overrelief="flat",
             )
-            
+
             def on_enter(e):
                 btn.configure(bg=COLORS["accent_hover"], fg="white")
+
             def on_leave(e):
                 btn.configure(bg=bg_color, fg=fg_color)
-            
+
             btn.bind("<Enter>", on_enter)
             btn.bind("<Leave>", on_leave)
             return btn
 
         for name, tool_id, spec in tools:
             self._tool_specs[tool_id] = spec
-            row = tk.Frame(tools_card, bg=COLORS["bg_card"])
+            row = tk.Frame(
+                tools_card,
+                bg=COLORS["bg_card"],
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+            )
             row.pack(fill=tk.X, pady=4)
 
-            status_frame = tk.Frame(row, bg=COLORS["bg_card"])
+            status_frame = tk.Frame(
+                row,
+                bg=COLORS["bg_card"],
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+            )
             status_frame.pack(side=tk.LEFT, padx=(0, 12))
 
-            status_canvas = tk.Canvas(status_frame, width=12, height=12, bg=COLORS["bg_card"], highlightthickness=0)
+            status_canvas = tk.Canvas(
+                status_frame,
+                width=12,
+                height=12,
+                bg=COLORS["bg_card"],
+                highlightthickness=0,
+                borderwidth=0,
+                relief="flat",
+                takefocus=0,
+            )
             status_canvas.pack(pady=6)
-            status_canvas.create_oval(2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot")
+            status_canvas.create_oval(
+                2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot"
+            )
             self.tool_status[tool_id] = status_canvas
 
             tool_name_label = tk.Label(
-                row, text=name, bg=COLORS["bg_card"], fg=COLORS["text_secondary"],
-                font=("Segoe UI", 10), width=12, anchor="w",
-                relief="flat", borderwidth=0, highlightthickness=0
+                row,
+                text=name,
+                bg=COLORS["bg_card"],
+                fg=COLORS["text_secondary"],
+                font=("Segoe UI", 10),
+                width=12,
+                anchor="w",
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
             )
             tool_name_label.pack(side=tk.LEFT)
 
             btn = create_modern_button(
                 row,
                 "Install",
-                lambda s=spec, n=name, t=tool_id: self.install_tool(t, n, s)
+                lambda s=spec, n=name, t=tool_id: self.install_tool(t, n, s),
             )
             btn.pack(side=tk.RIGHT)
             self.tool_buttons[tool_id] = btn
 
         # Tailscale row
-        ts_row = tk.Frame(tools_card, bg=COLORS["bg_card"])
+        ts_row = tk.Frame(
+            tools_card,
+            bg=COLORS["bg_card"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         ts_row.pack(fill=tk.X, pady=4)
-        
-        ts_status_frame = tk.Frame(ts_row, bg=COLORS["bg_card"])
+
+        ts_status_frame = tk.Frame(
+            ts_row,
+            bg=COLORS["bg_card"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         ts_status_frame.pack(side=tk.LEFT, padx=(0, 12))
 
-        self.tailscale_status = tk.Canvas(ts_status_frame, width=12, height=12, bg=COLORS["bg_card"], highlightthickness=0)
+        self.tailscale_status = tk.Canvas(
+            ts_status_frame,
+            width=12,
+            height=12,
+            bg=COLORS["bg_card"],
+            highlightthickness=0,
+            borderwidth=0,
+            relief="flat",
+            takefocus=0,
+        )
         self.tailscale_status.pack(pady=6)
-        self.tailscale_status.create_oval(2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot")
+        self.tailscale_status.create_oval(
+            2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot"
+        )
 
         tk.Label(
-            ts_row, text="Tailscale", bg=COLORS["bg_card"], fg=COLORS["text_secondary"], font=("Segoe UI", 10), width=12, anchor="w"
+            ts_row,
+            text="Tailscale",
+            bg=COLORS["bg_card"],
+            fg=COLORS["text_secondary"],
+            font=("Segoe UI", 10),
+            width=12,
+            anchor="w",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         ).pack(side=tk.LEFT)
 
         self.tailscale_btn = create_modern_button(
-            ts_row,
-            "Install",
-            self.install_tailscale
+            ts_row, "Install", self.install_tailscale
         )
         self.tailscale_btn.pack(side=tk.RIGHT)
 
         # Bottom section
-        bottom = tk.Frame(left_inner, bg=COLORS["bg_surface"])
+        bottom = tk.Frame(
+            left_inner,
+            bg=COLORS["bg_surface"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         bottom.pack(fill=tk.X, pady=(20, 0))
 
         self.web_dashboard_btn = create_modern_button(
@@ -5320,49 +5504,96 @@ class ShadowBridgeApp:
             width=30,
             primary=True,
             pady=12,
-            font_size=11
+            font_size=11,
         )
         self.web_dashboard_btn.pack(fill=tk.X, pady=(0, 8))
 
         exit_btn = create_modern_button(
-            bottom,
-            "Exit",
-            self.force_exit,
-            width=30,
-            pady=12,
-            font_size=11
+            bottom, "Exit", self.force_exit, width=30, pady=12, font_size=11
         )
         exit_btn.pack(fill=tk.X, pady=(0, 15))
 
         # Options row
-        opts = tk.Frame(bottom, bg=COLORS["bg_surface"])
+        opts = tk.Frame(
+            bottom,
+            bg=COLORS["bg_surface"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         opts.pack(fill=tk.X)
 
         if IS_WINDOWS:
             self.startup_var = tk.BooleanVar(value=is_startup_enabled())
             startup_cb = tk.Checkbutton(
-                opts, text="Auto-start", variable=self.startup_var, command=self.toggle_startup,
-                bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], selectcolor=COLORS["bg_card"],
-                activebackground=COLORS["bg_surface"], activeforeground=COLORS["text"],
-                font=("Segoe UI", 9), highlightthickness=0, bd=0
+                opts,
+                text="Auto-start",
+                variable=self.startup_var,
+                command=self.toggle_startup,
+                bg=COLORS["bg_surface"],
+                fg=COLORS["text_secondary"],
+                selectcolor=COLORS[
+                    "bg_card"
+                ],  # Box background when selected (fixes white box)
+                activebackground=COLORS["bg_surface"],
+                activeforeground=COLORS["text"],
+                font=("Segoe UI", 9),
+                highlightthickness=0,
+                bd=0,
+                relief="flat",
+                overrelief="flat",
+                borderwidth=0,
+                takefocus=0,
             )
             startup_cb.pack(side=tk.LEFT)
 
             self.auto_update_var = tk.BooleanVar(value=is_auto_update_enabled())
             auto_update_cb = tk.Checkbutton(
-                opts, text="Updates", variable=self.auto_update_var, command=self.toggle_auto_update,
-                bg=COLORS["bg_surface"], fg=COLORS["text_secondary"], selectcolor=COLORS["bg_card"],
-                activebackground=COLORS["bg_surface"], activeforeground=COLORS["text"],
-                font=("Segoe UI", 9), highlightthickness=0, bd=0
+                opts,
+                text="Updates",
+                variable=self.auto_update_var,
+                command=self.toggle_auto_update,
+                bg=COLORS["bg_surface"],
+                fg=COLORS["text_secondary"],
+                selectcolor=COLORS["bg_card"],  # Fixes white box
+                activebackground=COLORS["bg_surface"],
+                activeforeground=COLORS["text"],
+                font=("Segoe UI", 9),
+                highlightthickness=0,
+                bd=0,
+                relief="flat",
+                overrelief="flat",
+                borderwidth=0,
+                takefocus=0,
             )
             auto_update_cb.pack(side=tk.LEFT, padx=(12, 0))
 
         # Revoke Keys link
-        revoke_link = tk.Label(opts, text="Revoke Keys", bg=COLORS["bg_surface"], fg=COLORS["error"], font=("Segoe UI", 9, "underline"), cursor="hand2")
+        revoke_link = tk.Label(
+            opts,
+            text="Revoke Keys",
+            bg=COLORS["bg_surface"],
+            fg=COLORS["error"],
+            font=("Segoe UI", 9, "underline"),
+            cursor="hand2",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         revoke_link.pack(side=tk.RIGHT, padx=(0, 12))
         revoke_link.bind("<Button-1>", lambda e: self.revoke_all_keys_ui())
 
-        help_link = tk.Label(opts, text="Help", bg=COLORS["bg_surface"], fg=COLORS["accent_light"], font=("Segoe UI", 9, "underline"), cursor="hand2")
+        help_link = tk.Label(
+            opts,
+            text="Help",
+            bg=COLORS["bg_surface"],
+            fg=COLORS["accent_light"],
+            font=("Segoe UI", 9, "underline"),
+            cursor="hand2",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         help_link.pack(side=tk.RIGHT)
         help_link.bind("<Button-1>", lambda e: self.show_ssh_help())
 
@@ -5380,27 +5611,29 @@ class ShadowBridgeApp:
         elif self._pulse_alpha <= 0.2:
             self._pulse_alpha = 0.2
             self._pulse_dir = 1
-        
+
         # Interpolate color between text_muted and accent
         def interpolate_color(c1, c2, factor):
             def to_rgb(hex_color):
                 hex_color = hex_color.lstrip("#")
-                return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-            
+                return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+
             rgb1 = to_rgb(c1)
             rgb2 = to_rgb(c2)
             res = tuple(int(rgb1[i] + (rgb2[i] - rgb1[i]) * factor) for i in range(3))
             return f"#{res[0]:02x}{res[1]:02x}{res[2]:02x}"
 
-        pulse_color = interpolate_color(COLORS["text_muted"], COLORS["accent"], self._pulse_alpha)
-        
+        pulse_color = interpolate_color(
+            COLORS["text_muted"], COLORS["accent"], self._pulse_alpha
+        )
+
         # Apply to all status dots
         for canvas in self.tool_status.values():
             canvas.itemconfig("dot", fill=pulse_color)
-        
+
         if hasattr(self, "tailscale_status"):
             self.tailscale_status.itemconfig("dot", fill=pulse_color)
-            
+
         self.root.after(60, self._animate_pulse)
 
         self._web_dashboard_monitor_stop_event = threading.Event()
@@ -5425,6 +5658,7 @@ class ShadowBridgeApp:
             x = widget.winfo_rootx() + 20
             y = widget.winfo_rooty() + widget.winfo_height() + 5
             tooltip = tk.Toplevel(widget)
+            tooltip.configure(bg=COLORS["bg_elevated"])
             tooltip.wm_overrideredirect(True)
             tooltip.wm_geometry(f"+{x}+{y}")
             label = tk.Label(
@@ -5435,8 +5669,9 @@ class ShadowBridgeApp:
                 font=("Segoe UI", 8),
                 padx=6,
                 pady=3,
-                relief="solid",
-                borderwidth=1,
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
             )
             label.pack()
 
@@ -5465,13 +5700,22 @@ class ShadowBridgeApp:
         """Update status indicators."""
         ssh_ok = check_ssh_running(self.ssh_port)
 
+        # Update IP label if it was detecting
+        current_ip = get_local_ip()
+        if hasattr(self, "ip_label") and self.ip_label.cget("text") != current_ip:
+            self.ip_label.configure(text=current_ip)
+            if current_ip != "Detecting...":
+                self.update_qr_code()
+
         # Update SSH label with port info
         if ssh_ok:
             self.ssh_label.configure(
                 text=f"SSH :{self.ssh_port} [OK]", fg=COLORS["success"]
             )
         else:
-            self.ssh_label.configure(text=f"SSH :{self.ssh_port} [X]", fg=COLORS["error"])
+            self.ssh_label.configure(
+                text=f"SSH :{self.ssh_port} [X]", fg=COLORS["error"]
+            )
 
         # Merge active devices from Signaling Service (UDP)
         if hasattr(self, "signaling_service") and self.signaling_service:
@@ -5483,20 +5727,22 @@ class ShadowBridgeApp:
                     current_dev = self.devices.get(dev_id, {})
                     last_seen_gui = float(current_dev.get("last_seen", 0) or 0)
                     last_seen_udp = float(info.get("last_seen", 0) or 0)
-                    
+
                     if last_seen_udp > last_seen_gui:
                         # Extract name from status json if available
                         name = dev_id
                         status = info.get("status", {})
                         if status and isinstance(status, dict):
                             name = status.get("device_name", status.get("name", dev_id))
-                        
-                        current_dev.update({
-                            "id": dev_id,
-                            "name": name,
-                            "ip": info.get("ip"),
-                            "last_seen": last_seen_udp
-                        })
+
+                        current_dev.update(
+                            {
+                                "id": dev_id,
+                                "name": name,
+                                "ip": info.get("ip"),
+                                "last_seen": last_seen_udp,
+                            }
+                        )
                         self.devices[dev_id] = current_dev
             except Exception as e:
                 log.debug(f"Error merging signaling devices: {e}")
@@ -5554,7 +5800,7 @@ class ShadowBridgeApp:
                     self.data_receiver,
                     self.start_data_receiver_thread,
                     max_restarts=5,
-                    restart_window=300
+                    restart_window=300,
                 )
         except Exception as e:
             log.error(f"Failed to start data receiver: {e}")
@@ -5600,7 +5846,7 @@ class ShadowBridgeApp:
                     self.companion_relay,
                     self.start_companion_relay_thread,
                     max_restarts=5,
-                    restart_window=300
+                    restart_window=300,
                 )
         except Exception as e:
             log.error(f"Failed to start companion relay: {e}")
@@ -5631,188 +5877,13 @@ class ShadowBridgeApp:
         """Called when companion relay status changes."""
         log.info(f"Companion relay: {status} on port {port}")
 
-    def on_device_connected(self, device_id, device_name, ip):
-        """Called when a device connects and sends data."""
-        self.connected_device = {
-            "id": device_id,
-            "name": device_name,
-            "ip": ip,
-            "connected_at": time.time(),
-        }
-        # Schedule UI update on main thread
-        self.root.after(0, self.update_status)
-
-    def on_projects_received(self, projects):
+    def on_projects_received(self, device_id, projects):
         """Called when projects data is received from Android app."""
+        if not isinstance(projects, list):
+            return
         self.projects = projects
         # Schedule UI update on main thread
         self.root.after(0, self.refresh_projects_ui)
-
-    def refresh_projects_ui(self):
-        """Refresh the projects list UI."""
-        # Clear existing project widgets
-        for widget in self.projects_container.winfo_children():
-            widget.destroy()
-
-        # Update count
-        self.projects_count_label.configure(text=f"{len(self.projects)}")
-
-        if not self.projects:
-            tk.Label(
-                self.projects_container,
-                text="No projects synced yet.\nProjects will appear here when\nyour Android app syncs.",
-                bg=COLORS["bg_card"],
-                fg=COLORS["text_dim"],
-                font=("Segoe UI", 9),
-                justify="center",
-            ).pack(pady=20)
-            return
-
-        # Add project rows
-        for project in self.projects:
-            self._add_project_row(project)
-
-    def _add_project_row_legacy(self, project):
-        """Legacy: Add a single expandable project card to the UI."""
-        name = project.get("name", "Unnamed")
-        path = project.get("path", "")
-
-        # Main card container
-        card = tk.Frame(self.projects_container, bg=COLORS["bg_input"], padx=8, pady=6)
-        card.pack(fill=tk.X, pady=2)
-        card._is_expanded = False
-
-        # Header row (clickable)
-        header = tk.Frame(card, bg=COLORS["bg_input"], cursor="hand2")
-        header.pack(fill=tk.X)
-
-        # Expand indicator
-        expand_label = tk.Label(
-            header,
-            text="▶",
-            bg=COLORS["bg_input"],
-            fg=COLORS["text_dim"],
-            font=("Segoe UI", 8),
-            width=2,
-        )
-        expand_label.pack(side=tk.LEFT)
-
-        info_frame = tk.Frame(header, bg=COLORS["bg_input"])
-        info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        title_label = tk.Label(
-            info_frame,
-            text=name,
-            bg=COLORS["bg_input"],
-            fg=COLORS["text"],
-            font=("Segoe UI", 9, "bold"),
-            anchor="w",
-            cursor="hand2",
-        )
-        title_label.pack(anchor="w")
-
-        # Content frame (initially hidden)
-        content_frame = tk.Frame(card, bg=COLORS["bg_card"], padx=8, pady=8)
-
-        # Determine path display and whether it's accessible
-        is_pc = is_pc_path(path) and path
-        exists = is_pc and (os.path.isdir(path) or os.path.exists(path))
-
-        if is_pc:
-            path_display = path
-            path_color = COLORS["text"] if exists else COLORS["text_dim"]
-        else:
-            path_display = f"Phone: {path}" if path else "Phone only"
-            path_color = COLORS["warning"]
-
-        # Path label in content
-        tk.Label(
-            content_frame,
-            text="Path:",
-            bg=COLORS["bg_card"],
-            fg=COLORS["text_dim"],
-            font=("Segoe UI", 8),
-            anchor="w",
-        ).pack(anchor="w")
-
-        tk.Label(
-            content_frame,
-            text=path_display,
-            bg=COLORS["bg_card"],
-            fg=path_color,
-            font=("Consolas", 9),
-            anchor="w",
-            wraplength=350,
-        ).pack(anchor="w", pady=(0, 8))
-
-        # Open button inside expanded content (only for PC paths that exist)
-        if is_pc and exists:
-            open_btn = tk.Button(
-                content_frame,
-                text="Open in Explorer",
-                bg=COLORS["accent"],
-                fg="#ffffff",
-                font=("Segoe UI", 9),
-                relief="flat",
-                cursor="hand2",
-                padx=12,
-                pady=4,
-                bd=0,
-                highlightthickness=0,
-                activebackground=COLORS["accent_hover"],
-                activeforeground="white",
-                command=lambda p=path: open_folder(p),
-            )
-            open_btn.pack(anchor="w")
-            open_btn.bind(
-                "<Enter>", lambda e, b=open_btn: b.configure(bg=COLORS["accent_hover"])
-            )
-            open_btn.bind(
-                "<Leave>", lambda e, b=open_btn: b.configure(bg=COLORS["accent"])
-            )
-        elif is_pc and not exists:
-            tk.Label(
-                content_frame,
-                text="(Path not found on this PC)",
-                bg=COLORS["bg_card"],
-                fg=COLORS["text_muted"],
-                font=("Segoe UI", 8, "italic"),
-                anchor="w",
-            ).pack(anchor="w")
-
-        def toggle_expand(event=None):
-            if card._is_expanded:
-                content_frame.pack_forget()
-                expand_label.configure(text="▶")
-                card._is_expanded = False
-            else:
-                content_frame.pack(fill=tk.X, pady=(6, 0))
-                expand_label.configure(text="▼")
-                card._is_expanded = True
-
-        # Bind click events to header elements
-        for widget in [header, expand_label, title_label, info_frame]:
-            widget.bind("<Button-1>", toggle_expand)
-
-        # Hover effect on header
-        def on_enter(e):
-            header.configure(bg=COLORS["bg_elevated"])
-            expand_label.configure(bg=COLORS["bg_elevated"])
-            info_frame.configure(bg=COLORS["bg_elevated"])
-            title_label.configure(bg=COLORS["bg_elevated"])
-            for child in info_frame.winfo_children():
-                child.configure(bg=COLORS["bg_elevated"])
-
-        def on_leave(e):
-            header.configure(bg=COLORS["bg_input"])
-            expand_label.configure(bg=COLORS["bg_input"])
-            info_frame.configure(bg=COLORS["bg_input"])
-            title_label.configure(bg=COLORS["bg_input"])
-            for child in info_frame.winfo_children():
-                child.configure(bg=COLORS["bg_input"])
-
-        header.bind("<Enter>", on_enter)
-        header.bind("<Leave>", on_leave)
 
     def check_tools(self):
         """Check which tools are installed."""
@@ -5832,7 +5903,7 @@ class ShadowBridgeApp:
                     if tool_id in self._tool_install_procs:
                         continue
                 installed = check_tool_installed(tool_id)
-                color = COLORS["success"] if installed else COLORS["text_dim"]
+                color = COLORS["success"] if installed else COLORS["error"]
                 name = tool_names.get(tool_id, tool_id)
 
                 def update_ui(c=canvas, col=color, t=tool_id, n=name, inst=installed):
@@ -5842,18 +5913,18 @@ class ShadowBridgeApp:
                     if inst:
                         btn.configure(
                             text="Uninstall",
-                            bg=COLORS["accent"],
+                            bg=COLORS["error"],
                             fg="white",
-                            command=lambda tid=t, nm=n: self.uninstall_tool(tid, nm)
+                            command=lambda tid=t, nm=n: self.uninstall_tool(tid, nm),
                         )
                     else:
                         btn.configure(
                             text="Install",
-                            bg=COLORS["bg_elevated"],
-                            fg=COLORS["text"],
+                            bg=COLORS["success"],
+                            fg="white",
                             command=lambda tid=t, nm=n: self.install_tool(
                                 tid, nm, self._tool_specs.get(tid, {})
-                            )
+                            ),
                         )
 
                 self.root.after(0, update_ui)
@@ -5867,7 +5938,7 @@ class ShadowBridgeApp:
                         text=f"{ts_ip}",
                         state="disabled",
                         bg=COLORS["bg_card"],
-                        disabledforeground="white"
+                        disabledforeground="white",
                     )
                     self._update_tool_dot(self.tailscale_status, COLORS["success"])
 
@@ -5913,9 +5984,7 @@ class ShadowBridgeApp:
 
         # 2. Public IP (Direct internet access via UPnP)
         if public_ip:
-            hosts_to_try.append(
-                {"host": public_ip, "type": "public", "stable": True}
-            )
+            hosts_to_try.append({"host": public_ip, "type": "public", "stable": True})
 
         # 3. Hostname.local (stable on local network even if IP changes)
         if hostname_local:
@@ -6253,11 +6322,12 @@ class ShadowBridgeApp:
 
         try:
             import urllib.request
+
             # Create a request to avoid some bot detection/WAF if present
             req = urllib.request.Request("http://127.0.0.1:6767")
             with urllib.request.urlopen(req, timeout=1) as response:
                 pass
-            
+
             # Server is running
             if hasattr(self, "web_status_dot") and self.web_status_dot:
                 self.web_status_dot.itemconfig("dot", fill=COLORS["success"])
@@ -6296,7 +6366,7 @@ class ShadowBridgeApp:
                     self.discovery_server,
                     self.start_broadcast_thread,
                     max_restarts=5,
-                    restart_window=300
+                    restart_window=300,
                 )
         except Exception as e:
             log.error(f"Failed to start discovery server: {e}")
@@ -6310,7 +6380,7 @@ class ShadowBridgeApp:
                 "Network Discovery Failed",
                 f"Could not start network discovery service.\n\n"
                 f"Error: {e}\n\n"
-                f"Check that port {DISCOVERY_PORT} is not in use by another application."
+                f"Check that port {DISCOVERY_PORT} is not in use by another application.",
             )
 
     def start_broadcast_thread(self):
@@ -6652,7 +6722,9 @@ class ShadowBridgeApp:
         """Install Tailscale for stable connections."""
         # Check if already installed
         if get_tailscale_ip():
-            self.connect_button.config(text="[OK] Connected", state="disabled", bg=COLORS["success"])
+            self.connect_button.config(
+                text="[OK] Connected", state="disabled", bg=COLORS["success"]
+            )
             self.tailscale_status.delete("all")
             self.tailscale_status.create_oval(
                 0, 0, 8, 8, fill=COLORS["success"], outline=""
@@ -6742,7 +6814,7 @@ class ShadowBridgeApp:
             "This will remove all Shadow-added keys from your PC's authorized_keys files and clear all pairing data.\n\n"
             "Your Android app will need to re-pair before it can connect again.\n\n"
             "Proceed?",
-            icon="warning"
+            icon="warning",
         ):
             return
 
@@ -6808,6 +6880,9 @@ class ShadowBridgeApp:
             bg=COLORS["bg_dark"],
             fg=COLORS["text"],
             font=("Segoe UI", 10),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         label.pack(pady=20)
 
@@ -6893,6 +6968,9 @@ Or run in PowerShell (Admin):
             justify="left",
             padx=20,
             pady=20,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         ).pack(fill=tk.BOTH, expand=True)
 
     def _save_window_state(self):
@@ -7000,7 +7078,7 @@ Or run in PowerShell (Admin):
         """Force exit of application immediately."""
         self._stop_web_dashboard_monitor()
         self.stop_broadcast()
-        if hasattr(self, 'signaling_service') and self.signaling_service:
+        if hasattr(self, "signaling_service") and self.signaling_service:
             self.signaling_service.stop()
         if self.data_receiver:
             try:
@@ -7239,7 +7317,7 @@ Or run in PowerShell (Admin):
             # Ensure main window is visible so dialog has a parent and user sees it
             if self.root.state() == "withdrawn" or self.root.state() == "iconic":
                 self.show_window()
-            
+
             self.root.lift()
             self.root.focus_force()
 
@@ -7252,7 +7330,7 @@ Or run in PowerShell (Admin):
                 f"This will allow the device to connect via SSH.\n\n"
                 f"Do you want to approve this device?",
                 icon="warning",
-                parent=self.root
+                parent=self.root,
             )
 
             if result:
@@ -7261,20 +7339,24 @@ Or run in PowerShell (Admin):
                     response = self.data_receiver.approve_device(device_id)
                     if response.get("success"):
                         messagebox.showinfo(
-                            "Approved", f"SSH key installed for {device_name}", parent=self.root
+                            "Approved",
+                            f"SSH key installed for {device_name}",
+                            parent=self.root,
                         )
                     else:
                         messagebox.showwarning(
                             "Note",
                             f"Device approved but key installation pending.\n{response.get('message', '')}",
-                            parent=self.root
+                            parent=self.root,
                         )
             else:
                 # User rejected
                 if hasattr(self, "data_receiver") and self.data_receiver:
                     self.data_receiver.reject_device(device_id)
                 messagebox.showinfo(
-                    "Rejected", f"SSH key request from {device_name} was rejected.", parent=self.root
+                    "Rejected",
+                    f"SSH key request from {device_name} was rejected.",
+                    parent=self.root,
                 )
 
         except Exception as e:
@@ -7316,6 +7398,9 @@ Or run in PowerShell (Admin):
                 font=("Segoe UI", 9),
                 justify="center",
                 anchor="center",
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
             ).pack(fill=tk.BOTH, expand=True, pady=20)
             return
 
@@ -7357,11 +7442,19 @@ Or run in PowerShell (Admin):
             padx=8,
             pady=6,
             cursor="hand2" if is_openable else "arrow",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         row.pack(fill=tk.X, pady=2)
 
         info_frame = tk.Frame(
-            row, bg=COLORS["bg_input"], cursor="hand2" if is_openable else "arrow"
+            row,
+            bg=COLORS["bg_input"],
+            cursor="hand2" if is_openable else "arrow",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -7373,6 +7466,9 @@ Or run in PowerShell (Admin):
             font=("Segoe UI", 9, "bold"),
             anchor="w",
             cursor="hand2" if is_openable else "arrow",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         name_label.pack(anchor="w")
 
@@ -7385,6 +7481,9 @@ Or run in PowerShell (Admin):
                 font=("Segoe UI", 8),
                 anchor="w",
                 cursor="hand2" if is_openable else "arrow",
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
             ).pack(anchor="w")
 
         if is_pc_path(path) and path:
@@ -7403,6 +7502,9 @@ Or run in PowerShell (Admin):
             anchor="w",
             wraplength=250,
             cursor="hand2" if is_openable else "arrow",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         path_label.pack(anchor="w")
 
@@ -7686,6 +7788,9 @@ Or run in PowerShell (Admin):
                 font=("Segoe UI", 9),
                 justify="center",
                 anchor="center",
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
             ).pack(fill=tk.BOTH, expand=True, pady=20)
             return
 
@@ -7714,14 +7819,29 @@ Or run in PowerShell (Admin):
         note_port = note.get("_note_content_port")
 
         # Main card container
-        card = tk.Frame(self.notes_container, bg=COLORS["bg_input"], padx=8, pady=6)
+        card = tk.Frame(
+            self.notes_container,
+            bg=COLORS["bg_input"],
+            padx=8,
+            pady=6,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         card.pack(fill=tk.X, pady=2)
         card._is_expanded = False
         card._content_loaded = False
         card._note_content = ""
 
         # Header row (clickable)
-        header = tk.Frame(card, bg=COLORS["bg_input"], cursor="hand2")
+        header = tk.Frame(
+            card,
+            bg=COLORS["bg_input"],
+            cursor="hand2",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         header.pack(fill=tk.X)
 
         # Expand indicator
@@ -7732,10 +7852,19 @@ Or run in PowerShell (Admin):
             fg=COLORS["text_dim"],
             font=("Segoe UI", 8),
             width=2,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         expand_label.pack(side=tk.LEFT)
 
-        info_frame = tk.Frame(header, bg=COLORS["bg_input"])
+        info_frame = tk.Frame(
+            header,
+            bg=COLORS["bg_input"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         title_label = tk.Label(
@@ -7746,6 +7875,9 @@ Or run in PowerShell (Admin):
             font=("Segoe UI", 9, "bold"),
             anchor="w",
             cursor="hand2",
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
         title_label.pack(anchor="w")
 
@@ -7760,10 +7892,21 @@ Or run in PowerShell (Admin):
                 fg=COLORS["text_dim"],
                 font=("Segoe UI", 8),
                 anchor="w",
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
             ).pack(anchor="w")
 
         # Content frame (initially hidden)
-        content_frame = tk.Frame(card, bg=COLORS["bg_card"], padx=8, pady=8)
+        content_frame = tk.Frame(
+            card,
+            bg=COLORS["bg_card"],
+            padx=8,
+            pady=8,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
 
         # Loading label
         loading_label = tk.Label(
@@ -7772,10 +7915,19 @@ Or run in PowerShell (Admin):
             bg=COLORS["bg_card"],
             fg=COLORS["text_dim"],
             font=("Segoe UI", 9, "italic"),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
         )
 
         # Button bar for copy action (stored on card for access in _display_note_content)
-        button_bar = tk.Frame(content_frame, bg=COLORS["bg_card"])
+        button_bar = tk.Frame(
+            content_frame,
+            bg=COLORS["bg_card"],
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+        )
         card._button_bar = button_bar
 
         def copy_note_content():
@@ -8102,9 +8254,10 @@ Or run in PowerShell (Admin):
                 note_title = response.get("title", title)
 
                 # Write to temp file and open
+                illegal_chars = '<>:"/\\|?*' if IS_WINDOWS else "/"
                 safe_title = "".join(
-                    c for c in note_title if c.isalnum() or c in " -_"
-                ).strip()[:50]
+                    c for c in note_title if c not in illegal_chars
+                ).strip()[:100]
                 temp_dir = os.path.join(tempfile.gettempdir(), "shadowai_notes")
                 os.makedirs(temp_dir, exist_ok=True)
                 temp_path = os.path.join(temp_dir, f"{safe_title}_{note_id[:8]}.txt")
@@ -8268,20 +8421,34 @@ def run_web_dashboard_server(open_browser: bool):
 
         def headless_key_approval(device_id, device_name, ip):
             """Auto-approve SSH keys in headless mode (web-server only)."""
-            log.warning(f"HEADLESS MODE: Auto-approving SSH key for {device_name} ({device_id}) from {ip}")
-            log.warning("[WARN] Running in --web-server mode without GUI, auto-approving all SSH key requests")
-            log.warning("[WARN] For manual approval, run ShadowBridge.exe without --web-server flag")
+            log.warning(
+                f"HEADLESS MODE: Auto-approving SSH key for {device_name} ({device_id}) from {ip}"
+            )
+            log.warning(
+                "[WARN] Running in --web-server mode without GUI, auto-approving all SSH key requests"
+            )
+            log.warning(
+                "[WARN] For manual approval, run ShadowBridge.exe without --web-server flag"
+            )
             # Auto-approve the device
             if data_receiver_ref[0]:
                 result = data_receiver_ref[0].approve_device(device_id)
                 log.info(f"Auto-approval result: {result}")
 
         data_receiver = DataReceiver(
-            on_data_received=lambda device_id, projects: log.info(f"Projects received from {device_id}"),
-            on_device_connected=lambda device_id, ip: log.info(f"Device connected: {device_id} from {ip}"),
-            on_notes_received=lambda device_id, notes: log.info(f"Notes received from {device_id}"),
-            on_sessions_received=lambda device_id, sessions: log.info(f"Sessions received from {device_id}"),
-            on_key_approval_needed=headless_key_approval
+            on_data_received=lambda device_id, projects: log.info(
+                f"Projects received from {device_id}"
+            ),
+            on_device_connected=lambda device_id, ip: log.info(
+                f"Device connected: {device_id} from {ip}"
+            ),
+            on_notes_received=lambda device_id, notes: log.info(
+                f"Notes received from {device_id}"
+            ),
+            on_sessions_received=lambda device_id, sessions: log.info(
+                f"Sessions received from {device_id}"
+            ),
+            on_key_approval_needed=headless_key_approval,
         )
         data_receiver_ref[0] = data_receiver  # Store reference for callback
         data_receiver.start()
@@ -8300,6 +8467,7 @@ def run_web_dashboard_server(open_browser: bool):
         # Get dynamic encryption salt
         try:
             from web.services.data_service import DYNAMIC_SALT
+
             salt_b64 = base64.b64encode(DYNAMIC_SALT).decode("ascii")
         except Exception:
             salt_b64 = None
@@ -8307,7 +8475,9 @@ def run_web_dashboard_server(open_browser: bool):
         # Build hosts list
         hosts_to_try = []
         if tailscale_ip:
-            hosts_to_try.append({"host": tailscale_ip, "type": "tailscale", "stable": True})
+            hosts_to_try.append(
+                {"host": tailscale_ip, "type": "tailscale", "stable": True}
+            )
         if local_ip:
             hosts_to_try.append({"host": local_ip, "type": "local", "stable": False})
 
@@ -8532,11 +8702,14 @@ def run_audio_command():
             )
 
         elif args.command == "setup":
-            from web.services.audio_service import start_audio_setup, get_audio_setup_status
+            from web.services.audio_service import (
+                start_audio_setup,
+                get_audio_setup_status,
+            )
 
             print("Starting audio setup (PyTorch + AudioCraft)...")
             start_audio_setup()
-            
+
             # Wait for completion in CLI mode
             last_msg = ""
             while True:
@@ -8545,11 +8718,11 @@ def run_audio_command():
                 if msg != last_msg:
                     print(f"[{status.get('stage', 'running')}] {msg}")
                     last_msg = msg
-                
+
                 if status.get("status") in ["ready", "error"]:
                     break
                 time.sleep(1)
-            
+
             print_json(status)
 
         elif args.command == "list-models":
