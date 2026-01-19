@@ -262,6 +262,7 @@ body {
     position: fixed;
     height: 100vh;
     z-index: 100;
+    overflow-y: auto;
 }
 
 .logo {
@@ -457,7 +458,7 @@ body {
 .connection-health-text {
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 260px;
+    max-width: 320px;
 }
 
 .status-text-wrapper {
@@ -536,7 +537,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 160px;
+    max-width: 220px;
 }
 
 .device-switcher-status {
@@ -643,7 +644,7 @@ body {
  }
 
 .top-bar {
-    padding: var(--spacing-lg) var(--spacing-xl);
+    padding: var(--spacing-md) var(--spacing-xl);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -654,6 +655,9 @@ body {
     position: sticky;
     top: 0;
     z-index: 50;
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: var(--spacing-md);
 }
 
 .page-title {
@@ -976,9 +980,12 @@ body {
      font-weight: 600;
      color: var(--md-sys-color-on-surface);
      margin-bottom: var(--spacing-sm);
+     display: -webkit-box;
+     -webkit-line-clamp: 3;
+     -webkit-box-orient: vertical;
      overflow: hidden;
      text-overflow: ellipsis;
-     white-space: nowrap;
+     line-height: 1.3;
 }
 
 .mini-meta {
@@ -991,11 +998,9 @@ body {
 }
 
 .mini-meta span {
-     overflow: hidden;
-     text-overflow: ellipsis;
-     white-space: nowrap;
+     overflow-wrap: break-word;
+     white-space: normal;
 }
-
 .session-status {
      font-weight: 500;
 }
@@ -1043,9 +1048,12 @@ body {
      font-weight: 600;
      color: var(--md-sys-color-on-surface);
      margin-bottom: var(--spacing-sm);
+     display: -webkit-box;
+     -webkit-line-clamp: 3;
+     -webkit-box-orient: vertical;
      overflow: hidden;
      text-overflow: ellipsis;
-     white-space: nowrap;
+     line-height: 1.3;
 }
 
 .mini-meta {
@@ -1058,11 +1066,9 @@ body {
 }
 
 .mini-meta span {
-     overflow: hidden;
-     text-overflow: ellipsis;
-     white-space: nowrap;
+     overflow-wrap: break-word;
+     white-space: normal;
 }
-
 .session-status {
      font-weight: 500;
 }
@@ -1118,18 +1124,14 @@ body {
     font-weight: 600;
     font-size: 16px;
     margin-bottom: var(--spacing-sm);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-wrap: break-word;
 }
-
 .project-path {
     font-size: 12px;
     color: var(--md-sys-color-on-surface-variant);
     margin-bottom: var(--spacing-md);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-wrap: break-word;
+    word-break: break-all;
     font-family: var(--font-mono);
     padding: var(--spacing-sm) var(--spacing-md);
     background: var(--glass-bg-elevated);
@@ -1413,9 +1415,8 @@ body {
      backdrop-filter: var(--elevation-2);
      border: 1px solid var(--glass-border);
      border-radius: var(--radius-xl);
-     overflow: hidden;
-     overflow-x: auto; /* Allow table scroll if needed */
-     display: block; /* Enable overflow scrolling */
+     overflow-x: auto;
+     display: table; 
  }
 
 .data-table th,
@@ -1423,8 +1424,7 @@ body {
      padding: var(--spacing-md) var(--spacing-lg);
      text-align: left;
      border-bottom: 1px solid var(--glass-border);
-     overflow: hidden;
-     max-width: 0; /* Fix for table overflow */
+     max-width: none; 
  }
 
 .data-table th {
@@ -1445,7 +1445,7 @@ body {
 }
 
 .path-cell {
-    max-width: 300px;
+    max-width: 400px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1924,7 +1924,7 @@ body {
     border-radius: var(--radius-xl);
     width: 90%;
     max-width: 700px;
-    max-height: 80vh;
+    max-height: 90vh;
     display: flex;
     flex-direction: column;
     animation: slideUp var(--transition-normal);
@@ -2513,7 +2513,7 @@ body {
 
 .note-content-inner {
     padding: var(--spacing-md);
-    max-height: 400px;
+    max-height: 600px;
     overflow-y: auto;
 }
 
@@ -2615,7 +2615,7 @@ body {
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    max-height: 400px;
+    max-height: 500px;
     overflow-y: auto;
     z-index: 1000;
 }
@@ -3334,7 +3334,7 @@ body {
     padding: var(--spacing-md);
     border-radius: var(--radius-md);
     overflow-x: auto;
-    max-height: 200px;
+    max-height: 400px;
 }
 
 /* Trace Card */

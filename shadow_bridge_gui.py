@@ -67,10 +67,19 @@ try:
 except ImportError:
     SYNC_SERVICE_AVAILABLE = False
 
+# Import SingleInstance for robust multi-method instance locking
+try:
+    from shadow_bridge.utils.singleton import SingleInstance
+    HAS_SINGLETON = True
+except ImportError:
+    HAS_SINGLETON = False
+
 # Check for command modes
 IMAGE_MODE = len(sys.argv) > 1 and sys.argv[1] == "image"
 VIDEO_MODE = len(sys.argv) > 1 and sys.argv[1] == "video"
 AUDIO_MODE = len(sys.argv) > 1 and sys.argv[1] == "audio"
+ASSEMBLY_MODE = len(sys.argv) > 1 and sys.argv[1] == "assembly"
+BROWSER_MODE = len(sys.argv) > 1 and sys.argv[1] == "browser"
 WEB_SERVER_MODE = "--web-server" in sys.argv
 DEBUG_BUILD = "--debug" in sys.argv
 
@@ -140,6 +149,11 @@ def run_image_command():
     gen_parser.add_argument(
         "--negative", type=str, default=None, help="Negative prompt"
     )
+    gen_parser.add_argument("--style", help="Style preset name")
+    gen_parser.add_argument("--lora", help="Path or Repo ID for LoRA")
+    gen_parser.add_argument("--lora_scale", type=float, default=0.8, help="LoRA scale")
+    gen_parser.add_argument("--hires_fix", action="store_true", help="Enable Hires Fix")
+    gen_parser.add_argument("--upscale", type=float, default=1.5, help="Hires Fix upscale factor")
 
     # Image-to-Image command
     i2i_parser = subparsers.add_parser(
@@ -154,6 +168,7 @@ def run_image_command():
     i2i_parser.add_argument("--steps", type=int, default=4, help="Inference steps")
     i2i_parser.add_argument("--width", type=int, default=1024, help="Width")
     i2i_parser.add_argument("--height", type=int, default=1024, help="Height")
+    i2i_parser.add_argument("--seed", type=int, help="Seed")
     i2i_parser.add_argument("--stdin", action="store_true", help="Read JSON from stdin")
 
     # Inpaint command
@@ -179,6 +194,9 @@ def run_image_command():
     # Setup command
     setup_parser = subparsers.add_parser("setup", help="Ensure model is ready")
     setup_parser.add_argument("--model", default="sd-xl-turbo", help="Model to prepare")
+
+    # Unload command
+    subparsers.add_parser("unload", help="Unload models and free VRAM")
 
     args = parser.parse_args(argv)
 
@@ -215,6 +233,14 @@ def run_image_command():
             from web.services.image_service import get_image_generation_service
 
             service = get_image_generation_service()
+            # Define progress callback
+            def progress_callback(percent, message):
+                print_json({
+                    "type": "progress",
+                    "percent": percent,
+                    "message": message
+                })
+
             result = service.generate_image(
                 prompt=prompt,
                 negative_prompt=args.negative,
@@ -225,6 +251,12 @@ def run_image_command():
                 guidance_scale=guidance,
                 seed=args.seed,
                 source="cli",
+                progress_callback=progress_callback,
+                style=args.style,
+                lora_path=args.lora,
+                lora_scale=args.lora_scale,
+                hires_fix=args.hires_fix,
+                upscale_factor=args.upscale,
             )
             print_json(result)
 
@@ -371,9 +403,191 @@ def run_image_command():
             except Exception as e:
                 print_json({"success": False, "error": str(e)})
 
+        elif args.command == "unload":
+            from web.services.image_service import get_image_generation_service
+            service = get_image_generation_service()
+            print_json(service.unload_all_models())
+
+        elif args.command == "list-styles":
+            from web.services.image_service import get_image_generation_service
+            service = get_image_generation_service()
+            styles = service.get_styles()
+            print_json({"success": True, "styles": styles})
+
     except Exception as e:
         print_json({"success": False, "error": str(e)})
         sys.exit(1)
+
+
+def run_audio_command():
+    """Handle audio generation commands via CLI.
+
+    Usage:
+        ShadowBridge.exe audio generate "Epic orchestral music"
+        ShadowBridge.exe audio generate --prompt_b64 <base64>
+        ShadowBridge.exe audio status
+        ShadowBridge.exe audio setup
+    """
+    import argparse
+
+    def print_json(data):
+        """Print JSON with strict markers to avoid parsing issues."""
+        print("<<<AUDIO_JSON_START>>>")
+        print(json.dumps(data))
+        print("<<<AUDIO_JSON_END>>>")
+
+    # Remove "audio" from argv for argparse
+    argv = sys.argv[2:]  # Skip program name and "audio"
+
+    parser = argparse.ArgumentParser(
+        description="Generate audio using local audiocraft models"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Generate command
+    gen_parser = subparsers.add_parser("generate", help="Generate audio")
+    gen_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Text prompt for audio generation",
+    )
+    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
+    gen_parser.add_argument(
+        "--mode",
+        default="music",
+        choices=["music", "sfx"],
+        help="Generation mode (default: music)",
+    )
+    gen_parser.add_argument(
+        "--model",
+        default="musicgen-small",
+        help="Model ID (e.g. musicgen-small, audiogen-medium)",
+    )
+    gen_parser.add_argument(
+        "--duration",
+        type=int,
+        default=10,
+        help="Duration in seconds (default: 10)",
+    )
+    gen_parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Creativity temperature (default: 1.0)",
+    )
+    gen_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for reproducibility",
+    )
+
+    gen_parser.add_argument(
+        "--top_k",
+        type=int,
+        default=250,
+        help="Top-k sampling (default: 250)",
+    )
+    gen_parser.add_argument(
+        "--top_p",
+        type=float,
+        default=0.0,
+        help="Top-p sampling (default: 0.0)",
+    )
+
+    # Status command
+    subparsers.add_parser("status", help="Check audio service status")
+
+    # Setup command
+    subparsers.add_parser("setup", help="Install audio dependencies")
+
+    # Unload command
+    subparsers.add_parser("unload", help="Unload models and free VRAM")
+
+    args = parser.parse_args(argv)
+
+    if args.command is None:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        if args.command == "generate":
+            # Import and initialize service
+            from web.services.audio_service import get_audio_generation_service
+            
+            # Handle prompt
+            prompt = args.prompt
+            if args.prompt_b64:
+                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
+                
+            service = get_audio_generation_service()
+            
+            # Generate output filename
+            prompt_slug = "".join(c for c in prompt[:20] if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+            timestamp = int(time.time())
+            output_name = f"audio_{timestamp}_{prompt_slug}"
+            
+            # Define progress callback
+            def progress_callback(percent, message):
+                print_json({
+                    "type": "progress",
+                    "percent": percent,
+                    "message": message
+                })
+
+            result = service.generate_audio(
+                prompt=prompt,
+                duration_seconds=args.duration,
+                model_id=args.model,
+                mode=args.mode,
+                output_name=output_name,
+                seed=args.seed,
+                temperature=args.temperature,
+                top_k=args.top_k,
+                top_p=args.top_p,
+                progress_callback=progress_callback
+            )
+            
+
+            
+            # Read the file and return as base64 (important for remote SSH)
+            if result.success and result.audio_path and os.path.exists(result.audio_path):
+                # Only read if < 10MB to avoid blowing up stdout? 
+                # Wav files can be large. But for <30s it's fine (~5MB).
+                try:
+                    with open(result.audio_path, "rb") as f:
+                        audio_bytes = f.read()
+                        audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                    
+                    resp = result.to_dict()
+                    resp["audio_b64"] = audio_b64
+                    print_json(resp)
+                except Exception as e:
+                     # Fallback to just path if read fails
+                    resp = result.to_dict()
+                    resp["error"] = f"{resp.get('error', '')} (Failed to read audio file: {e})"
+                    print_json(resp)
+            else:
+                print_json(result.to_dict())
+
+        elif args.command == "status":
+            from web.services.audio_service import get_audio_service_status, get_audio_setup_status
+            print_json({"service": get_audio_service_status(), "setup": get_audio_setup_status()})
+
+        elif args.command == "setup":
+            from web.services.audio_service import start_audio_setup
+            print_json(start_audio_setup())
+            
+        elif args.command == "unload":
+            from web.services.audio_service import get_audio_generation_service
+            service = get_audio_generation_service()
+            print_json(service.unload_all_models())
+
+    except Exception as e:
+        print_json({"success": False, "error": str(e)})
+        sys.exit(1)
+
+
 
 
 def run_video_command():
@@ -458,7 +672,10 @@ def run_video_command():
     # List models command
     subparsers.add_parser("list-models", help="List available video models")
 
-    args = parser.parse_args(argv)
+    # Unload command
+    subparsers.add_parser("unload", help="Unload models and free VRAM")
+
+
 
     if not args.command:
         parser.print_help()
@@ -550,16 +767,10 @@ def run_video_command():
                 "seed": args.seed,
             }
 
-            # Generate video
-            import asyncio
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
+            # Generate video (Synchronous call)
             try:
-                result = loop.run_until_complete(
-                    generate_video_local(options, progress_callback)
-                )
+                result = generate_video_local(options, progress_callback)
+                
                 generations = _load_generations()
                 if generations and "generations" in generations:
                     for gen in generations["generations"]:
@@ -580,8 +791,9 @@ def run_video_command():
                             break
                     _save_generations(generations)
                 print_json(result)
-            finally:
-                loop.close()
+            except Exception as e:
+                print_json({"success": False, "error": str(e)})
+                sys.exit(1)
 
         elif args.command == "install":
             from web.routes.video import install_model, MODELS
@@ -614,6 +826,10 @@ def run_video_command():
                 print_json(result)
             finally:
                 loop.close()
+
+        elif args.command == "unload":
+            from web.routes.video import unload_all_models
+            print_json(unload_all_models())
 
         elif args.command == "status":
             from web.routes.video import MODELS, is_model_installed, _load_generations
@@ -669,6 +885,135 @@ def run_video_command():
         sys.exit(1)
 
 
+def run_assembly_command():
+    """Handle media assembly commands via CLI.
+
+    Usage:
+        ShadowBridge.exe assembly run '{"steps": [...]}'
+        ShadowBridge.exe assembly status
+    """
+    import argparse
+
+    def print_json(data):
+        """Print JSON with strict markers to avoid parsing issues."""
+        print("<<<ASSEMBLY_JSON_START>>>")
+        print(json.dumps(data))
+        print("<<<ASSEMBLY_JSON_END>>>")
+
+    # Remove "assembly" from argv for argparse
+    argv = sys.argv[2:]
+
+    parser = argparse.ArgumentParser(
+        description="Assemble media assets into movies/games"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Run command
+    run_parser = subparsers.add_parser("run", help="Run an assembly plan")
+    run_parser.add_argument(
+        "plan",
+        help="JSON assembly plan or path to JSON file",
+    )
+
+    # Status command
+    subparsers.add_parser("status", help="Check assembly service status")
+
+    args = parser.parse_args(argv)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        from web.services.media_assembler import get_media_assembler
+
+        service = get_media_assembler()
+
+        if args.command == "run":
+            plan = args.plan
+            # If it's a file path, load it
+            if os.path.exists(plan):
+                with open(plan, "r", encoding="utf-8") as f:
+                    plan = f.read()
+
+            result = service.run_assembly_plan(plan)
+            print_json(result)
+
+        elif args.command == "status":
+            print_json({"status": "ready", "capabilities": ["image_to_video", "concat", "audio_overlay"]})
+
+    except Exception as e:
+        print_json({"success": False, "error": str(e)})
+        sys.exit(1)
+
+
+def run_browser_command():
+    """Handle browser automation commands via CLI.
+
+    Usage:
+        ShadowBridge.exe browser search "latest spacex news"
+        ShadowBridge.exe browser summarize --url "https://google.com"
+        ShadowBridge.exe browser setup
+    """
+    import argparse
+    import asyncio
+    from browser_automation import get_browser_service
+
+    def print_json(data):
+        """Print JSON with strict markers to avoid parsing issues."""
+        print("<<<BROWSER_JSON_START>>>")
+        print(json.dumps(data))
+        print("<<<BROWSER_JSON_END>>>")
+
+    # Ensure script directory is in path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
+    # Remove "browser" from argv
+    argv = sys.argv[2:]
+
+    parser = argparse.ArgumentParser(description="Browser automation CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Search command
+    search_parser = subparsers.add_parser("search", help="Search and summarize")
+    search_parser.add_argument("query", help="Search query")
+
+    # Summarize command
+    sum_parser = subparsers.add_parser("summarize", help="Summarize page")
+    sum_parser.add_argument("--url", required=True, help="URL to summarize")
+
+    # Setup command
+    subparsers.add_parser("setup", help="Install browser environment")
+
+    args = parser.parse_args(argv)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    service = get_browser_service()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        if args.command == "setup":
+            print("Setting up browser environment...")
+            result = loop.run_until_complete(service.setup())
+            print_json(result)
+        elif args.command == "search":
+            result = loop.run_until_complete(service.search_and_summarize(args.query))
+            print_json(result)
+        elif args.command == "summarize":
+            result = loop.run_until_complete(service.get_page_content(args.url))
+            print_json(result)
+    except Exception as e:
+        print_json({"success": False, "error": str(e)})
+    finally:
+        loop.close()
+
+
 def is_admin():
     """Check if running with administrator privileges."""
     if platform.system() != "Windows":
@@ -713,7 +1058,7 @@ def run_as_admin():
 
 
 # Auto-elevate on Windows if not already admin
-if platform.system() == "Windows" and not is_admin() and not WEB_SERVER_MODE:
+if platform.system() == "Windows" and not is_admin() and not WEB_SERVER_MODE and not (IMAGE_MODE or VIDEO_MODE or AUDIO_MODE or ASSEMBLY_MODE or BROWSER_MODE):
     print("ShadowBridge requires administrator privileges for SSH key installation.")
     print("Requesting elevation...")
     if run_as_admin():
@@ -733,9 +1078,8 @@ if platform.system() == "Windows" and not is_admin() and not WEB_SERVER_MODE:
 
 
 # Setup logging to file
-LOG_DIR = os.path.join(
-    os.environ.get("USERPROFILE", os.path.expanduser("~")), ".shadowai"
-)
+HOME_DIR = os.path.expanduser("~")
+LOG_DIR = os.path.join(HOME_DIR, ".shadowai")
 LOG_FILE = os.path.join(LOG_DIR, "shadowbridge.log")
 WEB_LOG_FILE = os.path.join(LOG_DIR, "shadowbridge_web.log")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -764,28 +1108,21 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.056"
+APP_VERSION = "1.061"
 # Windows Registry path for autostart
-_app_instance = None
-PROJECTS_FILE = os.path.join(
-    os.environ.get("USERPROFILE", os.path.expanduser("~")), ".shadowai", "projects.json"
-)
-NOTES_FILE = os.path.join(
-    os.environ.get("USERPROFILE", os.path.expanduser("~")), ".shadowai", "notes.json"
-)
-WINDOW_STATE_FILE = os.path.join(
-    os.environ.get("USERPROFILE", os.path.expanduser("~")),
-    ".shadowai",
-    "window_state.json",
-)
-SETTINGS_FILE = os.path.join(
-    os.environ.get("USERPROFILE", os.path.expanduser("~")), ".shadowai", "settings.json"
-)
-INSTALL_PATH_FILE = os.path.join(
-    os.environ.get("APPDATA", os.path.expanduser("~")),
-    "ShadowBridge",
-    "install_path.txt",
-)
+PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
+NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
+WINDOW_STATE_FILE = os.path.join(HOME_DIR, ".shadowai", "window_state.json")
+SETTINGS_FILE = os.path.join(HOME_DIR, ".shadowai", "settings.json")
+
+if IS_WINDOWS:
+    INSTALL_PATH_FILE = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~")),
+        "ShadowBridge",
+        "install_path.txt",
+    )
+else:
+    INSTALL_PATH_FILE = os.path.join(HOME_DIR, ".shadowai", "install_path.txt")
 
 
 def register_install_path():
@@ -1073,7 +1410,7 @@ def get_local_ip():
 
         threading.Thread(target=detect, daemon=True).start()
 
-    return _cached_local_ip if _cached_local_ip else "Detecting..."
+    return _cached_local_ip
 
 
 _cached_local_ip = None
@@ -2185,27 +2522,35 @@ class DataReceiver(threading.Thread):
 
         found_files = []
         for pattern in file_patterns:
-            matches = re.findall(pattern, content, re.IGNORE_VALUE | re.IGNORE_CASE)
+            matches = re.findall(pattern, content, re.IGNORECASE)
             found_files.extend(matches)
 
-        for file_path in set(found_files):
-            log.info(f"Detected file creation: {file_path}")
+        found_files = list(set(found_files))
+        if not found_files:
+            return
 
-            # Send notification message
-            notif_msg = {
-                "type": "notification",
-                "id": f"notif_{int(time.time() * 1000)}_{file_path.replace('.', '_')}",
-                "sessionId": sessionId,
-                "timestamp": int(time.time() * 1000),
-                "payload": {
-                    "message": f"New file ready: {file_path}",
-                    "notificationType": "file_ready",
-                    "summary": "File Created",
-                    "fileUrl": f"file://{file_path}",  # Placeholder for actual access
-                    "hostname": socket.gethostname(),
-                },
-            }
-            self._relay_to_all_devices(notif_msg)
+        # Simple file list for the notification message
+        file_list_str = ", ".join(found_files)
+        if len(found_files) > 3:
+            file_list_str = f"{len(found_files)} files (including {found_files[0]})"
+
+        # Send aggregated notification message
+        notif_msg = {
+            "type": "notification",
+            "id": f"notif_{int(time.time() * 1000)}",
+            "sessionId": sessionId,
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "message": f"Assets ready: {file_list_str}",
+                "notificationType": "file_ready",
+                "summary": "Project Assets Generated",
+                "files": found_files,
+                "deepLink": f"shadow://project/{sessionId}" if sessionId else "shadow://projects",
+                "hostname": socket.gethostname(),
+            },
+        }
+        self._relay_to_all_devices(notif_msg)
+        log.info(f"Sent aggregated notification for {len(found_files)} files")
 
     def _relay_to_all_devices(self, message):
         """Relay a message to all connected Android devices."""
@@ -2447,7 +2792,7 @@ class DataReceiver(threading.Thread):
                         log.debug(
                             f"[RAW_DATA] From {addr}: First 500 bytes (text): {decoded_preview}"
                         )
-                    except:
+                    except (ValueError, UnicodeDecodeError):
                         log.debug(
                             f"[RAW_DATA] From {addr}: Could not decode preview as UTF-8"
                         )
@@ -4690,10 +5035,11 @@ class ShadowBridgeApp:
 
         # Fixed compact size for quick connect utility
         self.window_width = int(375 * scale)
-        self.window_height = int(820 * scale)
+        self.window_height = int(715 * scale)  # 10% taller than 650
 
-        # Set minimum size
+        # Set minimum size and enable resizing
         self.root.minsize(320, 600)
+        self.root.resizable(True, True)
 
         # State - auto-detect SSH port
         detected_port = find_ssh_port()
@@ -4776,9 +5122,11 @@ class ShadowBridgeApp:
             log.critical(f"✗ FATAL: Failed to create widgets: {e}", exc_info=True)
             raise
 
-        # Force geometry AFTER widgets are created (no saved state - always bottom-right)
+        # Set window size and position (load saved state or default to bottom right)
         self.root.update_idletasks()
-        self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+        if not self._load_window_state():
+            # Fallback if loading fails
+            self.root.geometry(f"{self.window_width}x{self.window_height}")
         self.root.after(100, lambda: apply_windows_11_theme(self.root))
 
         # Start data receiver for project sync
@@ -4973,7 +5321,7 @@ class ShadowBridgeApp:
             self.scrollbar = ttk.Scrollbar(
                 self.root, orient="vertical", command=self.canvas.yview
             )
-            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            # self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)  # Hidden - scrollbar disabled
             self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
             self.canvas.configure(yscrollcommand=self.scrollbar.set)
@@ -5163,6 +5511,7 @@ class ShadowBridgeApp:
             highlightthickness=0,
         )
         self.qr_label.pack(pady=(0, 15))
+        self._last_qr_data = None
 
         # Connection info
         info_row = tk.Frame(
@@ -5269,10 +5618,12 @@ class ShadowBridgeApp:
                     "commands": [
                         "py -m pip install -U aider-chat",
                         "python -m pip install -U aider-chat",
+                        "pip install -U aider-chat",
                     ],
                     "uninstall_commands": [
                         "py -m pip uninstall -y aider-chat",
                         "python -m pip uninstall -y aider-chat",
+                        "pip uninstall -y aider-chat",
                     ],
                     "fallback_url": "https://aider.chat/",
                 },
@@ -5281,14 +5632,20 @@ class ShadowBridgeApp:
                 "Ollama",
                 "ollama",
                 {
-                    "type": "winget",
+                    "type": "winget" if IS_WINDOWS else "brew",
                     "commands": [
                         "winget install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements"
-                    ],
+                    ]
+                    if IS_WINDOWS
+                    else ["brew install ollama"],
                     "uninstall_commands": [
                         "winget uninstall -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements"
-                    ],
-                    "fallback_url": "https://ollama.com/download/windows",
+                    ]
+                    if IS_WINDOWS
+                    else ["brew uninstall ollama"],
+                    "fallback_url": "https://ollama.com/download/windows"
+                    if IS_WINDOWS
+                    else "https://ollama.com/download/mac",
                 },
             ),
         ]
@@ -5381,12 +5738,46 @@ class ShadowBridgeApp:
             )
             tool_name_label.pack(side=tk.LEFT)
 
-            btn = create_modern_button(
+            # Create install button with hover effects
+            btn = tk.Button(
                 row,
-                "Install",
-                lambda s=spec, n=name, t=tool_id: self.install_tool(t, n, s),
+                text="Install",
+                width=12,
+                bg=COLORS["success"],
+                fg="white",
+                font=("Segoe UI", 9, "bold"),
+                relief="flat",
+                bd=0,
+                padx=10,
+                pady=5,
+                cursor="hand2",
+                activebackground="#a5d6a7",
+                activeforeground="white",
+                highlightthickness=0,
+                overrelief="flat",
+                command=lambda s=spec, n=name, t=tool_id: self.install_tool(t, n, s),
             )
             btn.pack(side=tk.RIGHT)
+            
+            def on_enter_tool(e, b=btn):
+                if b.cget("state") != tk.DISABLED:
+                    b.configure(bg=COLORS["accent_hover"])
+            
+            def on_leave_tool(e, b=btn, original_bg=COLORS["success"]):
+                if b.cget("state") != tk.DISABLED:
+                    current_text = b.cget("text")
+                    if current_text == "Install":
+                        b.configure(bg=COLORS["success"])
+                    elif current_text == "Uninstall":
+                        b.configure(bg=COLORS["error"] if "error" in COLORS else "#ff6b6b")
+                    elif current_text == "Stop":
+                        b.configure(bg=COLORS["warning"])
+                    else:
+                        b.configure(bg=original_bg)
+
+            btn.bind("<Enter>", on_enter_tool)
+            btn.bind("<Leave>", on_leave_tool)
+
             self.tool_buttons[tool_id] = btn
 
         # Tailscale row
@@ -5588,7 +5979,7 @@ class ShadowBridgeApp:
         if hasattr(self, "tailscale_status"):
             self.tailscale_status.itemconfig("dot", fill=pulse_color)
 
-        self.root.after(60, self._animate_pulse)
+        self.root.after(150, self._animate_pulse)
 
         self._web_dashboard_monitor_stop_event = threading.Event()
         self._web_dashboard_monitor_thread = None
@@ -5656,10 +6047,12 @@ class ShadowBridgeApp:
 
         # Update IP label if it was detecting
         current_ip = get_local_ip()
-        if hasattr(self, "ip_label") and self.ip_label.cget("text") != current_ip:
-            self.ip_label.configure(text=current_ip)
-            if current_ip != "Detecting...":
-                self.update_qr_code()
+        if hasattr(self, "ip_label"):
+            ip_text = self.ip_label.cget("text")
+            if ip_text != current_ip and current_ip is not None:
+                self.ip_label.configure(text=current_ip)
+            elif current_ip is None and ip_text != "Scanning...":
+                 self.ip_label.configure(text="Scanning...")
 
         # Update SSH label with port info
         if ssh_ok:
@@ -5730,7 +6123,7 @@ class ShadowBridgeApp:
         # Update connected devices display
         self.refresh_connected_devices_ui()
 
-        self.root.after(3000, self.update_status)
+        self.root.after(10000, self.update_status)
 
     def start_data_receiver(self):
         """Start TCP server to receive project and notes data from Android app."""
@@ -5869,6 +6262,7 @@ class ShadowBridgeApp:
                             text="Uninstall",
                             bg=COLORS["error"],
                             fg="white",
+                            activebackground="#f87171",
                             command=lambda tid=t, nm=n: self.uninstall_tool(tid, nm),
                         )
                     else:
@@ -5876,6 +6270,7 @@ class ShadowBridgeApp:
                             text="Install",
                             bg=COLORS["success"],
                             fg="white",
+                            activebackground="#a5d6a7",
                             command=lambda tid=t, nm=n: self.install_tool(
                                 tid, nm, self._tool_specs.get(tid, {})
                             ),
@@ -5906,12 +6301,15 @@ class ShadowBridgeApp:
         canvas.itemconfig("dot", fill=color)
 
     def get_connection_info(self):
-        """Get connection info with ALL fallback options for auto-reconnection."""
-        all_ips = get_all_ips()
+        """Get connection info with simplified fallback options.
+        
+        Only advertises 2 connection options:
+        1. Private LAN IP (most common use case)
+        2. Tailscale IP (for cross-network access)
+        """
         tailscale_ip = get_tailscale_ip()
         local_ip = get_local_ip()
         hostname_local = get_hostname_local()
-        public_ip = self.upnp_manager.get_public_ip()
 
         # Get the dynamic encryption salt for note sync (Phase 5.3 requirement)
         try:
@@ -5921,52 +6319,36 @@ class ShadowBridgeApp:
         except Exception:
             salt_b64 = None
 
-        # Build list of hosts to try (in priority order)
-        # Android app will try these in order until one works
+        # Build simplified list of hosts (max 2 options)
+        # Only show: LAN IP and Tailscale IP (if available)
         hosts_to_try = []
 
-        # 1. Tailscale (most stable - works across networks)
+        # 1. Private LAN IP (most common home/office use)
+        if local_ip and not local_ip.startswith("127."):
+            hosts_to_try.append(
+                {"host": local_ip, "type": "local", "stable": False, "label": "LAN"}
+            )
+
+        # 2. Tailscale IP (works across networks)
         if tailscale_ip:
             hosts_to_try.append(
-                {"host": tailscale_ip, "type": "tailscale", "stable": True}
+                {"host": tailscale_ip, "type": "tailscale", "stable": True, "label": "Tailscale"}
             )
 
-        # 2. Public IP (Direct internet access via UPnP)
-        if public_ip:
-            hosts_to_try.append({"host": public_ip, "type": "public", "stable": True})
-
-        # 3. Hostname.local (stable on local network even if IP changes)
-        if hostname_local:
-            hosts_to_try.append(
-                {"host": hostname_local, "type": "mdns", "stable": True}
-            )
-
-        # 3. All local IPs
-        for ip in all_ips.get("local", []):
-            hosts_to_try.append({"host": ip, "type": "local", "stable": False})
-
-        # 4. VPN IPs
-        for ip in all_ips.get("vpn", []):
-            hosts_to_try.append({"host": ip, "type": "vpn", "stable": False})
-
-        # 5. Other IPs
-        for ip in all_ips.get("other", []):
-            hosts_to_try.append({"host": ip, "type": "other", "stable": False})
-
-        # Primary host (best available)
+        # Primary host (best available - prefer Tailscale for stability)
         primary_host = tailscale_ip or local_ip
         mode = "tailscale" if tailscale_ip else "local"
 
         return {
             "type": "shadowai_connect",
-            "version": 3,  # New version with multi-host support
+            "version": 4,  # Bumped version for simplified host list
             "mode": mode,
             "host": primary_host,  # Primary for QR display
             "port": self.ssh_port,
             "username": get_username(),
             "hostname": socket.gethostname(),
             "hostname_local": hostname_local,
-            "hosts": hosts_to_try,  # All hosts to try in order
+            "hosts": hosts_to_try,  # Simplified: only LAN and Tailscale
             "local_ip": local_ip,
             "tailscale_ip": tailscale_ip,
             "encryption_salt": salt_b64,
@@ -5974,7 +6356,7 @@ class ShadowBridgeApp:
         }
 
     def update_qr_code(self):
-        """Generate and display QR code."""
+        """Generate and display QR code - only if changed."""
         if not HAS_QRCODE or not HAS_PIL:
             self.qr_label.configure(text="QR unavailable")
             return
@@ -5984,6 +6366,11 @@ class ShadowBridgeApp:
             info_json = json.dumps(info)
             encoded = base64.urlsafe_b64encode(info_json.encode()).decode()
             qr_data = f"shadowai://connect?data={encoded}"
+
+            # Check if QR data changed
+            if hasattr(self, "_last_qr_data") and self._last_qr_data == qr_data:
+                return  # No change, skip regeneration
+            self._last_qr_data = qr_data
 
             qr = qrcode.QRCode(
                 version=1,
@@ -6009,7 +6396,7 @@ class ShadowBridgeApp:
 
     def auto_start_broadcast(self):
         """Auto-start broadcasting if SSH is running."""
-        if check_ssh_running(self.ssh_port):
+        if check_ssh_running(self.ssh_port) or platform.system() == "Darwin":
             self.start_broadcast()
 
     def _get_tools_dir(self):
@@ -6691,11 +7078,21 @@ class ShadowBridgeApp:
             try:
                 import urllib.request
                 import tempfile
+                
+                system = platform.system()
+                if system == "Windows":
+                    url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
+                    ext = ".exe"
+                elif system == "Darwin":
+                    url = "https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg"
+                    ext = ".pkg"
+                else:
+                    # Linux users usually install via script
+                    url = "https://tailscale.com/install.sh"
+                    ext = ".sh"
 
-                # Download Tailscale installer
-                url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
                 temp_dir = tempfile.gettempdir()
-                installer_path = os.path.join(temp_dir, "tailscale-setup.exe")
+                installer_path = os.path.join(temp_dir, f"tailscale-setup{ext}")
 
                 self.root.after(
                     0, lambda: self.tailscale_btn.configure(text="Downloading...")
@@ -6710,8 +7107,12 @@ class ShadowBridgeApp:
                 # Run installer (will prompt for admin)
                 if IS_WINDOWS:
                     os.startfile(installer_path)
-                else:
+                elif system == "Darwin":
                     subprocess.run(["open", installer_path])
+                else:
+                    # For Linux, just show the file and instructions
+                    subprocess.run(["xdg-open", temp_dir])
+                    messagebox.showinfo("Tailscale", "Download complete. Please run the install.sh script with sudo.")
 
                 self.root.after(0, lambda: self._tailscale_install_done())
 
@@ -6945,6 +7346,19 @@ Or run in PowerShell (Admin):
     def _load_window_state(self):
         """Load and apply saved window position and size."""
         try:
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+
+            # Get DPI scale factor for padding calculation
+            try:
+                dpi = self.root.winfo_fpixels("1i")
+                scale = dpi / 96.0  # 96 is standard DPI
+            except Exception:
+                scale = 1.0
+
+            # Calculate 12dp padding in pixels (accounting for DPI scaling)
+            padding = int(12 * scale)
+
             if os.path.exists(WINDOW_STATE_FILE):
                 with open(WINDOW_STATE_FILE, "r", encoding="utf-8") as f:
                     state = json.load(f)
@@ -6953,13 +7367,17 @@ Or run in PowerShell (Admin):
                 x = state.get("x", 100)
                 y = state.get("y", 100)
                 # Validate position is on screen
-                screen_w = self.root.winfo_screenwidth()
-                screen_h = self.root.winfo_screenheight()
                 if x < 0 or x > screen_w - 100:
-                    x = 100
+                    x = screen_w - w - padding
                 if y < 0 or y > screen_h - 100:
-                    y = 100
+                    y = screen_h - h - padding
                 self.root.geometry(f"{w}x{h}+{x}+{y}")
+                return True
+            else:
+                # First run: position at bottom right with 12dp padding
+                x = screen_w - self.window_width - padding
+                y = screen_h - self.window_height - padding
+                self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
                 return True
         except Exception as e:
             log.debug(f"Failed to load window state: {e}")
@@ -7093,15 +7511,32 @@ Or run in PowerShell (Admin):
         ]
 
     def refresh_connected_devices_ui(self):
-        """Refresh the connected device label in the header."""
+        """Refresh connected device label in header - only if changed."""
         if not hasattr(self, "connected_device_label"):
             return
 
         active = self._get_active_devices()
 
         if not active:
+            current_text = self.connected_device_label.cget("text")
+            if current_text != "No device":
+                self.connected_device_label.configure(
+                    text="No device", foreground=COLORS["text_dim"]
+                )
+            return
+
+        # Show first connected device name
+        device = active[0]
+        name = device.get("name") or device.get("id") or "Unknown"
+        if len(active) > 1:
+            new_text = f"● {name} +{len(active) - 1}"
+        else:
+            new_text = f"● {name}"
+
+        current_text = self.connected_device_label.cget("text")
+        if current_text != new_text:
             self.connected_device_label.configure(
-                text="No device", foreground=COLORS["text_dim"]
+                text=new_text, foreground=COLORS["success"]
             )
             return
 
@@ -8041,6 +8476,7 @@ Or run in PowerShell (Admin):
             return
 
         def fetch():
+            sock = None
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(3)
@@ -8071,8 +8507,6 @@ Or run in PowerShell (Admin):
                     if not chunk:
                         break
                     response_data += chunk
-
-                sock.close()
 
                 response = json.loads(response_data.decode("utf-8"))
                 if not response.get("success"):
@@ -8111,6 +8545,12 @@ Or run in PowerShell (Admin):
                         content_text, loading_label, f"Error: {str(e)}"
                     ),
                 )
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
 
         threading.Thread(target=fetch, daemon=True).start()
 
@@ -8159,6 +8599,7 @@ Or run in PowerShell (Admin):
             return
 
         def fetch_and_open():
+            sock = None
             try:
                 # Connect to device's NoteContentServer
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -8192,8 +8633,6 @@ Or run in PowerShell (Admin):
                     if not chunk:
                         break
                     response_data += chunk
-
-                sock.close()
 
                 response = json.loads(response_data.decode("utf-8"))
                 if not response.get("success"):
@@ -8248,6 +8687,12 @@ Or run in PowerShell (Admin):
                         "Error", f"Failed to open note:\n{str(e)}"
                     ),
                 )
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
 
         # Run in background thread to avoid blocking UI
         threading.Thread(target=fetch_and_open, daemon=True).start()
@@ -8320,8 +8765,11 @@ def _start_show_listener(lock_socket):
                 if data == "SHOW" and _app_instance:
                     # Schedule window restore on main thread
                     _app_instance.root.after(0, _app_instance.show_window)
-            except Exception:
+            except socket.error:
+                # Socket closed or connection error - expected during shutdown
                 pass
+            except Exception as e:
+                log.debug(f"Show listener error: {e}")
 
     t = threading.Thread(target=listener, daemon=True)
     t.start()
@@ -8691,12 +9139,20 @@ def main():
         run_image_command()
         return
 
+    if BROWSER_MODE:
+        run_browser_command()
+        return
+
     if VIDEO_MODE:
         run_video_command()
         return
 
     if AUDIO_MODE:
         run_audio_command()
+        return
+
+    if ASSEMBLY_MODE:
+        run_assembly_command()
         return
 
     if WEB_SERVER_MODE:
@@ -8706,25 +9162,42 @@ def main():
 
     start_minimized = "--minimized" in sys.argv
 
-    # Check for existing instance
-    lock_socket = check_single_instance()
-    if lock_socket is None:
-        # Another instance is already running
-        if IS_WINDOWS:
-            import ctypes
-
-            # Send SHOW command to existing instance via socket
-            try:
-                show_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                show_sock.settimeout(2)
-                show_sock.connect(("127.0.0.1", 19287))
-                show_sock.sendall(b"SHOW")
-                show_sock.close()
-            except Exception:
-                pass
-        else:
-            print("ShadowBridge is already running.")
-        sys.exit(0)
+    # Check for existing instance using robust SingleInstance class
+    global _single_instance
+    if HAS_SINGLETON:
+        _single_instance = SingleInstance(
+            app_name="ShadowBridge",
+            port=19287,
+            lock_dir=Path.home() / ".shadowai"
+        )
+        
+        # Try to clean up stale locks from crashed instances
+        if _single_instance.is_stale_lock():
+            log.info("Cleaning up stale instance lock...")
+            _single_instance.cleanup_stale_lock()
+        
+        if not _single_instance.acquire():
+            # Another instance is running - send activation and exit
+            log.info("Another instance is running, sending activation signal")
+            _single_instance.send_activate()
+            sys.exit(0)
+    else:
+        # Fallback to old socket-only method
+        lock_socket = check_single_instance()
+        if lock_socket is None:
+            if IS_WINDOWS:
+                try:
+                    show_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    show_sock.settimeout(2)
+                    show_sock.connect(("127.0.0.1", 19287))
+                    show_sock.sendall(b"SHOW")
+                    show_sock.close()
+                except socket.error:
+                    # Connection failed - other instance may have crashed
+                    pass
+            else:
+                print("ShadowBridge is already running.")
+            sys.exit(0)
 
     if not HAS_PIL:
         print("Missing pillow. Install with: pip install pillow")
@@ -8739,6 +9212,17 @@ def main():
     global _app_instance
     _app_instance = app
     log.info("ShadowBridge initialized")
+
+    # Wire activation callback for SingleInstance IPC
+    if HAS_SINGLETON and '_single_instance' in dir():
+        def on_activate():
+            """Called when another instance requests activation."""
+            log.info("Received activation request from another instance")
+            # Schedule on main thread (Tkinter is not thread-safe)
+            app.root.after(0, app.show_window)
+        
+        _single_instance.set_activation_callback(on_activate)
+        log.info("SingleInstance activation callback registered")
 
     if start_minimized and HAS_TRAY:
         app.root.after(500, app.minimize_to_tray)

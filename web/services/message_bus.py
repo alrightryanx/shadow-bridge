@@ -122,13 +122,14 @@ class MessageBus:
         """Load recent messages from disk."""
         try:
             if MESSAGE_LOG_FILE.exists():
-                with open(MESSAGE_LOG_FILE, 'r') as f:
+                with open(MESSAGE_LOG_FILE, 'r', encoding="utf-8") as f:
                     for line in f:
                         try:
                             data = json.loads(line.strip())
                             msg = AgentMessage.from_dict(data)
                             self._message_log.append(msg)
-                        except:
+                        except (json.JSONDecodeError, KeyError, ValueError) as e:
+                            logger.debug(f"Skipping malformed message: {e}")
                             continue
                 logger.info(f"Loaded {len(self._message_log)} messages from log")
         except Exception as e:
@@ -138,7 +139,7 @@ class MessageBus:
         """Persist a message to disk."""
         try:
             MESSAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(MESSAGE_LOG_FILE, 'a') as f:
+            with open(MESSAGE_LOG_FILE, 'a', encoding="utf-8") as f:
                 f.write(json.dumps(message.to_dict()) + '\n')
         except Exception as e:
             logger.error(f"Failed to persist message: {e}")

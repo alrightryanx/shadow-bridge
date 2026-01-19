@@ -60,7 +60,7 @@
     overflow-y: auto;
     padding: var(--spacing-md);
     min-height: 300px;
-    max-height: 700px;
+    max-height: clamp(400px, 60vh, 900px);
 }
 
 .session-messages::-webkit-scrollbar {
@@ -333,7 +333,7 @@
 
 @media (max-width: 1024px) {
     .session-console-grid {
-        grid-template-columns: 280px 1fr;
+        grid-template-columns: 240px 1fr;
     }
 
     .connection-banner {
@@ -630,6 +630,40 @@
     textarea {
         min-height: 44px;
         font-size: 16px; /* Prevents zoom on iOS */
+    }
+}
+
+/* ============ Small Mobile (< 480px) ============ */
+
+@media (max-width: 480px) {
+    .sidebar {
+        width: 0;
+        transform: translateX(-100%);
+        transition: transform var(--transition-normal);
+    }
+
+    .sidebar.open {
+        width: 260px;
+        transform: translateX(0);
+    }
+
+    .main-content {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .session-console-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .top-bar-actions {
+        flex-direction: column;
+        gap: var(--spacing-xs);
+    }
+
+    .connection-banner {
+        font-size: 12px;
+        padding: var(--spacing-xs) var(--spacing-sm);
     }
 }
 

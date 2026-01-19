@@ -238,13 +238,14 @@ class SafetyAudit:
         try:
             if AUDIT_FILE.exists():
                 events = []
-                with open(AUDIT_FILE, 'r') as f:
+                with open(AUDIT_FILE, 'r', encoding="utf-8") as f:
                     for line in f:
                         try:
                             data = json.loads(line.strip())
                             event = SafetyEvent.from_dict(data)
                             events.append(event)
-                        except:
+                        except (json.JSONDecodeError, KeyError, ValueError) as e:
+                            logger.debug(f"Skipping malformed safety event: {e}")
                             continue
 
                 # Keep only recent events
@@ -259,7 +260,7 @@ class SafetyAudit:
         """Load agent risk scores from disk."""
         try:
             if RISK_SCORES_FILE.exists():
-                with open(RISK_SCORES_FILE, 'r') as f:
+                with open(RISK_SCORES_FILE, 'r', encoding="utf-8") as f:
                     data = json.load(f)
 
                 for agent_id, score_data in data.get('scores', {}).items():
@@ -278,7 +279,7 @@ class SafetyAudit:
         """Persist a single event to disk."""
         try:
             AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(AUDIT_FILE, 'a') as f:
+            with open(AUDIT_FILE, 'a', encoding="utf-8") as f:
                 f.write(json.dumps(event.to_dict()) + '\n')
         except Exception as e:
             logger.error(f"Failed to persist safety event: {e}")
@@ -287,7 +288,7 @@ class SafetyAudit:
         """Save risk scores to disk."""
         try:
             RISK_SCORES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(RISK_SCORES_FILE, 'w') as f:
+            with open(RISK_SCORES_FILE, 'w', encoding="utf-8") as f:
                 json.dump({
                     'scores': {
                         k: v.to_dict() for k, v in self._risk_scores.items()

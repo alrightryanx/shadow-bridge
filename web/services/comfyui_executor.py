@@ -52,7 +52,7 @@ class ComfyUIExecutor:
         try:
             response = requests.get(f"{COMFYUI_URL}/system_stats", timeout=5)
             return response.status_code == 200
-        except:
+        except requests.RequestException:
             return False
 
     def start_server(self) -> bool:
@@ -87,13 +87,46 @@ class ComfyUIExecutor:
 
         raise TimeoutError("ComfyUI server failed to start within 30 seconds")
 
+    def stop_server(self) -> bool:
+        """Stop ComfyUI server to free resources."""
+        if not self.is_server_running():
+            return True
+            
+        try:
+            if os.name == 'nt':
+                # Find PID using netstat
+                import subprocess
+                cmd = f"netstat -ano | findstr :{COMFYUI_PORT}"
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                if result.stdout:
+                    for line in result.stdout.strip().split('\n'):
+                        parts = line.split()
+                        if len(parts) >= 5 and "LISTENING" in line:
+                            pid = parts[-1]
+                            subprocess.run(f"taskkill /F /PID {pid}", shell=True)
+                            logger.info(f"Killed ComfyUI server (PID {pid})")
+            else:
+                # Linux/Mac
+                import subprocess
+                cmd = f"lsof -t -i:{COMFYUI_PORT}"
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                if result.stdout:
+                    pid = result.stdout.strip()
+                    subprocess.run(f"kill -9 {pid}", shell=True)
+                    logger.info(f"Killed ComfyUI server (PID {pid})")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to stop ComfyUI server: {e}")
+            return False
+
     def load_workflow(self, workflow_name: str) -> Dict:
         """Load a workflow template from disk."""
         workflow_path = WORKFLOWS_DIR / f"{workflow_name}.json"
         if not workflow_path.exists():
             raise FileNotFoundError(f"Workflow not found: {workflow_name}")
 
-        with open(workflow_path, "r") as f:
+        with open(workflow_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def prepare_workflow(
