@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 import sys
+import sv_ttk
 
 from cx_Freeze import Executable, setup
 
 BASE_DIR = Path(__file__).resolve().parent
-
+SV_TTK_PATH = Path(sv_ttk.__file__).parent
 
 def _read_version() -> str:
     pattern = re.compile(r'APP_VERSION\s*=\s*"([^"]+)"')
@@ -24,6 +25,7 @@ include_files = [
     (str(BASE_DIR / "web" / "static"), "web/static"),
     (str(BASE_DIR / "images"), "images"),
     (str(BASE_DIR / "icon.ico"), "icon.ico"),
+    (str(SV_TTK_PATH / "theme"), "lib/sv_ttk/theme"),
 ]
 
 data_dir = BASE_DIR / "data"
@@ -40,6 +42,11 @@ build_exe_options = {
         "web",
         "web.routes",
         "web.services",
+        "web.utils",
+        "shadow_bridge",
+        "shadow_bridge.utils",
+        "shadow_bridge.web",
+        "installer",
         "cryptography",
         "qrcode",
         "psutil",
@@ -66,7 +73,15 @@ build_exe_options = {
         "matplotlib",
         "pandas",
         "numpy.distutils",
+        # Heavy ML services that have torch imports at module level
+        "web.services.image_service",
+        "web.services.audio_service",
+        "web.services.video_service",
+        "web.services.video_progress",
+        "web.services.video_error_handling",
+        "web.services.comfyui_executor",
     ],
+    "zip_exclude_packages": ["sv_ttk"],
 }
 
 bdist_msi_options = {

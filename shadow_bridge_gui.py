@@ -1108,7 +1108,7 @@ DATA_PORT = 19284  # TCP port for receiving project data from Android app
 NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
 COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
 APP_NAME = "ShadowBridge"
-APP_VERSION = "1.061"
+APP_VERSION = "1.062"
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
@@ -8898,6 +8898,55 @@ def run_web_dashboard_server(open_browser: bool):
         discovery_server.start()
         log.info(f"Discovery server started on port {DISCOVERY_PORT}")
 
+        # Graceful shutdown handler
+        shutdown_initiated = [False]  # Use list to allow mutation in nested function
+
+        def shutdown_handler(signum=None, frame=None):
+            """Gracefully shut down all servers."""
+            if shutdown_initiated[0]:
+                return  # Prevent double-shutdown
+            shutdown_initiated[0] = True
+
+            log.info("Shutting down web dashboard server...")
+
+            # Stop DataReceiver
+            if data_receiver:
+                try:
+                    data_receiver.stop()
+                    log.info("DataReceiver stopped")
+                except Exception as e:
+                    log.debug(f"Error stopping DataReceiver: {e}")
+
+            # Stop DiscoveryServer
+            if discovery_server:
+                try:
+                    discovery_server.stop()
+                    log.info("DiscoveryServer stopped")
+                except Exception as e:
+                    log.debug(f"Error stopping DiscoveryServer: {e}")
+
+            # Close lock socket
+            try:
+                lock_socket.close()
+                log.info("Lock socket closed")
+            except Exception as e:
+                log.debug(f"Error closing lock socket: {e}")
+
+            log.info("Web dashboard shutdown complete")
+
+        # Register signal handlers (Windows supports SIGINT, SIGTERM may not work)
+        import signal
+        import atexit
+
+        signal.signal(signal.SIGINT, shutdown_handler)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, shutdown_handler)
+
+        # Register atexit handler for cleanup
+        atexit.register(shutdown_handler)
+
+        log.info("Graceful shutdown handlers registered")
+
         def open_browser_delayed():
             time.sleep(1.5)
             # Browser should still open to 127.0.0.1 for local user convenience
@@ -9185,18 +9234,33 @@ def main():
         # Fallback to old socket-only method
         lock_socket = check_single_instance()
         if lock_socket is None:
-            if IS_WINDOWS:
+            # Another instance is running - try to activate it with retry
+            activation_sent = False
+            for attempt in range(3):
+                show_sock = None
                 try:
                     show_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     show_sock.settimeout(2)
                     show_sock.connect(("127.0.0.1", 19287))
                     show_sock.sendall(b"SHOW")
-                    show_sock.close()
-                except socket.error:
-                    # Connection failed - other instance may have crashed
-                    pass
-            else:
-                print("ShadowBridge is already running.")
+                    log.info("Sent SHOW message to existing instance")
+                    activation_sent = True
+                    break
+                except socket.error as e:
+                    wait_time = 0.5 * (2 ** attempt)
+                    log.debug(f"SHOW attempt {attempt + 1}/3 failed: {e}, retrying in {wait_time}s")
+                    time.sleep(wait_time)
+                finally:
+                    if show_sock:
+                        try:
+                            show_sock.close()
+                        except Exception:
+                            pass
+
+            if not activation_sent:
+                log.warning("Could not send activation to existing instance")
+                if not IS_WINDOWS:
+                    print("ShadowBridge is already running.")
             sys.exit(0)
 
     if not HAS_PIL:
