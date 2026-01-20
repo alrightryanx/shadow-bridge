@@ -110,12 +110,40 @@ def create_app():
 
     # Register blueprints
     from .routes.api import api_bp
-    from .routes.video import video_bp
-    from .routes.audio import audio_bp
-
     app.register_blueprint(api_bp, url_prefix="/api")
-    app.register_blueprint(video_bp, url_prefix="/video")
-    app.register_blueprint(audio_bp, url_prefix="/audio")
+    
+    # ML-dependent routes are optional (may not be available in frozen builds)
+    try:
+        from .routes.video import video_bp
+        app.register_blueprint(video_bp, url_prefix="/video")
+    except ImportError as e:
+        print(f"Warning: Video routes not available: {e}")
+    
+    try:
+        from .routes.audio import audio_bp
+        app.register_blueprint(audio_bp, url_prefix="/audio")
+    except ImportError as e:
+        print(f"Warning: Audio routes not available: {e}")
+    
+    try:
+        from .routes.ouroboros_telemetry import ouroboros_telemetry_bp
+        app.register_blueprint(ouroboros_telemetry_bp)  # Ouroboros has its own /api/telemetry prefix
+    except ImportError as e:
+        print(f"Warning: Ouroboros telemetry routes not available: {e}")
+
+    # Auth routes for multi-user collaboration
+    try:
+        from .routes.auth import auth_bp
+        app.register_blueprint(auth_bp, url_prefix="/auth")
+    except ImportError as e:
+        print(f"Warning: Auth routes not available: {e}")
+
+    # Collaboration routes for shared sessions
+    try:
+        from .routes.collaboration import collab_bp
+        app.register_blueprint(collab_bp, url_prefix="/collab")
+    except ImportError as e:
+        print(f"Warning: Collaboration routes not available: {e}")
 
     # SECURITY: Add security headers to all responses
     @app.after_request
