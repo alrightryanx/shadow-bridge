@@ -990,6 +990,7 @@ IS_WINDOWS = platform.system() == "Windows"
 
 if IS_WINDOWS:
     import winreg
+    import winsound
 
 # Configuration
 DISCOVERY_PORT = 19283
@@ -1003,7 +1004,7 @@ if ENVIRONMENT == "DEBUG": NOTE_CONTENT_PORT = 19295
 elif ENVIRONMENT == "AIDEV": NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.099"
+APP_VERSION = "1.100"
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
@@ -7747,11 +7748,8 @@ Or run in PowerShell (Admin):
                 if hasattr(self, "data_receiver") and self.data_receiver:
                     response = self.data_receiver.approve_device(device_id)
                     if response.get("success"):
-                        messagebox.showinfo(
-                            "Approved",
-                            f"SSH key installed for {device_name}",
-                            parent=self.root,
-                        )
+                        # Celebration! Play success sound and flash
+                        self._show_success_celebration(device_name)
                     else:
                         messagebox.showwarning(
                             "Note",
@@ -7770,6 +7768,82 @@ Or run in PowerShell (Admin):
 
         except Exception as e:
             log.error(f"Error showing key approval dialog: {e}")
+
+    def _show_success_celebration(self, device_name):
+        """Show an exciting success celebration with sound and visual feedback."""
+        try:
+            # Play success beep (Windows only)
+            if IS_WINDOWS:
+                # Play a cheerful ascending tone sequence
+                def play_success_sound():
+                    try:
+                        winsound.Beep(523, 100)  # C5
+                        winsound.Beep(659, 100)  # E5
+                        winsound.Beep(784, 150)  # G5
+                        winsound.Beep(1047, 200)  # C6 - triumphant finish
+                    except Exception:
+                        pass
+                threading.Thread(target=play_success_sound, daemon=True).start()
+
+            # Create celebration overlay window
+            celebration = tk.Toplevel(self.root)
+            celebration.overrideredirect(True)  # No window decorations
+            celebration.attributes("-topmost", True)
+
+            # Center on main window
+            main_x = self.root.winfo_x()
+            main_y = self.root.winfo_y()
+            main_w = self.root.winfo_width()
+            main_h = self.root.winfo_height()
+
+            cel_w, cel_h = 300, 200
+            cel_x = main_x + (main_w - cel_w) // 2
+            cel_y = main_y + (main_h - cel_h) // 2
+            celebration.geometry(f"{cel_w}x{cel_h}+{cel_x}+{cel_y}")
+
+            # Green success background
+            celebration.configure(bg="#10B981")
+
+            # Big checkmark
+            checkmark_label = tk.Label(
+                celebration,
+                text="✓",
+                font=("Segoe UI", 72, "bold"),
+                fg="white",
+                bg="#10B981"
+            )
+            checkmark_label.pack(expand=True)
+
+            # Device name
+            name_label = tk.Label(
+                celebration,
+                text=f"{device_name} Connected!",
+                font=("Segoe UI", 14, "bold"),
+                fg="white",
+                bg="#10B981"
+            )
+            name_label.pack(pady=(0, 20))
+
+            # Animate: pulse the checkmark size
+            def pulse_animation(step=0):
+                if step < 6:
+                    sizes = [72, 80, 72, 80, 72, 72]
+                    checkmark_label.configure(font=("Segoe UI", sizes[step], "bold"))
+                    celebration.after(100, lambda: pulse_animation(step + 1))
+                else:
+                    # Fade out and close
+                    celebration.after(800, celebration.destroy)
+
+            pulse_animation()
+
+        except Exception as e:
+            log.error(f"Error showing success celebration: {e}")
+            # Fallback to simple messagebox
+            messagebox.showinfo(
+                "✓ Connected!",
+                f"SSH key installed for {device_name}",
+                parent=self.root,
+            )
 
     def refresh_projects_ui(self):
         """Refresh the projects list UI."""
