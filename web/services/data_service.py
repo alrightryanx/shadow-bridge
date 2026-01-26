@@ -15,6 +15,29 @@ from datetime import datetime
 # Import notifier
 from .notifier_service import get_notifier
 
+# Import vector store for auto-indexing (lazy loaded)
+_vector_store = None
+
+def _get_vector_store():
+    """Lazy load vector store module."""
+    global _vector_store
+    if _vector_store is None:
+        try:
+            from . import vector_store
+            _vector_store = vector_store
+        except ImportError:
+            pass
+    return _vector_store
+
+def _auto_index_document(source_type: str, source_id: str, title: str, content: str, metadata: dict = None):
+    """Auto-index a document to vector store if available."""
+    vs = _get_vector_store()
+    if vs and vs.is_available():
+        try:
+            vs.index_document(source_type, source_id, title, content, metadata)
+        except Exception as e:
+            print(f"Vector store indexing failed (non-fatal): {e}")
+
 # SECURITY: Thread lock for file I/O operations to prevent race conditions
 _file_lock = threading.Lock()
 
@@ -333,12 +356,10 @@ def _infer_note_content_port(
     if not device_id:
         return None
     package_name = device_id.split(":")[-1]
-    if package_name.endswith(".release6"):
-        return 19286
-    if "debug" in package_name:
-        return 19287
-    if package_name.endswith(".release"):
-        return 19285
+    if package_name.endswith(".aidev"):
+        return 19305
+    if package_name.endsWith(".debug"):
+        return 19295
     return 19285
 
 
@@ -1145,6 +1166,15 @@ def save_note_content(note_id: str, title: str, content: str, updated_at: int) -
         try:
             with open(NOTES_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+
+            # Auto-index updated note to vector store
+            _auto_index_document(
+                source_type="note",
+                source_id=note_id,
+                title=title,
+                content=content
+            )
+
             return True
         except Exception as e:
             print(f"Error saving note content: {e}")
@@ -1615,7 +1645,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.062",
+        "version": "1.099",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,
@@ -2873,6 +2903,16 @@ def create_note(data: Dict, device_id: str = "web") -> Dict:
 
     file_data["devices"][device_id]["notes"].append(note)
     _write_json_file(NOTES_FILE, file_data)
+
+    # Auto-index to vector store for semantic search
+    _auto_index_document(
+        source_type="note",
+        source_id=note["id"],
+        title=note["title"],
+        content=note.get("content", ""),
+        metadata={"priority": note.get("priority", "NORMAL"), "category": note.get("category", "")}
+    )
+
     return {"success": True, "note": note}
 
 
@@ -2922,6 +2962,16 @@ def create_automation(data: Dict, device_id: str = "web") -> Dict:
 
     file_data[device_id]["automations"].append(automation)
     _write_json_file(AUTOMATIONS_FILE, file_data)
+
+    # Auto-index to vector store for semantic search
+    _auto_index_document(
+        source_type="automation",
+        source_id=automation["id"],
+        title=automation["name"],
+        content=automation.get("description", "") or automation.get("ai_command", ""),
+        metadata={"trigger": automation.get("trigger_type", "")}
+    )
+
     return {"success": True, "automation": automation}
 
 

@@ -21,6 +21,7 @@ from ..services.data_service import (
     decrypt_note_content,
     encrypt_note_content,
     get_devices,
+    DYNAMIC_SALT,
     get_device,
     remove_device,
     get_projects,
@@ -868,8 +869,9 @@ def api_export_note(note_id):
         export_dir = Path.home() / "Downloads" / "Shadow_Notes"
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        # Sanitize filename
-        safe_title = "".join(c for c in title if c.isalnum() or c in " -_").strip()[:50]
+        # Sanitize filename (only remove illegal chars for OS)
+        illegal_chars = '<>:"/\\|?*' if os.name == "nt" else "/"
+        safe_title = "".join(c for c in title if c not in illegal_chars).strip()[:100]
         if not safe_title:
             safe_title = "note"
 
@@ -1652,8 +1654,7 @@ def api_autonomous_mode():
 
 @api_bp.route("/qr")
 def api_qr():
-    """Get QR code image for device setup."""
-    import socket
+    """Get QR code image for device setup - full connection info format."""
     import io
     import base64
 
@@ -1661,28 +1662,127 @@ def api_qr():
         import qrcode
         from PIL import Image
 
-        # Get local IP
-        hostname = socket.gethostname()
+        # Import connection helpers from main GUI module
         try:
-            local_ip = socket.gethostbyname(hostname)
-        except socket.error:
-            local_ip = "127.0.0.1"
+            import sys
+            import os
+            # Add parent directory to path for imports
+            parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            from shadow_bridge_gui import get_local_ip, get_tailscale_ip, get_hostname_local, get_username, find_ssh_port
+        except ImportError:
+            # Fallback implementations if import fails
+            def get_local_ip(wait=False):
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.settimeout(1)
+                    s.connect(("8.8.8.8", 80))
+                    ip = s.getsockname()[0]
+                    s.close()
+                    return ip
+                except Exception:
+                    return socket.gethostbyname(socket.gethostname())
 
-        # Create QR code data
-        qr_data = f"shadowai://connect?host={local_ip}&port=19284"
+            def get_tailscale_ip():
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["tailscale", "ip", "-4"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                    )
+                    if result.returncode == 0:
+                        ip = result.stdout.strip().split("\n")[0]
+                        if ip.startswith("100."):
+                            return ip
+                except Exception:
+                    pass
+                return None
+
+            def get_hostname_local():
+                return f"{socket.gethostname()}.local"
+
+            def get_username():
+                try:
+                    return os.getlogin()
+                except Exception:
+                    import getpass
+                    return getpass.getuser()
+
+            def find_ssh_port():
+                for port in [22, 2222, 2269, 22022, 8022]:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.1)
+                    try:
+                        if sock.connect_ex(("127.0.0.1", port)) == 0:
+                            sock.close()
+                            return port
+                    except Exception:
+                        pass
+                    finally:
+                        sock.close()
+                return 22
+
+        # Build full connection info (matches desktop GUI format)
+        local_ip = get_local_ip(wait=True) if callable(get_local_ip) else get_local_ip()
+        tailscale_ip = get_tailscale_ip()
+        hostname_local = get_hostname_local()
+        ssh_port = find_ssh_port() or 22
+
+        # Get encryption salt
+        try:
+            salt_b64 = base64.b64encode(DYNAMIC_SALT).decode("ascii")
+        except Exception:
+            salt_b64 = None
+
+        # Build hosts list (simplified: LAN + Tailscale)
+        hosts_to_try = []
+        if local_ip and not local_ip.startswith("127."):
+            hosts_to_try.append({"host": local_ip, "type": "local", "stable": False, "label": "LAN"})
+        if tailscale_ip:
+            hosts_to_try.append({"host": tailscale_ip, "type": "tailscale", "stable": True, "label": "Tailscale"})
+
+        # Primary host (prefer Tailscale for stability)
+        primary_host = tailscale_ip or local_ip
+        mode = "tailscale" if tailscale_ip else "local"
+
+        # Full connection info (version 4 format - matches desktop)
+        connection_info = {
+            "type": "shadowai_connect",
+            "version": 4,
+            "mode": mode,
+            "host": primary_host,
+            "port": ssh_port,
+            "username": get_username(),
+            "hostname": socket.gethostname(),
+            "hostname_local": hostname_local,
+            "hosts": hosts_to_try,
+            "local_ip": local_ip,
+            "tailscale_ip": tailscale_ip,
+            "encryption_salt": salt_b64,
+            "timestamp": int(time.time()),
+        }
+
+        # Encode as base64 JSON (same format as desktop QR)
+        info_json = json.dumps(connection_info)
+        encoded = base64.urlsafe_b64encode(info_json.encode()).decode()
+        qr_data = f"shadowai://connect?data={encoded}"
 
         # Generate QR code
         qr = qrcode.QRCode(
             version=1,
             error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=8,
+            box_size=10,
             border=2,
         )
         qr.add_data(qr_data)
         qr.make(fit=True)
 
-        # Create image with dark theme colors
-        img = qr.make_image(fill_color="#D97757", back_color="#1a1a1a")
+        # Create image with dark theme colors (white on dark)
+        img = qr.make_image(fill_color="white", back_color="#1a1a1a")
+        img = img.resize((380, 380), Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS)
 
         # Convert to base64
         buffer = io.BytesIO()
@@ -1694,8 +1794,10 @@ def api_qr():
             {
                 "image": f"data:image/png;base64,{img_base64}",
                 "data": qr_data,
-                "host": local_ip,
-                "port": 19284,
+                "host": primary_host,
+                "port": ssh_port,
+                "mode": mode,
+                "hosts": hosts_to_try,
                 "instruction": "Scan with Shadow app to connect",
             }
         )
@@ -1703,8 +1805,7 @@ def api_qr():
         return jsonify(
             {
                 "error": "QR code library not available",
-                "data": "shadowai://connect?port=19284",
-                "instruction": "Install qrcode library for QR display",
+                "instruction": "Install qrcode library: pip install qrcode[pil]",
             }
         )
 

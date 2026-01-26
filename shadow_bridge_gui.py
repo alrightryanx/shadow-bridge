@@ -8,7 +8,7 @@ Features:
 - Compact popup-style UI near system tray
 - QR code for instant app configuration
 - Network discovery for automatic PC finding
-- One-click CLI tools installation (Claude Code, Codex, Gemini)
+- One-click Tools installation (Claude Code, Codex, Gemini)
 
 Usage:
     python shadow_bridge_gui.py
@@ -29,8 +29,10 @@ import shlex
 import base64
 import webbrowser
 import logging
+from logging.handlers import RotatingFileHandler
 import tempfile
 import ctypes
+import traceback
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -70,9 +72,17 @@ except ImportError:
 # Import SingleInstance for robust multi-method instance locking
 try:
     from shadow_bridge.utils.singleton import SingleInstance
+
     HAS_SINGLETON = True
 except ImportError:
     HAS_SINGLETON = False
+# Import effects for ping
+try:
+    from shadow_bridge.utils.effects import ConfettiEffect, play_ping_sound
+    HAS_EFFECTS = True
+except ImportError:
+    HAS_EFFECTS = False
+
 
 # Check for command modes
 IMAGE_MODE = len(sys.argv) > 1 and sys.argv[1] == "image"
@@ -82,6 +92,34 @@ ASSEMBLY_MODE = len(sys.argv) > 1 and sys.argv[1] == "assembly"
 BROWSER_MODE = len(sys.argv) > 1 and sys.argv[1] == "browser"
 WEB_SERVER_MODE = "--web-server" in sys.argv
 DEBUG_BUILD = "--debug" in sys.argv
+AIDEV_MODE = "--aidev" in sys.argv
+AGENT_MODE = "--mode" in sys.argv and "agent" in sys.argv
+PING_MODE = "--ping" in sys.argv
+if AGENT_MODE:
+    AIDEV_MODE = True
+
+# Environment Tier Detection
+if AIDEV_MODE:
+    ENVIRONMENT = "AIDEV"
+    DATA_PORT = 19304
+    WEB_PORT = 6769
+    COMPANION_PORT = 19306
+    DB_NAME = "shadow_aidev.db"
+elif DEBUG_BUILD:
+    ENVIRONMENT = "DEBUG"
+    DATA_PORT = 19294
+    WEB_PORT = 6768
+    COMPANION_PORT = 19296
+    DB_NAME = "shadow_debug.db"
+else:
+    ENVIRONMENT = "RELEASE"
+    DATA_PORT = 19284
+    WEB_PORT = 6767
+    COMPANION_PORT = 19286
+    DB_NAME = "shadow_ai.db"
+
+SSH_KEY_PREFIX = f"# Shadow {ENVIRONMENT} device:"
+
 
 
 def run_image_command():
@@ -153,7 +191,9 @@ def run_image_command():
     gen_parser.add_argument("--lora", help="Path or Repo ID for LoRA")
     gen_parser.add_argument("--lora_scale", type=float, default=0.8, help="LoRA scale")
     gen_parser.add_argument("--hires_fix", action="store_true", help="Enable Hires Fix")
-    gen_parser.add_argument("--upscale", type=float, default=1.5, help="Hires Fix upscale factor")
+    gen_parser.add_argument(
+        "--upscale", type=float, default=1.5, help="Hires Fix upscale factor"
+    )
 
     # Image-to-Image command
     i2i_parser = subparsers.add_parser(
@@ -233,13 +273,10 @@ def run_image_command():
             from web.services.image_service import get_image_generation_service
 
             service = get_image_generation_service()
+
             # Define progress callback
             def progress_callback(percent, message):
-                print_json({
-                    "type": "progress",
-                    "percent": percent,
-                    "message": message
-                })
+                print_json({"type": "progress", "percent": percent, "message": message})
 
             result = service.generate_image(
                 prompt=prompt,
@@ -405,11 +442,13 @@ def run_image_command():
 
         elif args.command == "unload":
             from web.services.image_service import get_image_generation_service
+
             service = get_image_generation_service()
             print_json(service.unload_all_models())
 
         elif args.command == "list-styles":
             from web.services.image_service import get_image_generation_service
+
             service = get_image_generation_service()
             styles = service.get_styles()
             print_json({"success": True, "styles": styles})
@@ -417,177 +456,6 @@ def run_image_command():
     except Exception as e:
         print_json({"success": False, "error": str(e)})
         sys.exit(1)
-
-
-def run_audio_command():
-    """Handle audio generation commands via CLI.
-
-    Usage:
-        ShadowBridge.exe audio generate "Epic orchestral music"
-        ShadowBridge.exe audio generate --prompt_b64 <base64>
-        ShadowBridge.exe audio status
-        ShadowBridge.exe audio setup
-    """
-    import argparse
-
-    def print_json(data):
-        """Print JSON with strict markers to avoid parsing issues."""
-        print("<<<AUDIO_JSON_START>>>")
-        print(json.dumps(data))
-        print("<<<AUDIO_JSON_END>>>")
-
-    # Remove "audio" from argv for argparse
-    argv = sys.argv[2:]  # Skip program name and "audio"
-
-    parser = argparse.ArgumentParser(
-        description="Generate audio using local audiocraft models"
-    )
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    # Generate command
-    gen_parser = subparsers.add_parser("generate", help="Generate audio")
-    gen_parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Text prompt for audio generation",
-    )
-    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
-    gen_parser.add_argument(
-        "--mode",
-        default="music",
-        choices=["music", "sfx"],
-        help="Generation mode (default: music)",
-    )
-    gen_parser.add_argument(
-        "--model",
-        default="musicgen-small",
-        help="Model ID (e.g. musicgen-small, audiogen-medium)",
-    )
-    gen_parser.add_argument(
-        "--duration",
-        type=int,
-        default=10,
-        help="Duration in seconds (default: 10)",
-    )
-    gen_parser.add_argument(
-        "--temperature",
-        type=float,
-        default=1.0,
-        help="Creativity temperature (default: 1.0)",
-    )
-    gen_parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Seed for reproducibility",
-    )
-
-    gen_parser.add_argument(
-        "--top_k",
-        type=int,
-        default=250,
-        help="Top-k sampling (default: 250)",
-    )
-    gen_parser.add_argument(
-        "--top_p",
-        type=float,
-        default=0.0,
-        help="Top-p sampling (default: 0.0)",
-    )
-
-    # Status command
-    subparsers.add_parser("status", help="Check audio service status")
-
-    # Setup command
-    subparsers.add_parser("setup", help="Install audio dependencies")
-
-    # Unload command
-    subparsers.add_parser("unload", help="Unload models and free VRAM")
-
-    args = parser.parse_args(argv)
-
-    if args.command is None:
-        parser.print_help()
-        sys.exit(1)
-
-    try:
-        if args.command == "generate":
-            # Import and initialize service
-            from web.services.audio_service import get_audio_generation_service
-            
-            # Handle prompt
-            prompt = args.prompt
-            if args.prompt_b64:
-                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
-                
-            service = get_audio_generation_service()
-            
-            # Generate output filename
-            prompt_slug = "".join(c for c in prompt[:20] if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
-            timestamp = int(time.time())
-            output_name = f"audio_{timestamp}_{prompt_slug}"
-            
-            # Define progress callback
-            def progress_callback(percent, message):
-                print_json({
-                    "type": "progress",
-                    "percent": percent,
-                    "message": message
-                })
-
-            result = service.generate_audio(
-                prompt=prompt,
-                duration_seconds=args.duration,
-                model_id=args.model,
-                mode=args.mode,
-                output_name=output_name,
-                seed=args.seed,
-                temperature=args.temperature,
-                top_k=args.top_k,
-                top_p=args.top_p,
-                progress_callback=progress_callback
-            )
-            
-
-            
-            # Read the file and return as base64 (important for remote SSH)
-            if result.success and result.audio_path and os.path.exists(result.audio_path):
-                # Only read if < 10MB to avoid blowing up stdout? 
-                # Wav files can be large. But for <30s it's fine (~5MB).
-                try:
-                    with open(result.audio_path, "rb") as f:
-                        audio_bytes = f.read()
-                        audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-                    
-                    resp = result.to_dict()
-                    resp["audio_b64"] = audio_b64
-                    print_json(resp)
-                except Exception as e:
-                     # Fallback to just path if read fails
-                    resp = result.to_dict()
-                    resp["error"] = f"{resp.get('error', '')} (Failed to read audio file: {e})"
-                    print_json(resp)
-            else:
-                print_json(result.to_dict())
-
-        elif args.command == "status":
-            from web.services.audio_service import get_audio_service_status, get_audio_setup_status
-            print_json({"service": get_audio_service_status(), "setup": get_audio_setup_status()})
-
-        elif args.command == "setup":
-            from web.services.audio_service import start_audio_setup
-            print_json(start_audio_setup())
-            
-        elif args.command == "unload":
-            from web.services.audio_service import get_audio_generation_service
-            service = get_audio_generation_service()
-            print_json(service.unload_all_models())
-
-    except Exception as e:
-        print_json({"success": False, "error": str(e)})
-        sys.exit(1)
-
-
 
 
 def run_video_command():
@@ -674,8 +542,6 @@ def run_video_command():
 
     # Unload command
     subparsers.add_parser("unload", help="Unload models and free VRAM")
-
-
 
     if not args.command:
         parser.print_help()
@@ -770,7 +636,7 @@ def run_video_command():
             # Generate video (Synchronous call)
             try:
                 result = generate_video_local(options, progress_callback)
-                
+
                 generations = _load_generations()
                 if generations and "generations" in generations:
                     for gen in generations["generations"]:
@@ -829,6 +695,7 @@ def run_video_command():
 
         elif args.command == "unload":
             from web.routes.video import unload_all_models
+
             print_json(unload_all_models())
 
         elif args.command == "status":
@@ -940,7 +807,12 @@ def run_assembly_command():
             print_json(result)
 
         elif args.command == "status":
-            print_json({"status": "ready", "capabilities": ["image_to_video", "concat", "audio_overlay"]})
+            print_json(
+                {
+                    "status": "ready",
+                    "capabilities": ["image_to_video", "concat", "audio_overlay"],
+                }
+            )
 
     except Exception as e:
         print_json({"success": False, "error": str(e)})
@@ -1058,7 +930,12 @@ def run_as_admin():
 
 
 # Auto-elevate on Windows if not already admin
-if platform.system() == "Windows" and not is_admin() and not WEB_SERVER_MODE and not (IMAGE_MODE or VIDEO_MODE or AUDIO_MODE or ASSEMBLY_MODE or BROWSER_MODE):
+if (
+    platform.system() == "Windows"
+    and not is_admin()
+    and not WEB_SERVER_MODE
+    and not (IMAGE_MODE or VIDEO_MODE or AUDIO_MODE or ASSEMBLY_MODE or BROWSER_MODE)
+):
     print("ShadowBridge requires administrator privileges for SSH key installation.")
     print("Requesting elevation...")
     if run_as_admin():
@@ -1079,21 +956,34 @@ if platform.system() == "Windows" and not is_admin() and not WEB_SERVER_MODE and
 
 # Setup logging to file
 HOME_DIR = os.path.expanduser("~")
-LOG_DIR = os.path.join(HOME_DIR, ".shadowai")
+LOG_DIR = os.path.join(HOME_DIR, ".shadowai_aidev" if AIDEV_MODE else ".shadowai")
 LOG_FILE = os.path.join(LOG_DIR, "shadowbridge.log")
 WEB_LOG_FILE = os.path.join(LOG_DIR, "shadowbridge_web.log")
 os.makedirs(LOG_DIR, exist_ok=True)
+
+# Configure rotating logs to prevent massive file growth
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.DEBUG if DEBUG_BUILD else logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(LOG_FILE, mode="a"),
+        RotatingFileHandler(
+            LOG_FILE,
+            mode="a",
+            maxBytes=5 * 1024 * 1024,
+            backupCount=2,
+            encoding="utf-8",
+        ),
     ],
 )
 log = logging.getLogger("ShadowBridge")
 
-# Silence Werkzeug/Flask access logs
+# Silence noisy libraries
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("zeroconf").setLevel(logging.WARNING)
+if not DEBUG_BUILD:
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("PIL").setLevel(logging.INFO)
 
 # Platform detection
 IS_WINDOWS = platform.system() == "Windows"
@@ -1103,12 +993,17 @@ if IS_WINDOWS:
 
 # Configuration
 DISCOVERY_PORT = 19283
+if ENVIRONMENT == "DEBUG": DISCOVERY_PORT = 19293
+elif ENVIRONMENT == "AIDEV": DISCOVERY_PORT = 19303
+
 DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
-DATA_PORT = 19284  # TCP port for receiving project data from Android app
-NOTE_CONTENT_PORT = 19285  # TCP port for fetching note content from Android app
-COMPANION_PORT = 19286  # TCP port for Claude Code Companion relay
-APP_NAME = "ShadowBridge"
-APP_VERSION = "1.062"
+# DATA_PORT, WEB_PORT, COMPANION_PORT are set above based on environment
+NOTE_CONTENT_PORT = 19285
+if ENVIRONMENT == "DEBUG": NOTE_CONTENT_PORT = 19295
+elif ENVIRONMENT == "AIDEV": NOTE_CONTENT_PORT = 19305
+
+APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
+APP_VERSION = "1.099"
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
@@ -1185,7 +1080,7 @@ COLORS = {
     "bg_input": "#2a251f",
     # Accent colors - Claude terracotta
     "accent": "#D97757",
-    "accent_hover": "#e8967a",
+    "accent_hover": "#ff8a65",  # Brighter orange for clear hover state
     "accent_light": "#e8967a",
     "accent_container": "#3d2a20",
     # Status colors - softer, M3 style
@@ -1250,7 +1145,7 @@ def apply_windows_11_theme(root):
         # ctypes.windll.dwmapi.DwmSetWindowAttribute(
         #     hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)
         # )
-        log.info(f"✓ Applied Windows 11 dark theme to HWND {hwnd}")
+        log.info(f"[OK] Applied Windows 11 dark theme to HWND {hwnd}")
     except Exception as e:
         log.warning(f"Could not apply Windows 11 theme: {e}")
 
@@ -1296,8 +1191,18 @@ except ImportError:
     HAS_TRAY = False
 
 
+_cached_all_ips = None
+_last_ips_refresh = 0
+
+
 def get_all_ips():
-    """Get all available IP addresses from all network interfaces."""
+    """Get all available IP addresses from all network interfaces - cached for 30s."""
+    global _cached_all_ips, _last_ips_refresh
+
+    now = time.time()
+    if _cached_all_ips and (now - _last_ips_refresh < 30):
+        return _cached_all_ips
+
     ips = {
         "local": [],  # Private LAN IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
         "tailscale": [],  # Tailscale IPs (100.x.x.x)
@@ -1336,6 +1241,7 @@ def get_all_ips():
     # Also try the socket method for primary IP
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1.0)
         s.connect(("8.8.8.8", 80))
         primary_ip = s.getsockname()[0]
         s.close()
@@ -1358,12 +1264,20 @@ def get_all_ips():
     except Exception:
         pass
 
+    _cached_all_ips = ips
+    _last_ips_refresh = now
     return ips
 
 
-def get_local_ip():
-    """Get primary local IP address - non-blocking cached version."""
+def get_local_ip(wait=False):
+    """Get primary local IP address - non-blocking cached version unless wait=True."""
     global _cached_local_ip
+    
+    # 1. Prioritize Tailscale IP if available (stable across networks)
+    ts_ip = get_tailscale_ip()
+    if ts_ip and ts_ip != "Detecting...":
+        return ts_ip
+
     if _cached_local_ip and _cached_local_ip != "Detecting...":
         return _cached_local_ip
 
@@ -1408,7 +1322,14 @@ def get_local_ip():
             finally:
                 get_local_ip._detecting = False
 
-        threading.Thread(target=detect, daemon=True).start()
+        if wait:
+            detect()
+        else:
+            threading.Thread(target=detect, daemon=True).start()
+
+    if wait and (not _cached_local_ip or _cached_local_ip == "Detecting..."):
+         # Should have been set by detect(), but just in case
+         pass
 
     return _cached_local_ip
 
@@ -1416,28 +1337,56 @@ def get_local_ip():
 _cached_local_ip = None
 
 
+_cached_tailscale_ip = None
+
+
 def get_tailscale_ip():
-    """Get Tailscale IP if available (stable 100.x.x.x address)."""
-    # First check our detected IPs
+    """Get Tailscale IP if available (stable 100.x.x.x address) - non-blocking cached version."""
+    global _cached_tailscale_ip
+
+    # Return cached value if we have it
+    if _cached_tailscale_ip:
+        return _cached_tailscale_ip if _cached_tailscale_ip != "Detecting..." else None
+
+    # First check our detected IPs (fast, non-blocking)
     all_ips = get_all_ips()
     if all_ips["tailscale"]:
-        return all_ips["tailscale"][0]
+        _cached_tailscale_ip = all_ips["tailscale"][0]
+        return _cached_tailscale_ip
 
-    # Try tailscale CLI
-    try:
-        result = subprocess.run(
-            ["tailscale", "ip", "-4"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
-        )
-        if result.returncode == 0:
-            ip = result.stdout.strip().split("\n")[0]
-            if ip.startswith("100."):
-                return ip
-    except Exception:
-        pass
+    # Try tailscale CLI in background if not already detecting
+    if not hasattr(get_tailscale_ip, "_detecting"):
+        get_tailscale_ip._detecting = True
+        _cached_tailscale_ip = "Detecting..."
+
+        def detect():
+            global _cached_tailscale_ip
+            try:
+                # Try tailscale CLI
+                result = subprocess.run(
+                    ["tailscale", "ip", "-4"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,  # Shorter timeout
+                    creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+                )
+                if result.returncode == 0:
+                    ip = result.stdout.strip().split("\n")[0]
+                    if ip.startswith("100."):
+                        _cached_tailscale_ip = ip
+                        log.info(f"Tailscale IP detected: {ip}")
+                        return
+            except Exception:
+                pass
+
+            # If we get here, detection failed
+            _cached_tailscale_ip = None
+            # Reset detecting flag after some time to allow retry
+            time.sleep(60)
+            delattr(get_tailscale_ip, "_detecting")
+
+        threading.Thread(target=detect, daemon=True).start()
+
     return None
 
 
@@ -1481,93 +1430,169 @@ def get_username():
         return getpass.getuser()
 
 
+_cached_ssh_port = None
+
+
 def find_ssh_port():
-    """Find which port SSH is running on by checking common ports first, then netstat."""
-    # Fast path: Check common ports directly
-    common_ports = [22, 2222, 2269, 22022, 8022]
-    for port in common_ports:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.1)  # Very fast check
-        try:
-            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                sock.close()
-                return port
-        except Exception:
-            pass
-        finally:
-            sock.close()
+    """Find which port SSH is running on - non-blocking cached version."""
+    global _cached_ssh_port
 
-    # Slow path: Check sshd_config
-    sshd_config_paths = [
-        r"C:\ProgramData\ssh\sshd_config",
-        r"C:\Windows\System32\OpenSSH\sshd_config",
-        os.path.expanduser("~/.ssh/sshd_config"),
-    ]
-    for config_path in sshd_config_paths:
-        try:
-            if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("Port ") and not line.startswith("#"):
-                            try:
-                                port = int(line.split()[1])
-                                # Verify it's listening
-                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                sock.settimeout(0.1)
-                                if sock.connect_ex(("127.0.0.1", port)) == 0:
-                                    sock.close()
-                                    return port
-                                sock.close()
-                            except ValueError:
-                                pass
-        except Exception:
-            continue
+    if _cached_ssh_port:
+        return _cached_ssh_port if _cached_ssh_port != "Detecting..." else None
 
-    # Fallback: netstat (slowest)
-    try:
-        # Avoid shell=True and pipes for security
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    # Start background detection if not already running
+    if not hasattr(find_ssh_port, "_detecting"):
+        find_ssh_port._detecting = True
+        _cached_ssh_port = "Detecting..."
 
-        result = subprocess.run(
-            ["netstat", "-an"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            startupinfo=startupinfo,
-            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
-        )
-        # Parse netstat output
-        if result.stdout:
-            for line in result.stdout.splitlines():
-                if "LISTENING" in line and ":22" in line:
-                    parts = line.split()
-                    for part in parts:
-                        if ":" in part:
-                            try:
-                                port_str = part.split(":")[-1]
-                                if port_str.isdigit():
-                                    return int(port_str)
-                            except ValueError:
-                                continue
-    except Exception:
-        pass
+        def detect():
+            global _cached_ssh_port
+            try:
+                # Fast path in thread: Check common ports directly
+                common_ports = [22, 2222, 2269, 22022, 8022]
+                for port in common_ports:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.1)  # Fast check
+                    try:
+                        if sock.connect_ex(("127.0.0.1", port)) == 0:
+                            sock.close()
+                            _cached_ssh_port = port
+                            log.info(f"SSH port detected: {port}")
+                            return
+                    except Exception:
+                        pass
+                    finally:
+                        sock.close()
 
-    return None  # No SSH found
+                # Slow path: Check sshd_config
+                sshd_config_paths = [
+                    r"C:\ProgramData\ssh\sshd_config",
+                    r"C:\Windows\System32\OpenSSH\sshd_config",
+                    os.path.expanduser("~/.ssh/sshd_config"),
+                ]
+                for config_path in sshd_config_paths:
+                    try:
+                        if os.path.exists(config_path):
+                            with open(config_path, "r", encoding="utf-8") as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line.startswith("Port ") and not line.startswith(
+                                        "#"
+                                    ):
+                                        try:
+                                            port = int(line.split()[1])
+                                            # Verify it's listening
+                                            sock = socket.socket(
+                                                socket.AF_INET, socket.SOCK_STREAM
+                                            )
+                                            sock.settimeout(0.1)
+                                            if (
+                                                sock.connect_ex(("127.0.0.1", port))
+                                                == 0
+                                            ):
+                                                sock.close()
+                                                _cached_ssh_port = port
+                                                log.info(
+                                                    f"SSH port found in config: {port}"
+                                                )
+                                                return
+                                            sock.close()
+                                        except ValueError:
+                                            pass
+                    except Exception:
+                        continue
+
+                # Fallback: netstat (slowest)
+                try:
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    result = subprocess.run(
+                        ["netstat", "-an"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        startupinfo=startupinfo,
+                    )
+                    if result.returncode == 0:
+                        for line in result.stdout.splitlines():
+                            if "TCP" in line and "LISTENING" in line:
+                                parts = line.split()
+                                local_addr = parts[1]
+                                if ":" in local_addr:
+                                    port_str = local_addr.split(":")[-1]
+                                    try:
+                                        port = int(port_str)
+                                        if (
+                                            port in [22, 2222, 2269, 22022, 8022]
+                                            or port > 1000
+                                        ):
+                                            # Double check this port
+                                            sock = socket.socket(
+                                                socket.AF_INET, socket.SOCK_STREAM
+                                            )
+                                            sock.settimeout(0.1)
+                                            if (
+                                                sock.connect_ex(("127.0.0.1", port))
+                                                == 0
+                                            ):
+                                                sock.close()
+                                                _cached_ssh_port = port
+                                                log.info(
+                                                    f"SSH port found via netstat: {port}"
+                                                )
+                                                return
+                                            sock.close()
+                                    except ValueError:
+                                        continue
+                except Exception:
+                    pass
+            finally:
+                if _cached_ssh_port == "Detecting...":
+                    _cached_ssh_port = None
+                # Allow retry after some time
+                time.sleep(60)
+                delattr(find_ssh_port, "_detecting")
+
+        threading.Thread(target=detect, daemon=True).start()
+
+    return None
+
+
+_cached_ssh_status = None
+_last_ssh_check_time = 0
 
 
 def check_ssh_running(port=22):
-    """Check if SSH server is running on specific port."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(1)
-    try:
-        result = sock.connect_ex(("127.0.0.1", port))
-        return result == 0
-    except Exception:
-        return False
-    finally:
-        sock.close()
+    """Check if SSH server is running - non-blocking cached version."""
+    global _cached_ssh_status, _last_ssh_check_time
+
+    now = time.time()
+    # Return cached value if it's fresh (last 15 seconds)
+    if _cached_ssh_status is not None and (now - _last_ssh_check_time < 15):
+        return _cached_ssh_status
+
+    # Start background detection if not already running
+    if not hasattr(check_ssh_running, "_detecting") or not check_ssh_running._detecting:
+        check_ssh_running._detecting = True
+
+        def detect():
+            global _cached_ssh_status, _last_ssh_check_time
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.0)
+            try:
+                result = sock.connect_ex(("127.0.0.1", port))
+                _cached_ssh_status = result == 0
+                _last_ssh_check_time = time.time()
+            except Exception:
+                _cached_ssh_status = False
+            finally:
+                sock.close()
+                check_ssh_running._detecting = False
+
+        threading.Thread(target=detect, daemon=True).start()
+
+    # Return last known status or False while first/new check runs
+    return _cached_ssh_status if _cached_ssh_status is not None else False
 
 
 def setup_firewall_rule():
@@ -1578,9 +1603,9 @@ def setup_firewall_rule():
         # Rules to ensure are present: (Name, Protocol, Port)
         required_rules = [
             ("ShadowBridge Discovery", "UDP", "19283"),
-            ("ShadowBridge Data Receiver", "TCP", "19284"),
-            ("ShadowBridge Companion", "TCP", "19286"),
-            ("ShadowBridge Dashboard", "TCP", "6767"),
+            ("ShadowBridge Data Receiver", "TCP", str(DATA_PORT)),
+            ("ShadowBridge Companion", "TCP", str(COMPANION_PORT)),
+            ("ShadowBridge Dashboard", "TCP", str(WEB_PORT)),
         ]
 
         # Check existing rules
@@ -1761,6 +1786,7 @@ def check_tool_installed(tool_name):
         "gemini": ["gemini", "gemini-cli"],
         "aider": ["aider"],
         "ollama": ["ollama"],
+        "opencode": ["opencode"],
     }
 
     commands_to_try = tool_commands.get(tool_name, [tool_name])
@@ -2200,6 +2226,18 @@ class SignalingService(threading.Thread):
         self.active_devices = {}  # device_id -> {last_ip, last_seen, last_latency}
         self._lock = threading.Lock()
 
+
+    def show_ping_effects(self):
+        # Focus window, play sound, and show confetti
+        log.info("Showing ping effects")
+        try:
+            self.show_window()
+            if HAS_EFFECTS:
+                play_ping_sound()
+                confetti = ConfettiEffect(self.root)
+                confetti.start(duration_ms=4000)
+        except Exception as e:
+            log.error(f"Failed to show ping effects: {e}")
     def run(self):
         log.info(f"Starting Signaling Service on UDP {self.PORT}")
         try:
@@ -2545,7 +2583,9 @@ class DataReceiver(threading.Thread):
                 "notificationType": "file_ready",
                 "summary": "Project Assets Generated",
                 "files": found_files,
-                "deepLink": f"shadow://project/{sessionId}" if sessionId else "shadow://projects",
+                "deepLink": f"shadow://project/{sessionId}"
+                if sessionId
+                else "shadow://projects",
                 "hostname": socket.gethostname(),
             },
         }
@@ -2720,7 +2760,11 @@ class DataReceiver(threading.Thread):
                     if self.running:  # Only log if not shutting down
                         log.warning(f"DataReceiver accept error: {e}")
         finally:
-            self._executor.shutdown(wait=False)
+            # Gracefully shutdown thread pool with timeout to prevent hanging
+            try:
+                self._executor.shutdown(wait=True, timeout=5.0)
+            except Exception:
+                self._executor.shutdown(wait=False, cancel_futures=True)
             if self.sock:
                 self.sock.close()
 
@@ -2728,7 +2772,7 @@ class DataReceiver(threading.Thread):
         """Handle incoming data from Android app."""
         try:
             ip = addr[0]
-            log.info(f"Client connected from {addr}")
+            # Skip logging to reduce log spam - connections are now silent by default
 
             # Security: Rate limiting
             if not self._check_rate_limit(ip):
@@ -2747,59 +2791,47 @@ class DataReceiver(threading.Thread):
             while len(length_bytes) < 4:
                 chunk = conn.recv(4 - len(length_bytes))
                 if not chunk:
-                    log.error(
-                        f"Connection closed while reading length prefix from {addr}"
-                    )
+                    # Silently close health check connections (localhost) to reduce log spam
+                    # Only log unexpected connection failures from non-localhost
+                    if len(length_bytes) == 0 and ip == "127.0.0.1":
+                        pass  # Silently skip health check connections
+                    else:
+                        log.debug(
+                            f"Connection closed while reading length prefix from {addr}"
+                        )
                     return
                 length_bytes += chunk
 
-            log.debug(
-                f"[RAW_DATA] From {addr}: Length bytes (hex): {length_bytes.hex()}, Decoded: {int.from_bytes(length_bytes, 'big')}"
-            )
+            # Skip verbose debug logging to reduce log spam
+            pass
 
             msg_length = int.from_bytes(length_bytes, "big")
             if msg_length > 10 * 1024 * 1024:  # 10MB limit for sessions payloads
-                log.error(f"Message too large from {addr}: {msg_length} bytes")
+                # Only log error for non-localhost to reduce spam
+                if ip != "127.0.0.1":
+                    log.error(f"Message too large from {addr}: {msg_length} bytes")
                 return
 
-            data = b""
-            while len(data) < msg_length:
-                chunk = conn.recv(min(4096, msg_length - len(data)))
-                if not chunk:
-                    log.error(
-                        f"Connection closed while reading message body from {addr}"
-                    )
-                    break
-                data += chunk
+                data = b""
+                while len(data) < msg_length:
+                    # Increase buffer size for better performance
+                    chunk = conn.recv(min(65536, msg_length - len(data)))  # 64KB buffer
+                    if not chunk:
+                        # Skip logging to reduce spam
+                        break
+                    data += chunk
 
-            # Log raw data for debugging
-            log.debug(
-                f"[RAW_DATA] From {addr}: Received {len(data)} bytes, expecting {msg_length} bytes"
-            )
+            # Skip verbose debug logging to reduce log spam
+            pass
             if len(data) < msg_length:
-                log.error(
-                    f"[RAW_DATA] From {addr}: Incomplete message - got {len(data)}/{msg_length} bytes"
-                )
-            else:
-                # Log first 500 bytes of raw data (hex) and as text for debugging
-                try:
-                    data_preview = data[:500]
-                    log.debug(
-                        f"[RAW_DATA] From {addr}: First 500 bytes (hex): {data_preview.hex()}"
-                    )
-                    try:
-                        decoded_preview = data_preview.decode("utf-8", errors="replace")
-                        log.debug(
-                            f"[RAW_DATA] From {addr}: First 500 bytes (text): {decoded_preview}"
-                        )
-                    except (ValueError, UnicodeDecodeError):
-                        log.debug(
-                            f"[RAW_DATA] From {addr}: Could not decode preview as UTF-8"
-                        )
-                except Exception as e:
+                # Only log error for non-localhost to reduce spam
+                if ip != "127.0.0.1":
                     log.error(
-                        f"[RAW_DATA] From {addr}: Error logging raw data preview: {e}"
+                        f"From {addr}: Incomplete message - got {len(data)}/{msg_length} bytes"
                     )
+            else:
+                # Skip verbose debug logging to reduce log spam
+                pass
 
             if data:
                 try:
@@ -2851,7 +2883,7 @@ class DataReceiver(threading.Thread):
                     # Handle different actions
                     # Reduce log flooding: Only log non-ping actions at info level
                     if action != "ping":
-                        log.info(f"Action: {action}, Device: {device_name}")
+                        log.debug(f"Action: {action}, Device: {device_name}")
                     else:
                         log.debug(f"Action: {action}, Device: {device_name}")
                     if action == "ping":
@@ -3209,7 +3241,7 @@ class DataReceiver(threading.Thread):
                                 if rf.read(1) != b"\n":
                                     f.write("\n")
                         f.write(
-                            f"# Shadow device: {device_name} - added {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"{SSH_KEY_PREFIX} {device_name} - added {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                         )
                         f.write(f"{public_key}\n")
 
@@ -3761,7 +3793,11 @@ class CompanionRelayServer(threading.Thread):
             if self.on_status_change:
                 self.on_status_change("error", COMPANION_PORT)
         finally:
-            self._executor.shutdown(wait=False)
+            # Gracefully shutdown thread pool with timeout to prevent hanging
+            try:
+                self._executor.shutdown(wait=True, timeout=5.0)
+            except Exception:
+                self._executor.shutdown(wait=False, cancel_futures=True)
             if self.sock:
                 self.sock.close()
 
@@ -4741,9 +4777,10 @@ class CompanionRelayServer(threading.Thread):
 class DiscoveryServer(threading.Thread):
     """UDP server that responds to discovery requests and registers mDNS service."""
 
-    def __init__(self, connection_info):
+    def __init__(self, connection_info, app_instance=None):
         super().__init__(daemon=True)
         self.connection_info = connection_info
+        self.app_instance = app_instance
         self.running = True
         self.sock = None
         self.bind_failed = False  # Track if port binding failed
@@ -4763,7 +4800,8 @@ class DiscoveryServer(threading.Thread):
                 }
 
                 hostname = socket.gethostname()
-                local_ip = get_local_ip()
+                # Wait for IP detection to ensure we register valid services
+                local_ip = get_local_ip(wait=True)
                 tailscale_ip = get_tailscale_ip()
                 ssh_port = self.connection_info.get("port", 22)
 
@@ -4799,6 +4837,8 @@ class DiscoveryServer(threading.Thread):
 
             except Exception as e:
                 log.warning(f"Failed to register mDNS service: {e}")
+        else:
+            log.warning("Zeroconf module not found - mDNS discovery disabled")
 
         # 2. Start UDP discovery responder
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -4826,12 +4866,33 @@ class DiscoveryServer(threading.Thread):
         self.bind_failed = False
         self.bind_error = None
 
+        # Start active broadcast thread
+        def active_broadcast():
+            broadcast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            broadcast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            while self.running:
+                try:
+                    # Refresh info before broadcasting
+                    info = self.connection_info
+                    if self.app_instance and hasattr(self.app_instance, "get_connection_info"):
+                        info = self.app_instance.get_connection_info()
+                    
+                    # Broadcast to LAN
+                    msg = DISCOVERY_MAGIC + json.dumps(info).encode()
+                    broadcast_sock.sendto(msg, ("255.255.255.255", DISCOVERY_PORT))
+                except Exception:
+                    pass
+                time.sleep(5.0)  # Broadcast every 5 seconds
+            broadcast_sock.close()
+
+        threading.Thread(target=active_broadcast, daemon=True).start()
+
         try:
             while self.running:
                 try:
                     data, addr = self.sock.recvfrom(1024)
                     if data.startswith(DISCOVERY_MAGIC):
-                        log.debug(f"Received discovery request from {addr[0]}")
+                        # Skip verbose logging to reduce spam
                         # Refresh info before responding to ensure IPs are current
                         response = (
                             DISCOVERY_MAGIC + json.dumps(self.connection_info).encode()
@@ -4840,7 +4901,8 @@ class DiscoveryServer(threading.Thread):
                 except socket.timeout:
                     continue
                 except Exception as e:
-                    if self.running:  # Only log if not shutting down
+                    # Only log non-timeout errors to reduce spam
+                    if self.running and not isinstance(e, socket.timeout):
                         log.debug(f"Discovery error: {e}")
         finally:
             if self.sock:
@@ -4956,9 +5018,11 @@ class CloudSyncService(threading.Thread):
             res = requests.post(url, json=payload, headers=headers, timeout=10)
 
             if res.status_code == 201:
-                log.debug(f"Synced {endpoint} item to cloud: {payload.get('id')}")
+                # Reduced logging - only log errors, not every successful sync
+                pass
 
         except Exception as e:
+            # Only log errors, suppress common transient failures
             log.debug(f"Cloud sync item failed: {e}")
 
 
@@ -4966,46 +5030,29 @@ class ShadowBridgeApp:
     """Main application - compact popup style."""
 
     def __init__(self):
-        log.info("=" * 60)
-        log.info("ShadowBridgeApp initializing...")
-        log.info(f"Python version: {sys.version}")
-        log.info(f"Frozen: {getattr(sys, 'frozen', False)}")
-        log.info(f"Executable: {sys.executable}")
-        log.info(f"HAS_SV_TTK: {HAS_SV_TTK}")
-        log.info(f"HAS_PIL: {HAS_PIL}")
-        log.info(f"HAS_QRCODE: {HAS_QRCODE}")
-        log.info(f"HAS_TRAY: {HAS_TRAY}")
-        log.info("=" * 60)
+        # Reduced logging at startup to prevent log spam
+        log.info(
+            f"ShadowBridge v{APP_VERSION} initializing (frozen={getattr(sys, 'frozen', False)})"
+        )
 
         try:
             set_app_user_model_id("ShadowBridge")
-            log.info("Creating tk.Tk() root window...")
             self.root = tk.Tk()
             # Set background IMMEDIATELY to prevent white flash
             self.root.configure(bg=COLORS["bg_surface"])
-            log.info(f"✓ tk.Tk() instance created successfully: {self.root}")
             self.root.title(APP_NAME)
-            log.info(f"✓ Window title set to: {APP_NAME}")
-
-            # Additional root hardening
-            # self.root.overrideredirect(False)  # REMOVED: Allow window to be movable
-            log.info("✓ Window decorations enabled, window can be moved")
         except Exception as e:
-            log.critical(f"✗ FATAL: Failed to create root window: {e}", exc_info=True)
+            log.critical(f"FATAL: Failed to create root window: {e}", exc_info=True)
             raise
 
         # Apply modern Windows theme if available
-        log.info("Configuring theme...")
         theme_applied = False
         if HAS_SV_TTK:
             try:
-                import sv_ttk
-
                 sv_ttk.set_theme("dark")
-                log.info("✓ sv_ttk theme 'dark' applied successfully")
                 theme_applied = True
             except Exception as e:
-                log.error(f"✗ Failed to set sv_ttk theme: {e}")
+                log.error(f"Failed to set sv_ttk theme: {e}")
 
         # Set window icon from logo.png
         icon_path = get_app_icon_path()
@@ -5020,7 +5067,6 @@ class ShadowBridgeApp:
                 )
                 self.app_icon = ImageTk.PhotoImage(icon_img)
                 self.root.iconphoto(True, self.app_icon)
-                log.info(f"App icon loaded from {icon_path}")
             except Exception as e:
                 log.debug(f"Could not load app icon: {e}")
 
@@ -5029,22 +5075,39 @@ class ShadowBridgeApp:
         try:
             dpi = self.root.winfo_fpixels("1i")
             scale = dpi / 96.0  # 96 is standard DPI
-            log.info(f"Detected DPI: {dpi}, Scale factor: {scale}")
+            # Skip verbose logging to reduce startup log spam
         except Exception:
             scale = 1.0
 
         # Fixed compact size for quick connect utility
-        self.window_width = int(375 * scale)
-        self.window_height = int(715 * scale)  # 10% taller than 650
+        self.window_width = int(480 * scale)
+        self.window_height = int(780 * scale)
 
         # Set minimum size and enable resizing
         self.root.minsize(320, 600)
         self.root.resizable(True, True)
 
-        # State - auto-detect SSH port
-        detected_port = find_ssh_port()
-        self.ssh_port = detected_port if detected_port else 22
-        log.info(f"Using SSH port: {self.ssh_port}")
+        # State - auto-detect SSH port (now non-blocking)
+        self.ssh_port = find_ssh_port() or 22
+        log.info(f"Initial SSH port: {self.ssh_port}")
+
+        # Start a background thread to refresh UI when SSH port is detected
+        def delayed_ssh_refresh():
+            # Shorter, more efficient retry loop - checks 5 times with 2s intervals
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                detected = find_ssh_port()
+                if detected and detected != self.ssh_port:
+                    self.ssh_port = detected
+                    log.info(f"Updated SSH port: {self.ssh_port}")
+                    self.root.after(0, self.update_status)
+                    self.root.after(0, self.update_qr_code)
+                    return
+                # Only sleep if we need to retry (not last attempt)
+                if attempt < max_attempts - 1:
+                    time.sleep(2)
+
+        threading.Thread(target=delayed_ssh_refresh, daemon=True).start()
 
         self.is_broadcasting = False
         self.discovery_server = None
@@ -5068,66 +5131,89 @@ class ShadowBridgeApp:
 
         self._auto_web_dashboard_attempts = 0
 
-        # Start Signaling Service for instant discovery/roaming
-        try:
-            self.signaling_service = SignalingService()
-            self.signaling_service.start()
-            log.info("SignalingService started")
-        except Exception as e:
-            log.error(f"Failed to start SignalingService: {e}")
-
-        # Start UPnP Port Mapping
-        try:
-            self.upnp_manager = UPnPManager()
-            self.upnp_manager.discover_and_map()
-            log.info("UPnP manager started")
-        except Exception as e:
-            log.error(f"Failed to start UPnP manager: {e}")
-
-        # Start Ouroboros Sentinel
+        # Initialize services but defer heavy startup operations to background
+        # This improves startup time and prevents UI freezing
+        self.signaling_service = None
         self.sentinel = None
-        if HAS_SENTINEL:
+        self.watchdog = None
+        self.upnp_manager = None
+
+        # Start background services in a thread to avoid blocking UI initialization
+        def start_background_services():
+            # Start Signaling Service for instant discovery/roaming
             try:
-                self.sentinel = Sentinel()
-                self.sentinel.start()
-                log.info("Sentinel started")
+                from zeroconf import IPVersion, ServiceInfo, Zeroconf
+
+                self.signaling_service = SignalingService()
+                self.signaling_service.start()
+                # Skip verbose logging to reduce startup log spam
             except Exception as e:
-                log.error(f"Failed to start Sentinel: {e}")
+                # Only log actual errors, not startup info
+                pass
 
-        # Start Thread Watchdog for server health monitoring
-        try:
-            from utils.watchdog import ThreadWatchdog
+            # Start UPnP Port Mapping
+            try:
+                self.upnp_manager = UPnPManager()
+                self.upnp_manager.discover_and_map()
+                # Skip verbose logging to reduce startup log spam
+            except Exception as e:
+                # Only log actual errors
+                pass
 
-            self.watchdog = ThreadWatchdog(check_interval=5)
-            self.watchdog.start()
-            log.info("Thread watchdog started")
-        except Exception as e:
-            log.error(f"Failed to start thread watchdog: {e}")
-            self.watchdog = None
+            # Start Ouroboros Sentinel
+            if HAS_SENTINEL:
+                try:
+                    self.sentinel = Sentinel()
+                    self.sentinel.start()
+                    # Skip verbose logging to reduce startup log spam
+                except Exception as e:
+                    # Only log actual errors
+                    pass
+
+            # Start Thread Watchdog for server health monitoring
+            try:
+                from utils.watchdog import ThreadWatchdog
+
+                self.watchdog = ThreadWatchdog(check_interval=5)
+                self.watchdog.start()
+                # Skip verbose logging to reduce startup log spam
+            except Exception as e:
+                # Only log actual errors
+                pass
+
+        threading.Thread(target=start_background_services, daemon=True).start()
 
         # Setup modern styles
-        log.info("Setting up widget styles...")
+        # Skip verbose logging to reduce startup log spam
         try:
             self.setup_styles()
-            log.info("✓ Styles setup completed successfully")
+            log.info("[OK] Styles setup completed successfully")
         except Exception as e:
             log.error(f"✗ Failed to setup styles: {e}", exc_info=True)
+
+        # Initialize Threading Primitives
+        self._web_dashboard_monitor_stop_event = threading.Event()
+        self._web_dashboard_start_lock = threading.Lock()
+        self._tool_install_lock = threading.Lock()
+        self._tool_install_procs = {}
+        self._web_dashboard_monitor_thread = None
 
         # Build UI
         log.info("Creating widgets...")
         try:
             self.create_widgets()
-            log.info("✓ Widgets created successfully")
+            log.info("[OK] Widgets created successfully")
         except Exception as e:
             log.critical(f"✗ FATAL: Failed to create widgets: {e}", exc_info=True)
             raise
 
         # Set window size and position (load saved state or default to bottom right)
-        self.root.update_idletasks()
         if not self._load_window_state():
             # Fallback if loading fails
             self.root.geometry(f"{self.window_width}x{self.window_height}")
-        self.root.after(100, lambda: apply_windows_11_theme(self.root))
+
+        # Apply theme once after a short delay to ensure window handle is ready
+        self.root.after(200, lambda: apply_windows_11_theme(self.root))
 
         # Start data receiver for project sync
         self.start_data_receiver()
@@ -5136,42 +5222,36 @@ class ShadowBridgeApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Unmap>", self.on_minimize)
 
-        # Initial updates
-        self.root.after(100, self.update_qr_code)
-        self.root.after(200, self.update_status)
-        self.root.after(500, self.auto_start_broadcast)
-        self.root.after(1000, lambda: apply_windows_11_theme(self.root))
-        self.root.after(2000, self.check_for_updates_on_startup)
-        self.root.after(2500, self.check_tools)  # Check tool status once at startup
+        # Initial updates - consolidated to reduce startup delays
+        self.root.after(300, self.update_qr_code)
+        self.root.after(500, self.update_status)
+        self.root.after(800, self.auto_start_broadcast)
+        self.root.after(1000, self.auto_start_web_dashboard)
+        self.root.after(1200, self._start_web_dashboard_monitor)
+        self.root.after(1500, self.check_for_updates_on_startup)
+        self.root.after(1800, self.check_web_server_status)
+        self.root.after(2000, self.check_tools)  # Check tool status once at startup
 
     def setup_styles(self):
         """Configure ttk styles for modern M3-inspired look."""
-        log.info("Initializing ttk.Style()...")
         style = ttk.Style()
-        log.info(f"✓ ttk.Style created, current theme: {style.theme_use()}")
-        log.info(f"Available themes: {style.theme_names()}")
 
         # Apply theme
         theme_set = False
         if HAS_SV_TTK:
             try:
-                log.info("Attempting to apply sv_ttk dark theme in setup_styles...")
                 sv_ttk.set_theme("dark")
-                log.info(f"✓ sv_ttk theme applied, current theme: {style.theme_use()}")
                 theme_set = True
             except Exception as e:
-                log.error(f"✗ sv_ttk theme failed in setup_styles: {e}")
+                log.debug(f"sv_ttk theme failed: {e}")
 
         if not theme_set:
-            log.info("Applying fallback 'clam' theme...")
             try:
                 style.theme_use("clam")
-                log.info(f"✓ 'clam' theme applied, current theme: {style.theme_use()}")
             except Exception as e:
-                log.error(f"✗ Failed to set 'clam' theme: {e}")
+                log.debug(f"Failed to set 'clam' theme: {e}")
 
         # Configure colors for themed widgets
-        log.info("Configuring widget styles...")
         try:
             # Root and basic elements
             style.configure(
@@ -5208,10 +5288,8 @@ class ShadowBridgeApp:
                 troughcolor=COLORS["bg_elevated"],
                 borderwidth=0,
             )
-
-            log.info("✓ Base widget styles configured")
         except Exception as e:
-            log.error(f"✗ Failed to configure base styles: {e}")
+            log.debug(f"Failed to configure base styles: {e}")
 
         # Label styles
         try:
@@ -5242,9 +5320,8 @@ class ShadowBridgeApp:
                 foreground=COLORS["accent_light"],
                 font=("Segoe UI", 8, "bold"),
             )
-            log.info("✓ Label styles configured")
         except Exception as e:
-            log.error(f"✗ Failed to configure label styles: {e}")
+            log.debug(f"Failed to configure label styles: {e}")
 
         # Button styles - Accent (Terracotta)
         try:
@@ -5262,9 +5339,8 @@ class ShadowBridgeApp:
                 ],
                 foreground=[("active", "white")],
             )
-            log.info("✓ Accent button styles configured")
         except Exception as e:
-            log.error(f"✗ Failed to configure accent button styles: {e}")
+            log.debug(f"Failed to configure accent button styles: {e}")
 
         # Button styles - Secondary
         try:
@@ -5281,7 +5357,7 @@ class ShadowBridgeApp:
                 ],
                 foreground=[("active", "white")],
             )
-            log.info("✓ Secondary button styles configured")
+            log.info("[OK] Secondary button styles configured")
         except Exception as e:
             log.error(f"✗ Failed to configure secondary button styles: {e}")
 
@@ -5304,11 +5380,11 @@ class ShadowBridgeApp:
                     ("pressed", COLORS["accent_hover"]),
                 ],
             )
-            log.info("✓ Scrollbar styles configured")
+            log.info("[OK] Scrollbar styles configured")
         except Exception as e:
             log.error(f"✗ Failed to configure scrollbar styles: {e}")
 
-        log.info("✓ setup_styles() completed")
+        log.info("[OK] setup_styles() completed")
 
     def create_widgets(self):
         """Create compact single-column layout using tk for reliable dark theming."""
@@ -5358,7 +5434,7 @@ class ShadowBridgeApp:
 
             self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-            log.info("✓ Scrollable main container created")
+            log.info("[OK] Scrollable main container created")
         except Exception as e:
             log.error(f"✗ Failed to create scrollable container: {e}", exc_info=True)
             raise
@@ -5531,11 +5607,12 @@ class ShadowBridgeApp:
             bg=COLORS["bg_elevated"],
             fg=COLORS["accent_light"],
             font=("Consolas", 12, "bold"),
+            justify=tk.CENTER,
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
         )
-        self.ip_label.pack(side=tk.LEFT)
+        self.ip_label.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
 
         self.ssh_label = tk.Label(
             info_row,
@@ -5543,11 +5620,12 @@ class ShadowBridgeApp:
             bg=COLORS["bg_elevated"],
             fg=COLORS["text_dim"],
             font=("Consolas", 10),
+            justify=tk.CENTER,
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
         )
-        self.ssh_label.pack(side=tk.RIGHT)
+        self.ssh_label.pack(side=tk.TOP, fill=tk.X)
 
         # Tools section
         tools_card = tk.Frame(
@@ -5561,9 +5639,9 @@ class ShadowBridgeApp:
         )
         tools_card.pack(fill=tk.X, pady=(0, 10))
 
-        cli_tools_label = tk.Label(
+        tools_label = tk.Label(
             tools_card,
-            text="CLI TOOLS",
+            text="TOOLS",
             bg=COLORS["bg_card"],
             fg=COLORS["text_muted"],
             font=("Segoe UI", 8, "bold"),
@@ -5571,7 +5649,7 @@ class ShadowBridgeApp:
             borderwidth=0,
             highlightthickness=0,
         )
-        cli_tools_label.pack(anchor="w", pady=(0, 12))
+        tools_label.pack(anchor="w", pady=(0, 12))
 
         # Tool buttons grid
         self.tool_buttons = {}
@@ -5611,6 +5689,15 @@ class ShadowBridgeApp:
                 },
             ),
             (
+                "OpenCode",
+                "opencode",
+                {
+                    "type": "npm",
+                    "commands": ["npm install -g @opencode-ai/plugin"],
+                    "uninstall_commands": ["npm uninstall -g @opencode-ai/plugin"],
+                },
+            ),
+            (
                 "Aider",
                 "aider",
                 {
@@ -5646,6 +5733,24 @@ class ShadowBridgeApp:
                     "fallback_url": "https://ollama.com/download/windows"
                     if IS_WINDOWS
                     else "https://ollama.com/download/mac",
+                },
+            ),
+            (
+                "Tailscale",
+                "tailscale",
+                {
+                    "type": "winget" if IS_WINDOWS else "brew",
+                    "commands": [
+                        "winget install -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements"
+                    ]
+                    if IS_WINDOWS
+                    else ["brew install tailscale"],
+                    "uninstall_commands": [
+                        "winget uninstall -e --id Tailscale.Tailscale --accept-source-agreements --accept-package-agreements"
+                    ]
+                    if IS_WINDOWS
+                    else ["brew uninstall tailscale"],
+                    "fallback_url": "https://tailscale.com/download",
                 },
             ),
         ]
@@ -5758,18 +5863,20 @@ class ShadowBridgeApp:
                 command=lambda s=spec, n=name, t=tool_id: self.install_tool(t, n, s),
             )
             btn.pack(side=tk.RIGHT)
-            
+
             def on_enter_tool(e, b=btn):
                 if b.cget("state") != tk.DISABLED:
                     b.configure(bg=COLORS["accent_hover"])
-            
+
             def on_leave_tool(e, b=btn, original_bg=COLORS["success"]):
                 if b.cget("state") != tk.DISABLED:
                     current_text = b.cget("text")
                     if current_text == "Install":
                         b.configure(bg=COLORS["success"])
                     elif current_text == "Uninstall":
-                        b.configure(bg=COLORS["error"] if "error" in COLORS else "#ff6b6b")
+                        b.configure(
+                            bg=COLORS["error"] if "error" in COLORS else "#ff6b6b"
+                        )
                     elif current_text == "Stop":
                         b.configure(bg=COLORS["warning"])
                     else:
@@ -5779,58 +5886,6 @@ class ShadowBridgeApp:
             btn.bind("<Leave>", on_leave_tool)
 
             self.tool_buttons[tool_id] = btn
-
-        # Tailscale row
-        ts_row = tk.Frame(
-            tools_card,
-            bg=COLORS["bg_card"],
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        ts_row.pack(fill=tk.X, pady=4)
-
-        ts_status_frame = tk.Frame(
-            ts_row,
-            bg=COLORS["bg_card"],
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=0,
-        )
-        ts_status_frame.pack(side=tk.LEFT, padx=(0, 12))
-
-        self.tailscale_status = tk.Canvas(
-            ts_status_frame,
-            width=12,
-            height=12,
-            bg=COLORS["bg_card"],
-            highlightthickness=0,
-            borderwidth=0,
-            relief="flat",
-            takefocus=0,
-        )
-        self.tailscale_status.pack(pady=6)
-        self.tailscale_status.create_oval(
-            2, 2, 10, 10, fill=COLORS["text_muted"], outline="", tags="dot"
-        )
-
-        tk.Label(
-            ts_row,
-            text="Tailscale",
-            bg=COLORS["bg_card"],
-            fg=COLORS["text_secondary"],
-            font=("Segoe UI", 10),
-            width=12,
-            anchor="w",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=0,
-        ).pack(side=tk.LEFT)
-
-        self.tailscale_btn = create_modern_button(
-            ts_row, "Install", self.install_tailscale
-        )
-        self.tailscale_btn.pack(side=tk.RIGHT)
 
         # Bottom section
         bottom = tk.Frame(
@@ -5979,18 +6034,7 @@ class ShadowBridgeApp:
         if hasattr(self, "tailscale_status"):
             self.tailscale_status.itemconfig("dot", fill=pulse_color)
 
-        self.root.after(150, self._animate_pulse)
-
-        self._web_dashboard_monitor_stop_event = threading.Event()
-        self._web_dashboard_monitor_thread = None
-        self._web_dashboard_start_lock = threading.Lock()
-
-        # Auto-start web dashboard server so users don't have to click the button
-        self.auto_start_web_dashboard()
-        self._start_web_dashboard_monitor()
-
-        # Start periodic web server status check
-        self.root.after(1000, self.check_web_server_status)
+        self.root.after(250, self._animate_pulse)
 
     def _create_tooltip(self, widget, text):
         """Create a simple tooltip that appears on hover."""
@@ -6043,86 +6087,108 @@ class ShadowBridgeApp:
 
     def update_status(self):
         """Update status indicators."""
-        ssh_ok = check_ssh_running(self.ssh_port)
-
-        # Update IP label if it was detecting
-        current_ip = get_local_ip()
-        if hasattr(self, "ip_label"):
-            ip_text = self.ip_label.cget("text")
-            if ip_text != current_ip and current_ip is not None:
-                self.ip_label.configure(text=current_ip)
-            elif current_ip is None and ip_text != "Scanning...":
-                 self.ip_label.configure(text="Scanning...")
-
-        # Update SSH label with port info
-        if ssh_ok:
-            self.ssh_label.configure(
-                text=f"SSH :{self.ssh_port} [OK]", fg=COLORS["success"]
-            )
-        else:
-            self.ssh_label.configure(
-                text=f"SSH :{self.ssh_port} [X]", fg=COLORS["error"]
-            )
-
-        # Merge active devices from Signaling Service (UDP)
-        if hasattr(self, "signaling_service") and self.signaling_service:
+        try:
+            # Handle port as string or integer safely
             try:
-                # Use copy to avoid thread contention
-                signaling_devices = self.signaling_service.active_devices.copy()
-                for dev_id, info in signaling_devices.items():
-                    # Update if we have new info or it's a new device
-                    current_dev = self.devices.get(dev_id, {})
-                    last_seen_gui = float(current_dev.get("last_seen", 0) or 0)
-                    last_seen_udp = float(info.get("last_seen", 0) or 0)
+                test_port = int(self.ssh_port) if str(self.ssh_port).isdigit() else 22
+            except (ValueError, TypeError):
+                test_port = 22
+                
+            ssh_ok = check_ssh_running(test_port)
 
-                    if last_seen_udp > last_seen_gui:
-                        # Extract name from status json if available
-                        name = dev_id
-                        status = info.get("status", {})
-                        if status and isinstance(status, dict):
-                            name = status.get("device_name", status.get("name", dev_id))
+            # Update IP label - show LAN and Tailscale IPs
+            all_ips = get_all_ips()
+            local_ips = all_ips.get("local", [])
+            tailscale_ip = get_tailscale_ip()
+            
+            display_parts = []
+            if local_ips:
+                display_parts.append(f"LAN: {local_ips[0]}")
+            
+            if tailscale_ip:
+                display_parts.append(f"Tailscale: {tailscale_ip}")
+            elif globals().get("_cached_tailscale_ip") == "Detecting...":
+                display_parts.append("Tailscale: Detecting...")
+                
+            current_display = "\n".join(display_parts) if display_parts else "Scanning..."
 
-                        current_dev.update(
-                            {
-                                "id": dev_id,
-                                "name": name,
-                                "ip": info.get("ip"),
-                                "last_seen": last_seen_udp,
-                            }
-                        )
-                        self.devices[dev_id] = current_dev
-            except Exception as e:
-                log.debug(f"Error merging signaling devices: {e}")
+            if hasattr(self, "ip_label"):
+                ip_text = self.ip_label.cget("text")
+                if ip_text != current_display:
+                    self.ip_label.configure(text=current_display)
 
-        now = time.time()
-        active_devices = [
-            d
-            for d in (self.devices or {}).values()
-            if now - float(d.get("last_seen", 0) or 0) < 300
-        ]
-
-        # Update broadcast status label based on connection state
-        if hasattr(self, "broadcast_status_label"):
-            if active_devices:
-                self.broadcast_status_label.configure(
-                    text=f"● {len(active_devices)} Connected", fg=COLORS["success"]
-                )
-            elif self.is_broadcasting and ssh_ok:
-                self.broadcast_status_label.configure(
-                    text="● Broadcasting", fg=COLORS["success"]
-                )
-            elif ssh_ok:
-                self.broadcast_status_label.configure(
-                    text="● Ready", fg=COLORS["warning"]
+            # Update SSH label with port info
+            if ssh_ok:
+                self.ssh_label.configure(
+                    text=f"SSH: {self.ssh_port} [OK]", fg=COLORS["success"]
                 )
             else:
-                self.broadcast_status_label.configure(
-                    text="● No SSH", fg=COLORS["error"]
+                self.ssh_label.configure(
+                    text=f"SSH: {self.ssh_port} [X]", fg=COLORS["error"]
                 )
 
-        # Update connected devices display
-        self.refresh_connected_devices_ui()
+            # Merge active devices from Signaling Service (UDP)
+            if hasattr(self, "signaling_service") and self.signaling_service:
+                try:
+                    # Use copy to avoid thread contention
+                    signaling_devices = self.signaling_service.active_devices.copy()
+                    for dev_id, info in signaling_devices.items():
+                        # Update if we have new info or it's a new device
+                        current_dev = self.devices.get(dev_id, {})
+                        last_seen_gui = float(current_dev.get("last_seen", 0) or 0)
+                        last_seen_udp = float(info.get("last_seen", 0) or 0)
 
+                        if last_seen_udp > last_seen_gui:
+                            # Extract name from status json if available
+                            name = dev_id
+                            status = info.get("status", {})
+                            if status and isinstance(status, dict):
+                                name = status.get("device_name", status.get("name", dev_id))
+
+                            current_dev.update(
+                                {
+                                    "id": dev_id,
+                                    "name": name,
+                                    "ip": info.get("ip"),
+                                    "last_seen": last_seen_udp,
+                                }
+                            )
+                            self.devices[dev_id] = current_dev
+                except Exception as e:
+                    log.debug(f"Error merging signaling devices: {e}")
+
+            now = time.time()
+            active_devices = [
+                d
+                for d in (self.devices or {}).values()
+                if now - float(d.get("last_seen", 0) or 0) < 300
+            ]
+
+            # Update broadcast status label based on connection state
+            if hasattr(self, "broadcast_status_label"):
+                if active_devices:
+                    self.broadcast_status_label.configure(
+                        text=f"● {len(active_devices)} Connected", fg=COLORS["success"]
+                    )
+                elif self.is_broadcasting and ssh_ok:
+                    self.broadcast_status_label.configure(
+                        text="● Broadcasting", fg=COLORS["success"]
+                    )
+                elif ssh_ok:
+                    self.broadcast_status_label.configure(
+                        text="● Ready", fg=COLORS["warning"]
+                    )
+                else:
+                    self.broadcast_status_label.configure(
+                        text="● No SSH", fg=COLORS["error"]
+                    )
+
+            # Update connected devices display - only refresh periodically to reduce CPU usage
+            self.refresh_connected_devices_ui()
+        except Exception as e:
+            log.error(f"Error in update_status loop: {e}", exc_info=True)
+
+        # Reduced from 30000ms to 10000ms to improve responsiveness
         self.root.after(10000, self.update_status)
 
     def start_data_receiver(self):
@@ -6238,12 +6304,14 @@ class ShadowBridgeApp:
             "claude": "Claude Code",
             "codex": "Codex",
             "gemini": "Gemini",
+            "opencode": "OpenCode",
             "aider": "Aider",
             "ollama": "Ollama",
+            "tailscale": "Tailscale",
         }
 
         def check():
-            # Check CLI tools
+            # Check tools
             for tool_id, canvas in self.tool_status.items():
                 with self._tool_install_lock:
                     # Don't stomp the UI if an install/uninstall is currently in progress.
@@ -6278,21 +6346,6 @@ class ShadowBridgeApp:
 
                 self.root.after(0, update_ui)
 
-            # Check Tailscale
-            ts_ip = get_tailscale_ip()
-
-            def update_tailscale():
-                if ts_ip:
-                    self.tailscale_btn.configure(
-                        text=f"{ts_ip}",
-                        state="disabled",
-                        bg=COLORS["bg_card"],
-                        disabledforeground="white",
-                    )
-                    self._update_tool_dot(self.tailscale_status, COLORS["success"])
-
-            self.root.after(0, update_tailscale)
-
         threading.Thread(target=check, daemon=True).start()
         # NOTE: Removed auto-polling - only check at startup and after install/uninstall clicks
 
@@ -6302,7 +6355,7 @@ class ShadowBridgeApp:
 
     def get_connection_info(self):
         """Get connection info with simplified fallback options.
-        
+
         Only advertises 2 connection options:
         1. Private LAN IP (most common use case)
         2. Tailscale IP (for cross-network access)
@@ -6332,7 +6385,12 @@ class ShadowBridgeApp:
         # 2. Tailscale IP (works across networks)
         if tailscale_ip:
             hosts_to_try.append(
-                {"host": tailscale_ip, "type": "tailscale", "stable": True, "label": "Tailscale"}
+                {
+                    "host": tailscale_ip,
+                    "type": "tailscale",
+                    "stable": True,
+                    "label": "Tailscale",
+                }
             )
 
         # Primary host (best available - prefer Tailscale for stability)
@@ -6358,7 +6416,8 @@ class ShadowBridgeApp:
     def update_qr_code(self):
         """Generate and display QR code - only if changed."""
         if not HAS_QRCODE or not HAS_PIL:
-            self.qr_label.configure(text="QR unavailable")
+            if hasattr(self, "qr_label"):
+                self.qr_label.configure(text="QR unavailable")
             return
 
         try:
@@ -6375,24 +6434,30 @@ class ShadowBridgeApp:
             qr = qrcode.QRCode(
                 version=1,
                 error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=8,
+                box_size=10,  # Increased box size
                 border=2,
             )
             qr.add_data(qr_data)
             qr.make(fit=True)
 
-            img = qr.make_image(fill_color=COLORS["text"], back_color=COLORS["bg_card"])
+            # Create PIL image with WHITE modules on dark card background
+            img = qr.make_image(fill_color="white", back_color=COLORS["bg_card"])
+            # Resize to be much larger
             img = img.resize(
-                (270, 270),
+                (380, 380),
                 Image.Resampling.LANCZOS
                 if hasattr(Image, "Resampling")
                 else Image.LANCZOS,
             )
 
-            self.qr_image = ImageTk.PhotoImage(img)
-            self.qr_label.configure(image=self.qr_image, text="")
+            # Convert to PhotoImage for Tkinter
+            self.qr_photo = ImageTk.PhotoImage(img)
+            if hasattr(self, "qr_label"):
+                self.qr_label.configure(image=self.qr_photo, text="")
         except Exception as e:
-            self.qr_label.configure(text="QR Error")
+            log.error(f"Error updating QR code: {e}", exc_info=True)
+            if hasattr(self, "qr_label"):
+                self.qr_label.configure(text="QR error")
 
     def auto_start_broadcast(self):
         """Auto-start broadcasting if SSH is running."""
@@ -6605,13 +6670,35 @@ class ShadowBridgeApp:
         self._web_dashboard_monitor_stop_event.clear()
 
         def monitor_loop():
-            while not self._web_dashboard_monitor_stop_event.wait(4):
+            log.info("Web dashboard monitor loop started")
+            while not self._web_dashboard_monitor_stop_event.is_set():
                 try:
+                    # Increased from 4s to 6s to reduce CPU load while still providing reasonable response time
+                    time.sleep(6)
+
+                    if self._web_dashboard_monitor_stop_event.is_set():
+                        break
+
                     if not self._is_web_server_process_alive():
-                        log.debug("Web dashboard monitor detected downtime, restarting")
+                        # Only log restart attempts once every 60 seconds to reduce log spam
+                        if not hasattr(self, "_last_restart_log_time"):
+                            self._last_restart_log_time = 0
+                        now = time.time()
+                        if now - self._last_restart_log_time > 60:
+                            log.debug(
+                                "Web dashboard monitor detected downtime, restarting"
+                            )
+                            self._last_restart_log_time = now
                         self._ensure_web_dashboard_running()
                 except Exception as exc:
-                    log.debug(f"Web dashboard monitor error: {exc}")
+                    # Only log errors once every 60 seconds to reduce log spam
+                    if not hasattr(self, "_last_monitor_error_time"):
+                        self._last_monitor_error_time = 0
+                    now = time.time()
+                    if now - self._last_monitor_error_time > 60:
+                        log.debug(f"Web dashboard monitor error: {exc}")
+                        self._last_monitor_error_time = now
+                    time.sleep(1)  # Prevent tight loop on error
 
         thread = threading.Thread(target=monitor_loop, daemon=True)
         thread.start()
@@ -6650,80 +6737,108 @@ class ShadowBridgeApp:
         self._start_web_dashboard_process(open_browser=True, show_errors=True)
 
     def check_web_server_status(self):
-        """Check if web dashboard server is running and update status indicator."""
-        # Use a more generic check for the dashboard button which we know exists
+        """Check if web dashboard server is running and update status indicator - non-blocking."""
         if not hasattr(self, "web_dashboard_btn"):
             self.root.after(3000, self.check_web_server_status)
             return
 
-        try:
-            import urllib.request
+        def perform_check():
+            try:
+                import urllib.request
 
-            # Create a request to avoid some bot detection/WAF if present
-            req = urllib.request.Request("http://127.0.0.1:6767")
-            with urllib.request.urlopen(req, timeout=1) as response:
-                pass
+                # Create a request to check local server
+                req = urllib.request.Request("http://127.0.0.1:6767")
+                with urllib.request.urlopen(req, timeout=1) as response:
+                    pass
+                status = True
+            except Exception:
+                status = False
 
-            # Server is running
-            if hasattr(self, "web_status_dot") and self.web_status_dot:
-                self.web_status_dot.itemconfig("dot", fill=COLORS["success"])
-            self.web_dashboard_btn.configure(text="Open Web Dashboard")
-        except Exception:
-            # Server not running
-            if hasattr(self, "web_status_dot") and self.web_status_dot:
-                self.web_status_dot.itemconfig("dot", fill=COLORS["text_muted"])
-            self.web_dashboard_btn.configure(text="Launch Web Dashboard")
-            log.debug("Web dashboard down; triggering monitor to restart it")
-            self._ensure_web_dashboard_running()
+            def update_ui(is_running=status):
+                if is_running:
+                    # Server is running
+                    if hasattr(self, "web_status_dot") and self.web_status_dot:
+                        self.web_status_dot.itemconfig("dot", fill=COLORS["success"])
+                    self.web_dashboard_btn.configure(text="Open Web Dashboard")
+                else:
+                    # Server not running
+                    if hasattr(self, "web_status_dot") and self.web_status_dot:
+                        self.web_status_dot.itemconfig("dot", fill=COLORS["text_muted"])
+                    self.web_dashboard_btn.configure(text="Launch Web Dashboard")
+                    log.debug("Web dashboard down; triggering monitor to restart it")
+                    self._ensure_web_dashboard_running()
 
-        # Schedule next check
-        self.root.after(3000, self.check_web_server_status)
+                # Schedule next check - increased from 5000ms to 15000ms to reduce CPU load
+                self.root.after(15000, self.check_web_server_status)
+
+            self.root.after(0, update_ui)
+
+        threading.Thread(target=perform_check, daemon=True).start()
 
     def start_broadcast(self):
         """Start discovery server."""
-        try:
-            # Ensure firewall rule exists for discovery
-            setup_firewall_rule()
 
-            self.discovery_server = DiscoveryServer(self.get_connection_info())
-            self.discovery_server.start()
-            self.is_broadcasting = True
-            # Update status label
-            if hasattr(self, "broadcast_status_label"):
-                self.broadcast_status_label.configure(
-                    text="● Broadcasting", fg=COLORS["success"]
-                )
-            log.info("Discovery server started successfully")
+        def do_start():
+            try:
+                # Ensure firewall rule exists for discovery (blocking subprocess)
+                setup_firewall_rule()
 
-            # Register with watchdog for auto-restart
-            if self.watchdog:
-                self.watchdog.register(
-                    "DiscoveryServer",
-                    self.discovery_server,
-                    self.start_broadcast_thread,
-                    max_restarts=5,
-                    restart_window=300,
+                self.discovery_server = DiscoveryServer(self.get_connection_info(), app_instance=self)
+                self.discovery_server.start()
+                self.is_broadcasting = True
+
+                # Update status label on main thread
+                self.root.after(
+                    0,
+                    lambda: self.broadcast_status_label.configure(
+                        text="● Broadcasting", fg=COLORS["success"]
+                    )
+                    if hasattr(self, "broadcast_status_label")
+                    else None,
                 )
-        except Exception as e:
-            log.error(f"Failed to start discovery server: {e}")
-            self.is_broadcasting = False
-            if hasattr(self, "broadcast_status_label"):
-                self.broadcast_status_label.configure(
-                    text="● Broadcast Failed", fg=COLORS["error"]
+
+                log.info("Discovery server started successfully")
+
+                # Register with watchdog for auto-restart
+                if self.watchdog:
+                    self.watchdog.register(
+                        "DiscoveryServer",
+                        self.discovery_server,
+                        self.start_broadcast_thread,
+                        max_restarts=5,
+                        restart_window=300,
+                    )
+            except Exception as e:
+                log.error(f"Failed to start discovery server: {e}")
+                self.is_broadcasting = False
+
+                self.root.after(
+                    0,
+                    lambda: self.broadcast_status_label.configure(
+                        text="● Broadcast Failed", fg=COLORS["error"]
+                    )
+                    if hasattr(self, "broadcast_status_label")
+                    else None,
                 )
-            # Show error to user
-            messagebox.showerror(
-                "Network Discovery Failed",
-                f"Could not start network discovery service.\n\n"
-                f"Error: {e}\n\n"
-                f"Check that port {DISCOVERY_PORT} is not in use by another application.",
-            )
+
+                # Show error to user on main thread
+                self.root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Network Discovery Failed",
+                        f"Could not start network discovery service.\n\n"
+                        f"Error: {e}\n\n"
+                        f"Check that port {DISCOVERY_PORT} is not in use by another application.",
+                    ),
+                )
+
+        threading.Thread(target=do_start, daemon=True).start()
 
     def start_broadcast_thread(self):
         """Internal method to create new DiscoveryServer thread for watchdog restart."""
         try:
             setup_firewall_rule()
-            self.discovery_server = DiscoveryServer(self.get_connection_info())
+            self.discovery_server = DiscoveryServer(self.get_connection_info(), app_instance=self)
             self.discovery_server.start()
             self.is_broadcasting = True
             if hasattr(self, "broadcast_status_label"):
@@ -7054,98 +7169,6 @@ class ShadowBridgeApp:
         ):
             webbrowser.open(url)
 
-    def install_tailscale(self):
-        """Install Tailscale for stable connections."""
-        # Check if already installed
-        if get_tailscale_ip():
-            self.connect_button.config(
-                text="[OK] Connected", state="disabled", bg=COLORS["success"]
-            )
-            self.tailscale_status.delete("all")
-            self.tailscale_status.create_oval(
-                0, 0, 8, 8, fill=COLORS["success"], outline=""
-            )
-            messagebox.showinfo(
-                "Tailscale", "Tailscale is already installed and connected!"
-            )
-            return
-
-        self.tailscale_btn.configure(
-            text="Installing...", state="disabled", bg=COLORS["warning"]
-        )
-
-        def do_install():
-            try:
-                import urllib.request
-                import tempfile
-                
-                system = platform.system()
-                if system == "Windows":
-                    url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe"
-                    ext = ".exe"
-                elif system == "Darwin":
-                    url = "https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg"
-                    ext = ".pkg"
-                else:
-                    # Linux users usually install via script
-                    url = "https://tailscale.com/install.sh"
-                    ext = ".sh"
-
-                temp_dir = tempfile.gettempdir()
-                installer_path = os.path.join(temp_dir, f"tailscale-setup{ext}")
-
-                self.root.after(
-                    0, lambda: self.tailscale_btn.configure(text="Downloading...")
-                )
-
-                urllib.request.urlretrieve(url, installer_path)
-
-                self.root.after(
-                    0, lambda: self.tailscale_btn.configure(text="Running installer...")
-                )
-
-                # Run installer (will prompt for admin)
-                if IS_WINDOWS:
-                    os.startfile(installer_path)
-                elif system == "Darwin":
-                    subprocess.run(["open", installer_path])
-                else:
-                    # For Linux, just show the file and instructions
-                    subprocess.run(["xdg-open", temp_dir])
-                    messagebox.showinfo("Tailscale", "Download complete. Please run the install.sh script with sudo.")
-
-                self.root.after(0, lambda: self._tailscale_install_done())
-
-            except Exception as e:
-                self.root.after(0, lambda: self._tailscale_install_failed(str(e)))
-
-        threading.Thread(target=do_install, daemon=True).start()
-
-    def _tailscale_install_done(self):
-        """Tailscale installer launched."""
-        self.tailscale_btn.configure(
-            text="Restart after setup", state="normal", bg=COLORS["accent"]
-        )
-        messagebox.showinfo(
-            "Tailscale Setup",
-            "Tailscale installer launched!\n\n"
-            "1. Complete the installation\n"
-            "2. Sign in to Tailscale\n"
-            "3. Install Tailscale on your phone too\n"
-            "4. Restart ShadowBridge\n\n"
-            "Your devices will get stable 100.x.x.x IPs that never change!",
-        )
-
-    def _tailscale_install_failed(self, error):
-        """Tailscale install failed."""
-        self.tailscale_btn.configure(
-            text="Tailscale", state="normal", bg=COLORS["success"]
-        )
-        messagebox.showerror(
-            "Install Failed",
-            f"Failed to download Tailscale:\n\n{error}\n\nVisit tailscale.com/download",
-        )
-
     def toggle_startup(self):
         """Toggle Windows startup."""
         enabled = self.startup_var.get()
@@ -7415,11 +7438,26 @@ Or run in PowerShell (Admin):
         self.tray_thread = threading.Thread(target=self.tray_icon.run)
         self.tray_thread.start()
 
+    def show_window(self):
+        """Make window visible and bring to front."""
+        if hasattr(self, "tray_icon") and self.tray_icon:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+            self.tray_icon = None
+
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
     def _restore_from_tray(self):
         """Restore from tray."""
         self.tray_icon = None
         self.root.deiconify()
-        self.root.lift()
+        # Small delay to allow window to paint before lifting
+        self.root.after(50, lambda: self.root.lift())
+        self.root.after(50, lambda: self.root.focus_force())
 
     def quit_app(self):
         """Clean exit."""
@@ -7503,7 +7541,7 @@ Or run in PowerShell (Admin):
         now = time.time()
         devices_sorted = sorted(
             (self.devices or {}).values(),
-            key=lambda d: d.get("last_seen", 0),
+            key=lambda d: d.get("last_seen") or 0,
             reverse=True,
         )
         return [
@@ -7538,19 +7576,6 @@ Or run in PowerShell (Admin):
             self.connected_device_label.configure(
                 text=new_text, foreground=COLORS["success"]
             )
-            return
-
-        # Show first connected device name
-        device = active[0]
-        name = device.get("name") or device.get("id") or "Unknown"
-        if len(active) > 1:
-            self.connected_device_label.configure(
-                text=f"● {name} +{len(active) - 1}", foreground=COLORS["success"]
-            )
-        else:
-            self.connected_device_label.configure(
-                text=f"● {name}", foreground=COLORS["success"]
-            )
 
     def refresh_project_device_menu(self):
         """Refresh the Projects device selector menu."""
@@ -7579,7 +7604,7 @@ Or run in PowerShell (Admin):
 
             devices_sorted = sorted(
                 (self.devices or {}).values(),
-                key=lambda d: d.get("last_seen", 0),
+                key=lambda d: d.get("last_seen") or 0,
                 reverse=True,
             )
             for device in devices_sorted:
@@ -8775,13 +8800,13 @@ def _start_show_listener(lock_socket):
     t.start()
 
 
-def check_single_instance():
+def check_single_instance(port=19287):
     """Check if another instance is already running. Returns lock socket if successful."""
     try:
         # Try to bind to a specific port - if it fails, another instance is running
         lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         lock_socket.bind(
-            ("127.0.0.1", 19287)
+            ("127.0.0.1", port)
         )  # Use a dedicated port for instance lock (not 19286 - companion uses that)
         lock_socket.listen(1)
         _start_show_listener(lock_socket)
@@ -8792,23 +8817,27 @@ def check_single_instance():
 
 def run_web_dashboard_server(open_browser: bool):
     """Run the web dashboard server (used by the --web-server mode)."""
-    # Single-instance check using socket lock on port 6766
+    # Single-instance check using dynamic lock port
+    web_lock_port = 6766
+    if ENVIRONMENT == "DEBUG": web_lock_port = 6776
+    elif ENVIRONMENT == "AIDEV": web_lock_port = 6786
+    
     lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        lock_socket.bind(("127.0.0.1", 6766))
+        lock_socket.bind(("127.0.0.1", web_lock_port))
         lock_socket.listen(1)
     except OSError:
         # Another instance is running - just open browser to existing
-        print("Web dashboard already running, opening browser...")
+        print(f"{ENVIRONMENT} dashboard already running, opening browser...")
         if open_browser:
-            webbrowser.open("http://127.0.0.1:6767")
+            webbrowser.open(f"http://127.0.0.1:{WEB_PORT}")
         return
 
     try:
         from web.app import create_app, socketio
 
         host = "0.0.0.0"  # Allow external access
-        port = 6767
+        port = WEB_PORT
 
         # CRITICAL FIX: Start DataReceiver and Discovery server for SSH key exchange
         log.info("Starting DataReceiver for key exchange in web-server mode...")
@@ -8939,7 +8968,7 @@ def run_web_dashboard_server(open_browser: bool):
         import atexit
 
         signal.signal(signal.SIGINT, shutdown_handler)
-        if hasattr(signal, 'SIGTERM'):
+        if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, shutdown_handler)
 
         # Register atexit handler for cleanup
@@ -9181,18 +9210,72 @@ def run_audio_command():
         sys.exit(1)
 
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """Global exception handler to log tracebacks."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    
+    error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    log.critical(f"Unhandled exception:\n{error_msg}")
+    
+    # Save to desktop for easy retrieval
+    try:
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        with open(os.path.join(desktop, "shadow_error.log"), "a") as f:
+            f.write(f"\n--- {datetime.now()} ---\n{error_msg}\n")
+    except Exception:
+        pass
+    
+    # Also show a non-blocking messagebox if possible
+    try:
+        import tkinter.messagebox as messagebox
+        # Try to use the existing root if available
+        parent = None
+        if "_app_instance" in globals() and _app_instance and hasattr(_app_instance, "root"):
+            parent = _app_instance.root
+            
+        messagebox.showerror(
+            "ShadowBridge Error", 
+            f"An unhandled error occurred:\n\n{exc_value}\n\nSee shadow_error.log on your desktop.",
+            parent=parent
+        )
+    except Exception:
+        pass
+
+sys.excepthook = handle_exception
+
 def main():
     """Main entry point."""
-    # Handle command modes (no GUI, just CLI)
+    global DEBUG_BUILD, AIDEV_MODE, AGENT_MODE, _single_instance
+    
+    # Refresh flags from current argv (in case they were modified or for clarity)
+    DEBUG_BUILD = "--debug" in sys.argv
+    AIDEV_MODE = "--aidev" in sys.argv
+    AGENT_MODE = "--mode" in sys.argv and "agent" in sys.argv
+    PING_MODE = "--ping" in sys.argv
+
+    if PING_MODE:
+        if HAS_SINGLETON:
+            lock_name = f"ShadowBridge{ENVIRONMENT}"
+            instance_port = 19287
+            if ENVIRONMENT == "DEBUG": instance_port = 19297
+            elif ENVIRONMENT == "AIDEV": instance_port = 19307
+            
+            inst = SingleInstance(lock_name, port=instance_port)
+            if not inst.acquire():
+                log.info("Sending ping to existing instance")
+                inst.send_ping()
+                sys.exit(0)
+            else:
+                log.info("No existing instance found to ping")
+                sys.exit(0)
+        else:
+            sys.exit(0)
+
     if IMAGE_MODE:
         run_image_command()
         return
-
-    if BROWSER_MODE:
-        run_browser_command()
-        return
-
-    if VIDEO_MODE:
         run_video_command()
         return
 
@@ -9201,7 +9284,11 @@ def main():
         return
 
     if ASSEMBLY_MODE:
-        run_assembly_command()
+        # run_assembly_command()  # Not implemented yet in this version
+        return
+
+    if BROWSER_MODE:
+        # run_browser_command() # Not implemented yet
         return
 
     if WEB_SERVER_MODE:
@@ -9209,84 +9296,104 @@ def main():
         run_web_dashboard_server(open_browser=open_browser)
         return
 
+    if AGENT_MODE:
+        log.info("Running in ShadowAgent mode (Headless)")
+        # Headless mode for AIDEV agents. 
+        # Starts web server without browser and without tray GUI.
+        
+        # Check for existing instance
+        if HAS_SINGLETON:
+            _single_instance = SingleInstance("ShadowBridgeAgent", port=19288)
+            if not _single_instance.acquire():
+                log.info("Another ShadowAgent instance is already running.")
+                sys.exit(0)
+        
+        # Register install path
+        try:
+            register_install_path()
+        except Exception:
+            pass
+            
+        # Start web server (blocking)
+        run_web_dashboard_server(open_browser=False)
+        return
+
     start_minimized = "--minimized" in sys.argv
 
-    # Check for existing instance using robust SingleInstance class
-    global _single_instance
+    # Check for existing instance using robust SingleInstance if available
     if HAS_SINGLETON:
-        _single_instance = SingleInstance(
-            app_name="ShadowBridge",
-            port=19287,
-            lock_dir=Path.home() / ".shadowai"
-        )
+        # Use different lock names and ports for side-by-side instances
+        lock_name = f"ShadowBridge{ENVIRONMENT}"
+        instance_port = 19287
+        if ENVIRONMENT == "DEBUG": instance_port = 19297
+        elif ENVIRONMENT == "AIDEV": instance_port = 19307
         
-        # Try to clean up stale locks from crashed instances
-        if _single_instance.is_stale_lock():
-            log.info("Cleaning up stale instance lock...")
-            _single_instance.cleanup_stale_lock()
-        
+        _single_instance = SingleInstance(lock_name, port=instance_port)
         if not _single_instance.acquire():
-            # Another instance is running - send activation and exit
-            log.info("Another instance is running, sending activation signal")
+            # Another instance is already running
+            log.info(f"Another {ENVIRONMENT} instance is already running, requesting activation")
             _single_instance.send_activate()
             sys.exit(0)
     else:
-        # Fallback to old socket-only method
-        lock_socket = check_single_instance()
+        # Fallback to simple socket check
+        lock_port = 19287
+        if ENVIRONMENT == "DEBUG": lock_port = 19297
+        elif ENVIRONMENT == "AIDEV": lock_port = 19307
+        
+        lock_socket = check_single_instance(port=lock_port)
         if lock_socket is None:
-            # Another instance is running - try to activate it with retry
-            activation_sent = False
-            for attempt in range(3):
-                show_sock = None
+            # Another instance is already running - try to show it
+            if IS_WINDOWS:
                 try:
                     show_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     show_sock.settimeout(2)
-                    show_sock.connect(("127.0.0.1", 19287))
+                    show_sock.connect(("127.0.0.1", lock_port))
                     show_sock.sendall(b"SHOW")
-                    log.info("Sent SHOW message to existing instance")
-                    activation_sent = True
-                    break
-                except socket.error as e:
-                    wait_time = 0.5 * (2 ** attempt)
-                    log.debug(f"SHOW attempt {attempt + 1}/3 failed: {e}, retrying in {wait_time}s")
-                    time.sleep(wait_time)
-                finally:
-                    if show_sock:
-                        try:
-                            show_sock.close()
-                        except Exception:
-                            pass
-
-            if not activation_sent:
-                log.warning("Could not send activation to existing instance")
-                if not IS_WINDOWS:
-                    print("ShadowBridge is already running.")
+                    show_sock.close()
+                except Exception:
+                    pass
             sys.exit(0)
 
     if not HAS_PIL:
         print("Missing pillow. Install with: pip install pillow")
         sys.exit(1)
 
-    log.info(f"ShadowBridge v{APP_VERSION} starting...")
+    log.info(f"ShadowBridge {ENVIRONMENT} v{APP_VERSION} starting...")
 
     # Register install path so Android app can find us via SSH
-    register_install_path()
+    try:
+        register_install_path()
+    except Exception as e:
+        log.error(f"Failed to register install path: {e}")
 
     app = ShadowBridgeApp()
     global _app_instance
     _app_instance = app
-    log.info("ShadowBridge initialized")
+    log.info(f"ShadowBridge {ENVIRONMENT} initialized")
 
-    # Wire activation callback for SingleInstance IPC
-    if HAS_SINGLETON and '_single_instance' in dir():
+    if HAS_SINGLETON:
         def on_activate():
             """Called when another instance requests activation."""
-            log.info("Received activation request from another instance")
-            # Schedule on main thread (Tkinter is not thread-safe)
-            app.root.after(0, app.show_window)
-        
+            log.info(f"Received activation request for {ENVIRONMENT}")
+            try:
+                if "_app_instance" in globals() and _app_instance:
+                    # Schedule on main thread (Tkinter is not thread-safe)
+                    _app_instance.root.after(0, _app_instance.show_window)
+            except Exception as e:
+                log.error(f"Failed to process activation: {e}")
+
         _single_instance.set_activation_callback(on_activate)
-        log.info("SingleInstance activation callback registered")
+
+        def on_ping():
+            # Called when another instance requests ping
+            log.info(f"Received ping request for {ENVIRONMENT}")
+            try:
+                if "_app_instance" in globals() and _app_instance:
+                    _app_instance.root.after(0, _app_instance.show_ping_effects)
+            except Exception as e:
+                log.error(f"Failed to process ping: {e}")
+
+        _single_instance.set_ping_callback(on_ping)
 
     if start_minimized and HAS_TRAY:
         app.root.after(500, app.minimize_to_tray)
