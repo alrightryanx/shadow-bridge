@@ -1004,7 +1004,7 @@ if ENVIRONMENT == "DEBUG": NOTE_CONTENT_PORT = 19295
 elif ENVIRONMENT == "AIDEV": NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.100"
+APP_VERSION = "1.118"
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
@@ -2227,18 +2227,6 @@ class SignalingService(threading.Thread):
         self.active_devices = {}  # device_id -> {last_ip, last_seen, last_latency}
         self._lock = threading.Lock()
 
-
-    def show_ping_effects(self):
-        # Focus window, play sound, and show confetti
-        log.info("Showing ping effects")
-        try:
-            self.show_window()
-            if HAS_EFFECTS:
-                play_ping_sound()
-                confetti = ConfettiEffect(self.root)
-                confetti.start(duration_ms=4000)
-        except Exception as e:
-            log.error(f"Failed to show ping effects: {e}")
     def run(self):
         log.info(f"Starting Signaling Service on UDP {self.PORT}")
         try:
@@ -2813,14 +2801,14 @@ class DataReceiver(threading.Thread):
                     log.error(f"Message too large from {addr}: {msg_length} bytes")
                 return
 
-                data = b""
-                while len(data) < msg_length:
-                    # Increase buffer size for better performance
-                    chunk = conn.recv(min(65536, msg_length - len(data)))  # 64KB buffer
-                    if not chunk:
-                        # Skip logging to reduce spam
-                        break
-                    data += chunk
+            data = b""
+            while len(data) < msg_length:
+                # Increase buffer size for better performance
+                chunk = conn.recv(min(65536, msg_length - len(data)))  # 64KB buffer
+                if not chunk:
+                    # Skip logging to reduce spam
+                    break
+                data += chunk
 
             # Skip verbose debug logging to reduce log spam
             pass
@@ -3079,14 +3067,19 @@ class DataReceiver(threading.Thread):
             except (socket.error, BrokenPipeError, ConnectionResetError):
                 log.debug(f"Could not send error response: connection closed")
         finally:
+            try:
+                conn.shutdown(socket.SHUT_WR)
+                time.sleep(0.5)  # Allow time for data flush
+            except (socket.error, OSError):
+                pass
             conn.close()
 
     def _send_response(self, conn, response):
         """Send length-prefixed JSON response."""
         try:
             data = json.dumps(response).encode("utf-8")
-            conn.send(len(data).to_bytes(4, "big"))
-            conn.send(data)
+            conn.sendall(len(data).to_bytes(4, "big"))
+            conn.sendall(data)
         except (socket.error, BrokenPipeError, ConnectionResetError, OSError):
             log.debug("Failed to send response: connection closed")
 
@@ -4093,8 +4086,8 @@ class CompanionRelayServer(threading.Thread):
     def _send_to_conn(self, conn, message):
         """Send length-prefixed JSON message to connection."""
         data = json.dumps(message).encode("utf-8")
-        conn.send(len(data).to_bytes(4, "big"))
-        conn.send(data)
+        conn.sendall(len(data).to_bytes(4, "big"))
+        conn.sendall(data)
 
     def _notify_web_dashboard_sessions_updated(self, device_id):
         """Notify web dashboard that sessions have been updated (triggers WebSocket broadcast)."""
@@ -7452,6 +7445,32 @@ Or run in PowerShell (Admin):
         self.root.lift()
         self.root.focus_force()
 
+    def show_ping_effects(self):
+        """
+        Show celebration effects when connection test succeeds.
+        Brings window to focus, plays sound, and shows confetti.
+        Called via IPC when Android app sends --ping command.
+        """
+        log.info("Showing ping celebration effects")
+        try:
+            # Bring window to foreground
+            self.show_window()
+
+            # Play sound and show confetti in GUI
+            if HAS_EFFECTS:
+                play_ping_sound()
+                confetti = ConfettiEffect(self.root)
+                confetti.start(duration_ms=4000)
+
+            # Also trigger celebration in web dashboard
+            try:
+                from web.routes.websocket import broadcast_celebrate
+                broadcast_celebrate("Connected from ShadowAI!")
+            except Exception as web_err:
+                log.debug(f"Web celebration not available: {web_err}")
+        except Exception as e:
+            log.error(f"Failed to show ping effects: {e}")
+
     def _restore_from_tray(self):
         """Restore from tray."""
         self.tray_icon = None
@@ -8593,8 +8612,8 @@ Or run in PowerShell (Admin):
                 request = json.dumps(
                     {"action": "fetch_note", "note_id": note_id}
                 ).encode("utf-8")
-                sock.send(len(request).to_bytes(4, "big"))
-                sock.send(request)
+                sock.sendall(len(request).to_bytes(4, "big"))
+                sock.sendall(request)
 
                 response_len = int.from_bytes(sock.recv(4), "big")
                 if response_len <= 0 or response_len > 1000000:
@@ -8718,8 +8737,8 @@ Or run in PowerShell (Admin):
                 request = json.dumps(
                     {"action": "fetch_note", "note_id": note_id}
                 ).encode("utf-8")
-                sock.send(len(request).to_bytes(4, "big"))
-                sock.send(request)
+                sock.sendall(len(request).to_bytes(4, "big"))
+                sock.sendall(request)
 
                 # Read response
                 response_len = int.from_bytes(sock.recv(4), "big")
@@ -8913,46 +8932,69 @@ def run_web_dashboard_server(open_browser: bool):
         host = "0.0.0.0"  # Allow external access
         port = WEB_PORT
 
-        # CRITICAL FIX: Start DataReceiver and Discovery server for SSH key exchange
-        log.info("Starting DataReceiver for key exchange in web-server mode...")
+        # Check if port is already in use (main GUI may already be running DataReceiver)
+        def is_port_in_use(port):
+            """Check if a port is already bound by another process."""
+            import socket
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)  # Don't reuse
+            try:
+                test_sock.bind(("127.0.0.1", port))
+                test_sock.close()
+                return False  # Port is free
+            except OSError:
+                return True  # Port is in use
+            finally:
+                try:
+                    test_sock.close()
+                except Exception:
+                    pass
 
-        # Create DataReceiver with auto-approval callback
-        data_receiver_ref = [None]  # Use list to allow mutation in nested function
+        # Only start DataReceiver if the port is free (main GUI not running)
+        data_receiver = None
+        data_receiver_ref = [None]
 
-        def headless_key_approval(device_id, device_name, ip):
-            """Auto-approve SSH keys in headless mode (web-server only)."""
-            log.warning(
-                f"HEADLESS MODE: Auto-approving SSH key for {device_name} ({device_id}) from {ip}"
-            )
-            log.warning(
-                "[WARN] Running in --web-server mode without GUI, auto-approving all SSH key requests"
-            )
-            log.warning(
-                "[WARN] For manual approval, run ShadowBridge.exe without --web-server flag"
-            )
-            # Auto-approve the device
-            if data_receiver_ref[0]:
-                result = data_receiver_ref[0].approve_device(device_id)
-                log.info(f"Auto-approval result: {result}")
+        if is_port_in_use(DATA_PORT):
+            log.info(f"Port {DATA_PORT} already in use - main GUI is handling key exchanges")
+            log.info("Skipping DataReceiver in web-server mode to avoid conflicts")
+        else:
+            # CRITICAL FIX: Start DataReceiver and Discovery server for SSH key exchange
+            log.info("Starting DataReceiver for key exchange in web-server mode (headless)...")
 
-        data_receiver = DataReceiver(
-            on_data_received=lambda device_id, projects: log.info(
-                f"Projects received from {device_id}"
-            ),
-            on_device_connected=lambda device_id, ip: log.info(
-                f"Device connected: {device_id} from {ip}"
-            ),
-            on_notes_received=lambda device_id, notes: log.info(
-                f"Notes received from {device_id}"
-            ),
-            on_sessions_received=lambda device_id, sessions: log.info(
-                f"Sessions received from {device_id}"
-            ),
-            on_key_approval_needed=headless_key_approval,
-        )
-        data_receiver_ref[0] = data_receiver  # Store reference for callback
-        data_receiver.start()
-        log.info(f"DataReceiver started on port {DATA_PORT}")
+            def headless_key_approval(device_id, device_name, ip):
+                """Auto-approve SSH keys in headless mode (web-server only)."""
+                log.warning(
+                    f"HEADLESS MODE: Auto-approving SSH key for {device_name} ({device_id}) from {ip}"
+                )
+                log.warning(
+                    "[WARN] Running in --web-server mode without GUI, auto-approving all SSH key requests"
+                )
+                log.warning(
+                    "[WARN] For manual approval, run ShadowBridge.exe without --web-server flag"
+                )
+                # Auto-approve the device
+                if data_receiver_ref[0]:
+                    result = data_receiver_ref[0].approve_device(device_id)
+                    log.info(f"Auto-approval result: {result}")
+
+            data_receiver = DataReceiver(
+                on_data_received=lambda device_id, projects: log.info(
+                    f"Projects received from {device_id}"
+                ),
+                on_device_connected=lambda device_id, ip: log.info(
+                    f"Device connected: {device_id} from {ip}"
+                ),
+                on_notes_received=lambda device_id, notes: log.info(
+                    f"Notes received from {device_id}"
+                ),
+                on_sessions_received=lambda device_id, sessions: log.info(
+                    f"Sessions received from {device_id}"
+                ),
+                on_key_approval_needed=headless_key_approval,
+            )
+            data_receiver_ref[0] = data_receiver  # Store reference for callback
+            data_receiver.start()
+            log.info(f"DataReceiver started on port {DATA_PORT}")
 
         # Start discovery server
         log.info("Starting discovery server...")

@@ -358,7 +358,7 @@ def _infer_note_content_port(
     package_name = device_id.split(":")[-1]
     if package_name.endswith(".aidev"):
         return 19305
-    if package_name.endsWith(".debug"):
+    if package_name.endswith(".debug"):
         return 19295
     return 19285
 
@@ -1645,7 +1645,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.100",
+        "version": "1.117",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,
@@ -2258,7 +2258,10 @@ def add_agent(data: Dict) -> Dict:
         "id": _generate_id(),
         "name": data.get("name", "New Agent"),
         "type": data.get("type", "GENERAL_PURPOSE"),
-        "status": "IDLE",
+        "role": data.get("role"),
+        "instructions": data.get("instructions"),
+        "project_id": data.get("project_id"),
+        "status": data.get("status", "IDLE"),
         "is_available": True,
         "specializations": data.get("specializations", []),
         "tasks_completed": 0,
