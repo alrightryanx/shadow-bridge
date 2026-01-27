@@ -8938,8 +8938,9 @@ def run_web_dashboard_server(open_browser: bool):
             import socket
             test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)  # Don't reuse
+            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)  # Windows: exclusive bind
             try:
-                test_sock.bind(("127.0.0.1", port))
+                test_sock.bind(("0.0.0.0", port))  # Use 0.0.0.0 to match main GUI's bind
                 test_sock.close()
                 return False  # Port is free
             except OSError:
