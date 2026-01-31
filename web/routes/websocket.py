@@ -238,6 +238,91 @@ if socketio is not None:
 
         emit("presence_list", {"users": presence_list})
 
+    # =========================================================================
+    # CLI Execution Events (for WebSocket Backend)
+    # =========================================================================
+
+    @socketio.on("cli_execute")
+    def handle_cli_execute(data):
+        """Execute CLI command and stream results."""
+        sid = request.sid if hasattr(request, "sid") else "unknown"
+
+        # Validate authentication (device must be connected)
+        device_id = request.headers.get("X-Device-ID")
+        if not device_id:
+            # Try to get from connected_clients
+            client = connected_clients.get(sid)
+            device_id = client.get("device_id") if client else None
+
+        if not device_id:
+            emit("error", {"message": "Authentication required"})
+            return
+
+        # Extract parameters
+        provider = data.get("provider", "claude")
+        model = data.get("model")
+        query = data.get("query")
+        working_dir = data.get("workingDirectory")
+        continue_conversation = data.get("continueConversation", False)
+        auto_accept_edits = data.get("autoAcceptEdits", True)
+        channel_id = data.get("channelId")
+        context = data.get("context", [])
+
+        if not query:
+            emit("error", {"message": "Query is required"})
+            return
+
+        # Import CLI executor (lazy import to avoid circular dependencies)
+        try:
+            from ..services.cli_executor import execute_cli_command
+        except ImportError:
+            emit("error", {"message": "CLI executor not available"})
+            return
+
+        # Callback to stream chunks back to client
+        def on_chunk(chunk_data):
+            emit("stream_chunk", chunk_data)
+
+        # Execute CLI command asynchronously
+        try:
+            execute_cli_command(
+                provider=provider,
+                model=model,
+                query=query,
+                working_dir=working_dir,
+                continue_conversation=continue_conversation,
+                auto_accept_edits=auto_accept_edits,
+                context=context,
+                on_chunk=on_chunk,
+                session_id=sid
+            )
+        except Exception as e:
+            emit("error", {"message": f"Failed to execute command: {str(e)}"})
+
+    @socketio.on("approval_response")
+    def handle_approval_response(data):
+        """Handle approval response from Android client."""
+        approval_id = data.get("approvalId")
+        approved = data.get("approved", False)
+        selected_option = data.get("selectedOption")
+
+        if not approval_id:
+            emit("error", {"message": "Approval ID is required"})
+            return
+
+        # Import CLI executor
+        try:
+            from ..services.cli_executor import send_approval_response
+        except ImportError:
+            emit("error", {"message": "CLI executor not available"})
+            return
+
+        # Send approval to active CLI process
+        success = send_approval_response(approval_id, approved, selected_option)
+
+        if not success:
+            emit("error", {"message": "Failed to send approval response"})
+
 
 def _update_user_presence(user_id: str, status: str):
     """Update user presence in tracking dict."""
@@ -279,6 +364,16 @@ def broadcast_notes_updated(device_id):
         socketio.emit("notes_updated", {"device_id": device_id}, room="all")
 
 
+def broadcast_celebrate(message: str = "Connection Successful!"):
+    """
+    Broadcast celebration event to all web clients.
+    Shows confetti and plays sound in the web dashboard.
+    Called when Android app successfully connects via SSH test.
+    """
+    if socketio is not None:
+        socketio.emit("celebrate", {"message": message}, room="all")
+
+
 def broadcast_sessions_updated(device_id):
     """Broadcast sessions sync event."""
     if socketio is not None:
@@ -314,6 +409,23 @@ def broadcast_agent_status(agent_id, status, task=None):
         socketio.emit(
             "agent_status",
             {"device_id": agent_id, "status": status, "task": task},
+            room="all",
+        )
+
+
+def broadcast_activity(event_type, resource_type, resource_id, resource_title, metadata=None):
+    """Broadcast a user activity event."""
+    if socketio is not None:
+        socketio.emit(
+            "activity_event",
+            {
+                "event_type": event_type,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "resource_title": resource_title,
+                "metadata": metadata or {},
+                "timestamp": datetime.utcnow().isoformat(),
+            },
             room="all",
         )
 

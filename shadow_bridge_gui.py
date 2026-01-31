@@ -5948,7 +5948,7 @@ class ShadowBridgeApp:
 
         return {
             "type": "shadowai_connect",
-            "version": 6,  # Bumped version for multi-IP priority strategy
+            "version": 7,  # Bumped version for WebSocket backend support
             "mode": mode,
             "host": primary_host,  # Primary for QR display (LAN preferred)
             "port": self.ssh_port,
@@ -5960,6 +5960,9 @@ class ShadowBridgeApp:
             "local_ip": local_ip,
             "tailscale_ip": tailscale_ip,
             "encryption_salt": salt_b64,
+            "websocket_enabled": True,  # NEW: WebSocket backend available
+            "websocket_port": WEB_PORT,  # Same as web dashboard (6767)
+            "websocket_path": "/ws/cli",  # WebSocket endpoint path
             "timestamp": int(time.time()),
         }
 
