@@ -5892,7 +5892,7 @@ class ShadowBridgeApp:
         tailscale_ip = get_tailscale_ip()
         local_ip = get_local_ip()
         hostname_local = get_hostname_local()
-        all_ips = get_all_local_ips()
+        all_ips = get_all_ips()
 
         # Get the dynamic encryption salt for note sync (Phase 5.3 requirement)
         try:
