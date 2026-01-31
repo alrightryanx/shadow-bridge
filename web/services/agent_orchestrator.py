@@ -12,6 +12,7 @@ import os
 import time
 import uuid
 import json
+import re
 import psutil
 import logging
 from typing import Dict, List, Optional, Callable
@@ -31,6 +32,20 @@ agent_task_queues: Dict[str, queue.Queue] = {}
 
 # Output broadcast callbacks (for WebSocket streaming)
 output_callbacks: Dict[str, List[Callable]] = defaultdict(list)
+
+# Task completion tracking
+agent_task_events: Dict[str, threading.Event] = {}  # agent_id -> completion event
+agent_task_states: Dict[str, Dict] = {}  # agent_id -> {task, status, started_at}
+
+# Crash recovery tracking
+agent_restart_counts: Dict[str, List[float]] = defaultdict(list)  # agent_id -> [timestamps]
+agent_watchdog_thread: Optional[threading.Thread] = None
+agent_watchdog_stop_event = threading.Event()
+
+# Recovery config
+MAX_RESTARTS_PER_HOUR = 3
+RESTART_BACKOFF_SECONDS = [1, 2, 4, 8]
+WATCHDOG_CHECK_INTERVAL = 5
 
 # Agent data file path
 AGENTS_DATA_FILE = os.path.join(os.path.expanduser("~"), ".shadowbridge", "agents.json")
@@ -267,6 +282,7 @@ def stop_agent(agent_id: str, graceful: bool = True) -> bool:
         return False
 
     agent = active_agents[agent_id]
+    agent['intentional_stop'] = True  # Prevent automatic restart
     process = agent.get("process")
 
     if not process:
@@ -348,6 +364,50 @@ def get_all_agents(device_id: Optional[str] = None) -> List[Dict]:
     return agents
 
 
+def parse_task_marker(line: str) -> Optional[Dict]:
+    """Parse task completion markers from agent output."""
+    patterns = {
+        r'\[TASK:START\]\s+(\S+)': ('start', 1),
+        r'\[TASK:COMPLETE\]\s+(\S+)\s+(SUCCESS|FAILED)': ('complete', 2),
+        r'\[TASK:ERROR\]\s+(\S+)\s+(.+)': ('error', 2),
+    }
+    for pattern, (marker_type, groups) in patterns.items():
+        match = re.search(pattern, line)
+        if match:
+            return {
+                'type': marker_type,
+                'task_id': match.group(1) if groups >= 1 else None,
+                'status': match.group(2) if groups >= 2 else None
+            }
+
+    # Fallback: check for common completion keywords
+    if re.search(r'(done|finished|completed|success)', line, re.IGNORECASE):
+        return {'type': 'complete', 'task_id': None, 'status': 'SUCCESS'}
+    if re.search(r'(error|exception|failed)', line, re.IGNORECASE):
+        return {'type': 'error', 'task_id': None, 'status': 'FAILED'}
+
+    return None
+
+
+def update_task_status(agent_id: str, marker: Dict):
+    """Update task status and signal completion event."""
+    if marker['type'] == 'complete':
+        # Signal task completion event
+        if agent_id in agent_task_events:
+            agent_task_events[agent_id].set()
+
+        # Update agent status
+        agent = active_agents.get(agent_id)
+        if agent:
+            agent['status'] = 'idle'
+            agent['current_task'] = None
+            broadcast_agent_event('agent_task_completed', {
+                'agent_id': agent_id,
+                'task': agent_task_states.get(agent_id, {}).get('task'),
+                'completed_at': datetime.utcnow().isoformat()
+            })
+
+
 def monitor_agent_output(agent_id: str, stdout, stderr):
     """
     Monitor agent output streams and log/broadcast.
@@ -379,6 +439,11 @@ def monitor_agent_output(agent_id: str, stdout, stderr):
                 # Trim logs to max 1000 lines
                 if len(agent_logs[agent_id]) > 1000:
                     agent_logs[agent_id] = agent_logs[agent_id][-1000:]
+
+                # Parse task markers
+                parsed_marker = parse_task_marker(line)
+                if parsed_marker:
+                    update_task_status(agent_id, parsed_marker)
 
                 # Broadcast output line
                 broadcast_agent_event("agent_output_line", {
@@ -470,24 +535,38 @@ def process_agent_tasks(agent_id: str):
                 agent["status"] = "busy"
                 agent["current_task"] = task
 
+                # Initialize task tracking
+                if agent_id not in agent_task_events:
+                    agent_task_events[agent_id] = threading.Event()
+
+                event = agent_task_events[agent_id]
+                event.clear()
+
+                # Store task state
+                agent_task_states[agent_id] = {
+                    'task': task,
+                    'status': 'running',
+                    'started_at': datetime.utcnow().isoformat()
+                }
+
                 # Broadcast status change
                 broadcast_agent_event("agent_status_changed", get_agent_status(agent_id))
 
-                # Wait for completion (simplified - real impl would parse output)
-                # For now, just wait a bit and mark as complete
-                time.sleep(2)
+                # Wait up to 30 minutes for task completion
+                completed = event.wait(timeout=1800)
 
-                # Task complete
-                agent["tasks_completed"] = agent.get("tasks_completed", 0) + 1
-                agent["status"] = "idle"
-                agent["current_task"] = None
-
-                # Broadcast completion
-                broadcast_agent_event("agent_task_completed", {
-                    "agent_id": agent_id,
-                    "task": task,
-                    "completed_at": datetime.utcnow().isoformat()
-                })
+                if not completed:
+                    logger.warning(f"Task timeout for agent {agent_id}")
+                    agent["status"] = "error"
+                    broadcast_agent_event("agent_task_timeout", {
+                        "agent_id": agent_id,
+                        "task": task,
+                        "timeout_seconds": 1800
+                    })
+                else:
+                    # Task completed successfully
+                    agent["tasks_completed"] = agent.get("tasks_completed", 0) + 1
+                    logger.info(f"Agent {agent_id} completed task: {task}")
 
                 # Broadcast status change
                 broadcast_agent_event("agent_status_changed", get_agent_status(agent_id))
@@ -592,6 +671,124 @@ def get_specialty_prompt(specialty: str) -> str:
     return prompts.get(specialty, prompts["general"])
 
 
+def start_agent_watchdog():
+    """Start background watchdog thread to monitor agent health."""
+    global agent_watchdog_thread
+
+    if agent_watchdog_thread and agent_watchdog_thread.is_alive():
+        return
+
+    agent_watchdog_thread = threading.Thread(
+        target=watchdog_loop,
+        daemon=True
+    )
+    agent_watchdog_thread.start()
+    logger.info("Agent watchdog started")
+
+
+def watchdog_loop():
+    """Monitor all agents and restart crashed ones."""
+    while not agent_watchdog_stop_event.wait(WATCHDOG_CHECK_INTERVAL):
+        for agent_id in list(active_agents.keys()):
+            agent = active_agents.get(agent_id)
+            if not agent:
+                continue
+
+            process = agent.get('process')
+            if not process:
+                continue
+
+            # Check if process died
+            if process.poll() is not None:
+                logger.warning(f"Watchdog detected crash: agent {agent_id}")
+                handle_agent_crash(agent_id)
+
+
+def handle_agent_crash(agent_id: str):
+    """Handle agent crash with cleanup and restart logic."""
+    agent = active_agents.get(agent_id)
+    if not agent:
+        return
+
+    # Check if intentional stop (user-initiated)
+    if agent.get('intentional_stop'):
+        logger.info(f"Agent {agent_id} stopped intentionally, not restarting")
+        return
+
+    # Save agent info for restart
+    agent_info = {
+        'device_id': agent.get('device_id'),
+        'name': agent.get('name'),
+        'specialty': agent.get('specialty'),
+        'cli_provider': agent.get('cli_provider'),
+        'model': agent.get('model'),
+        'working_directory': agent.get('working_directory'),
+        'auto_accept_edits': agent.get('auto_accept_edits'),
+    }
+
+    # Cleanup dead agent
+    if agent.get('current_task'):
+        broadcast_agent_event('agent_task_failed', {
+            'agent_id': agent_id,
+            'task': agent['current_task'],
+            'reason': 'agent_crashed'
+        })
+
+    # Stop agent (cleanup resources)
+    stop_agent(agent_id, graceful=False)
+
+    # Check restart eligibility
+    if can_restart_agent(agent_id):
+        restart_count = len([ts for ts in agent_restart_counts[agent_id]
+                            if ts > time.time() - 3600])
+        delay = get_restart_delay(restart_count)
+
+        logger.info(f"Scheduling restart for {agent_id} in {delay}s (attempt {restart_count + 1})")
+        broadcast_agent_event('agent_restart_scheduled', {
+            'agent_id': agent_id,
+            'delay': delay,
+            'attempt': restart_count + 1
+        })
+
+        # Schedule restart
+        timer = threading.Timer(delay, restart_agent, args=(agent_info,))
+        timer.daemon = True
+        timer.start()
+    else:
+        logger.error(f"Agent {agent_id} exceeded restart limit, giving up")
+        broadcast_agent_event('agent_crash_fatal', {
+            'agent_id': agent_id,
+            'reason': 'max_restarts_exceeded'
+        })
+
+
+def can_restart_agent(agent_id: str) -> bool:
+    """Check if agent can be restarted (rate limit)."""
+    now = time.time()
+    hour_ago = now - 3600
+    recent_restarts = [ts for ts in agent_restart_counts[agent_id] if ts > hour_ago]
+    agent_restart_counts[agent_id] = recent_restarts
+    return len(recent_restarts) < MAX_RESTARTS_PER_HOUR
+
+
+def get_restart_delay(restart_count: int) -> float:
+    """Get exponential backoff delay."""
+    if restart_count >= len(RESTART_BACKOFF_SECONDS):
+        return RESTART_BACKOFF_SECONDS[-1]
+    return RESTART_BACKOFF_SECONDS[restart_count]
+
+
+def restart_agent(agent_info: Dict):
+    """Restart crashed agent with original config."""
+    try:
+        new_agent = spawn_agent(**agent_info)
+        agent_restart_counts[new_agent['id']].append(time.time())
+        logger.info(f"Agent restarted successfully: {new_agent['id']}")
+        broadcast_agent_event('agent_restarted', new_agent)
+    except Exception as e:
+        logger.error(f"Failed to restart agent: {e}")
+
+
 def broadcast_agent_event(event_type: str, data: Dict):
     """
     Broadcast agent event to WebSocket clients.
@@ -664,3 +861,6 @@ def load_agents_data():
 
 # Load agents data on module import
 load_agents_data()
+
+# Start agent watchdog
+start_agent_watchdog()

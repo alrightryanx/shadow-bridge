@@ -11,6 +11,7 @@ import queue
 import os
 import re
 import logging
+import time
 from typing import Callable, Dict, List, Optional
 import uuid
 
@@ -21,6 +22,9 @@ active_processes: Dict[str, Dict] = {}
 
 # Approval queues (approval_id -> queue for stdin response)
 approval_queues: Dict[str, queue.Queue] = {}
+
+# Map approval_id to session_id for routing
+approval_to_session: Dict[str, str] = {}
 
 
 def execute_cli_command(
@@ -107,6 +111,14 @@ def execute_cli_command(
         stdout_thread.start()
         stderr_thread.start()
 
+        # Start approval consumer thread
+        approval_thread = threading.Thread(
+            target=consume_approval_responses,
+            args=(process, session_id),
+            daemon=True
+        )
+        approval_thread.start()
+
         # Wait for process to complete
         def wait_for_completion():
             process.wait()
@@ -119,6 +131,12 @@ def execute_cli_command(
                 "fullResponse": "Command completed",
                 "isPartial": False
             })
+
+            # Cleanup approval queues for this session
+            for approval_id in list(approval_queues.keys()):
+                if approval_to_session.get(approval_id) == session_id:
+                    del approval_queues[approval_id]
+                    del approval_to_session[approval_id]
 
             # Cleanup
             if session_id in active_processes:
@@ -158,8 +176,8 @@ def monitor_output(
 
             line = line.strip()
 
-            # Parse line into stream chunk
-            chunk = parse_output_line(line, stream_type)
+            # Parse line into stream chunk (now passing session_id)
+            chunk = parse_output_line(line, stream_type, session_id)
 
             if chunk:
                 on_chunk(chunk)
@@ -168,7 +186,7 @@ def monitor_output(
         logger.error(f"Error monitoring {stream_type}: {e}")
 
 
-def parse_output_line(line: str, stream_type: str) -> Optional[Dict]:
+def parse_output_line(line: str, stream_type: str, session_id: str) -> Optional[Dict]:
     """
     Parse a CLI output line into a stream chunk.
 
@@ -189,6 +207,7 @@ def parse_output_line(line: str, stream_type: str) -> Optional[Dict]:
     if re.search(r'\[y/n\]|\(y/n\)|\[yes/no\]', line, re.IGNORECASE):
         approval_id = str(uuid.uuid4())
         approval_queues[approval_id] = queue.Queue()
+        approval_to_session[approval_id] = session_id  # Map approval to session
 
         return {
             "type": "approval_required",
@@ -343,6 +362,48 @@ def build_cli_command(
     else:
         logger.warning(f"Unknown provider: {provider}")
         return None
+
+
+def consume_approval_responses(process, session_id: str):
+    """
+    Monitor approval queues and write responses to process stdin.
+
+    Args:
+        process: Subprocess instance
+        session_id: Session ID for this process
+    """
+    logger.info(f"Approval consumer started for session {session_id}")
+
+    while process.poll() is None:  # While process alive
+        try:
+            # Find approval queues for this session
+            for approval_id in list(approval_queues.keys()):
+                if approval_to_session.get(approval_id) != session_id:
+                    continue
+
+                approval_queue = approval_queues[approval_id]
+
+                try:
+                    # Non-blocking get
+                    response = approval_queue.get(timeout=0.1)
+
+                    # Write to stdin
+                    logger.info(f"Sending approval response to CLI: {response}")
+                    process.stdin.write(f"{response}\n")
+                    process.stdin.flush()
+
+                    # Cleanup
+                    del approval_queues[approval_id]
+                    del approval_to_session[approval_id]
+
+                except queue.Empty:
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error in approval consumer: {e}")
+            time.sleep(0.1)
+
+    logger.info(f"Approval consumer stopped for session {session_id}")
 
 
 def send_approval_response(
