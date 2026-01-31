@@ -55,6 +55,15 @@ try:
 except ImportError:
     HAS_SENTINEL = False
 
+# Import CLI handlers
+from shadow_bridge.cli import (
+    run_image_command,
+    run_video_command,
+    run_audio_command,
+    run_assembly_command,
+    run_browser_command
+)
+
 # Import data service for bi-directional sync (web -> Android)
 try:
     from web.services.data_service import (
@@ -95,6 +104,9 @@ DEBUG_BUILD = "--debug" in sys.argv
 AIDEV_MODE = "--aidev" in sys.argv
 AGENT_MODE = "--mode" in sys.argv and "agent" in sys.argv
 PING_MODE = "--ping" in sys.argv
+AUTO_INSTALL = "--auto-install" in sys.argv
+HEADLESS_MODE = "--headless" in sys.argv
+TRUST_ALL = "--trust-all" in sys.argv
 if AGENT_MODE:
     AIDEV_MODE = True
 
@@ -120,770 +132,45 @@ else:
 
 SSH_KEY_PREFIX = f"# Shadow {ENVIRONMENT} device:"
 
+# CLI Dispatch Logic
+if IMAGE_MODE:
+    from shadow_bridge.cli import run_image_command
+    # Locate the image CLI executable
+    install_path = os.path.dirname(os.path.abspath(__file__))
+    image_cli_path = os.path.join(install_path, "shadow-image-cli.exe")
+    run_image_command(sys.argv[1:], image_cli_path, install_path)
+    sys.exit(0)
 
+if VIDEO_MODE:
+    from shadow_bridge.cli import run_video_command
+    run_video_command(sys.argv[1:])
+    sys.exit(0)
 
-def run_image_command():
-    """Handle image generation commands via CLI.
+if AUDIO_MODE:
+    from shadow_bridge.cli import run_audio_command
+    run_audio_command(sys.argv[1:])
+    sys.exit(0)
 
-    Usage:
-        ShadowBridge.exe image generate "A sunset over mountains"
-        ShadowBridge.exe image generate --prompt_b64 <base64>
-        ShadowBridge.exe image status
-        ShadowBridge.exe image inpaint --stdin
-        ShadowBridge.exe image remove-background --stdin
-    """
-    import argparse
+if ASSEMBLY_MODE:
+    from shadow_bridge.cli import run_assembly_command
+    run_assembly_command(sys.argv[1:])
+    sys.exit(0)
 
-    # Ensure script directory is in path for 'web' module imports
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    if script_dir not in sys.path:
-        sys.path.insert(0, script_dir)
+if BROWSER_MODE:
+    from shadow_bridge.cli import run_browser_command
+    run_browser_command(sys.argv[1:])
+    sys.exit(0)
 
-    def print_json(data):
-        """Print JSON with strict markers to avoid parsing issues."""
-        print("<<<JSON_START>>>")
-        print(json.dumps(data))
-        print("<<<JSON_END>>>")
 
-    # Remove "image" from argv for argparse
-    argv = sys.argv[2:]  # Skip program name and "image"
 
-    parser = argparse.ArgumentParser(
-        description="Generate images using local Stable Diffusion"
-    )
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    # Generate command
-    gen_parser = subparsers.add_parser("generate", help="Generate an image")
-    gen_parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Text prompt for image generation",
-    )
-    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
-    gen_parser.add_argument(
-        "--model",
-        default="sd-xl-turbo",
-        choices=["sd-1.5", "sd-xl", "sd-xl-turbo"],
-        help="Model to use (default: sd-xl-turbo)",
-    )
-    gen_parser.add_argument(
-        "--steps",
-        type=int,
-        default=4,
-        help="Number of inference steps",
-    )
-    gen_parser.add_argument("--width", type=int, default=1024, help="Image width")
-    gen_parser.add_argument("--height", type=int, default=1024, help="Image height")
-    gen_parser.add_argument(
-        "--seed", type=int, default=None, help="Seed for reproducibility"
-    )
-    gen_parser.add_argument(
-        "--guidance",
-        type=float,
-        default=0.0,
-        help="Guidance scale",
-    )
-    gen_parser.add_argument(
-        "--negative", type=str, default=None, help="Negative prompt"
-    )
-    gen_parser.add_argument("--style", help="Style preset name")
-    gen_parser.add_argument("--lora", help="Path or Repo ID for LoRA")
-    gen_parser.add_argument("--lora_scale", type=float, default=0.8, help="LoRA scale")
-    gen_parser.add_argument("--hires_fix", action="store_true", help="Enable Hires Fix")
-    gen_parser.add_argument(
-        "--upscale", type=float, default=1.5, help="Hires Fix upscale factor"
-    )
 
-    # Image-to-Image command
-    i2i_parser = subparsers.add_parser(
-        "image-to-image", help="Generate image from image"
-    )
-    i2i_parser.add_argument("--image_b64", help="Base64 encoded source image")
-    i2i_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
-    i2i_parser.add_argument(
-        "--strength", type=float, default=0.7, help="Transformation strength"
-    )
-    i2i_parser.add_argument("--model", default="sd-xl-turbo", help="Model to use")
-    i2i_parser.add_argument("--steps", type=int, default=4, help="Inference steps")
-    i2i_parser.add_argument("--width", type=int, default=1024, help="Width")
-    i2i_parser.add_argument("--height", type=int, default=1024, help="Height")
-    i2i_parser.add_argument("--seed", type=int, help="Seed")
-    i2i_parser.add_argument("--stdin", action="store_true", help="Read JSON from stdin")
 
-    # Inpaint command
-    inpaint_parser = subparsers.add_parser("inpaint", help="Inpaint an image")
-    inpaint_parser.add_argument("--image_b64", help="Base64 encoded source image")
-    inpaint_parser.add_argument("--mask_b64", help="Base64 encoded mask image")
-    inpaint_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
-    inpaint_parser.add_argument("--negative_b64", help="Base64 encoded negative prompt")
-    inpaint_parser.add_argument(
-        "--stdin", action="store_true", help="Read JSON from stdin"
-    )
 
-    # Remove Background command
-    rembg_parser = subparsers.add_parser("remove-background", help="Remove background")
-    rembg_parser.add_argument("--image_b64", help="Base64 encoded source image")
-    rembg_parser.add_argument(
-        "--stdin", action="store_true", help="Read JSON from stdin"
-    )
 
-    # Status command
-    subparsers.add_parser("status", help="Check image service status")
 
-    # Setup command
-    setup_parser = subparsers.add_parser("setup", help="Ensure model is ready")
-    setup_parser.add_argument("--model", default="sd-xl-turbo", help="Model to prepare")
 
-    # Unload command
-    subparsers.add_parser("unload", help="Unload models and free VRAM")
 
-    args = parser.parse_args(argv)
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
-    try:
-        if args.command == "generate":
-            # Handle prompt input
-            prompt = args.prompt
-            if args.prompt_b64:
-                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
-
-            if not prompt:
-                print_json({"success": False, "error": "No prompt provided"})
-                sys.exit(1)
-
-            # Adjust defaults based on model
-            steps = args.steps
-            guidance = args.guidance
-
-            if args.model == "sd-xl-turbo":
-                if steps == 4:
-                    steps = 4
-                if guidance == 0.0:
-                    guidance = 0.0
-            else:
-                if steps == 4:
-                    steps = 20
-                if guidance == 0.0:
-                    guidance = 7.5
-
-            from web.services.image_service import get_image_generation_service
-
-            service = get_image_generation_service()
-
-            # Define progress callback
-            def progress_callback(percent, message):
-                print_json({"type": "progress", "percent": percent, "message": message})
-
-            result = service.generate_image(
-                prompt=prompt,
-                negative_prompt=args.negative,
-                model=args.model,
-                width=args.width,
-                height=args.height,
-                steps=steps,
-                guidance_scale=guidance,
-                seed=args.seed,
-                source="cli",
-                progress_callback=progress_callback,
-                style=args.style,
-                lora_path=args.lora,
-                lora_scale=args.lora_scale,
-                hires_fix=args.hires_fix,
-                upscale_factor=args.upscale,
-            )
-            print_json(result)
-
-        elif args.command == "image-to-image":
-            from web.services.image_service import get_image_generation_service
-
-            service = get_image_generation_service()
-
-            if args.stdin:
-                input_data = json.load(sys.stdin)
-                image_b64 = input_data.get("image_b64")
-                prompt_b64 = input_data.get("prompt_b64")
-                negative_b64 = input_data.get("negative_b64")
-                strength = input_data.get("strength", 0.7)
-                model = input_data.get("model", "sd-xl-turbo")
-                steps = input_data.get("steps", 4)
-                width = input_data.get("width", 1024)
-                height = input_data.get("height", 1024)
-
-                if not all([image_b64, prompt_b64]):
-                    raise ValueError("Missing required fields in stdin JSON")
-
-                prompt = base64.b64decode(prompt_b64).decode("utf-8")
-                negative = (
-                    base64.b64decode(negative_b64).decode("utf-8")
-                    if negative_b64
-                    else None
-                )
-            else:
-                if not all([args.image_b64, args.prompt_b64]):
-                    print_json(
-                        {"success": False, "error": "Missing required arguments"}
-                    )
-                    sys.exit(1)
-
-                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
-                image_b64 = args.image_b64
-                negative = None
-                strength = args.strength
-                model = args.model
-                steps = args.steps
-                width = args.width
-                height = args.height
-
-            result = service.image_to_image(
-                image_base64=image_b64,
-                prompt=prompt,
-                negative_prompt=negative,
-                strength=strength,
-                model=model,
-                steps=steps,
-                width=width,
-                height=height,
-            )
-            print_json(result)
-
-        elif args.command == "inpaint":
-            from web.services.image_service import get_image_generation_service
-
-            service = get_image_generation_service()
-
-            if args.stdin:
-                input_data = json.load(sys.stdin)
-                image_b64 = input_data.get("image_b64")
-                mask_b64 = input_data.get("mask_b64")
-                prompt_b64 = input_data.get("prompt_b64")
-                negative_b64 = input_data.get("negative_b64")
-
-                if not all([image_b64, mask_b64, prompt_b64]):
-                    raise ValueError("Missing required fields in stdin JSON")
-
-                prompt = base64.b64decode(prompt_b64).decode("utf-8")
-                negative = (
-                    base64.b64decode(negative_b64).decode("utf-8")
-                    if negative_b64
-                    else None
-                )
-            else:
-                if not all([args.image_b64, args.mask_b64, args.prompt_b64]):
-                    print_json(
-                        {"success": False, "error": "Missing required arguments"}
-                    )
-                    sys.exit(1)
-
-                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
-                negative = (
-                    base64.b64decode(args.negative_b64).decode("utf-8")
-                    if args.negative_b64
-                    else None
-                )
-                image_b64 = args.image_b64
-                mask_b64 = args.mask_b64
-
-            result = service.inpaint_image(
-                image_base64=image_b64,
-                mask_base64=mask_b64,
-                prompt=prompt,
-                negative_prompt=negative or "",
-            )
-            print_json(result)
-
-        elif args.command == "remove-background":
-            from web.services.image_service import get_bg_removal_service
-
-            service = get_bg_removal_service()
-
-            if args.stdin:
-                input_data = json.load(sys.stdin)
-                image_b64 = input_data.get("image_b64")
-                if not image_b64:
-                    raise ValueError("Missing 'image_b64' in stdin JSON")
-            else:
-                if not args.image_b64:
-                    print_json({"success": False, "error": "Missing --image_b64"})
-                    sys.exit(1)
-                image_b64 = args.image_b64
-
-            result = service.remove_background(image_base64=image_b64)
-            print_json(result)
-
-        elif args.command == "status":
-            from web.services.image_service import (
-                get_image_service_status,
-                get_image_setup_status,
-            )
-
-            status = get_image_service_status()
-            setup = get_image_setup_status()
-            print_json({"service": status, "setup": setup})
-
-        elif args.command == "setup":
-            from web.services.image_service import get_image_generation_service
-
-            service = get_image_generation_service()
-            try:
-                model = service.warmup_model(args.model)
-                print_json(
-                    {
-                        "success": True,
-                        "model": model,
-                        "message": f"Model {model} is ready",
-                    }
-                )
-            except Exception as e:
-                print_json({"success": False, "error": str(e)})
-
-        elif args.command == "unload":
-            from web.services.image_service import get_image_generation_service
-
-            service = get_image_generation_service()
-            print_json(service.unload_all_models())
-
-        elif args.command == "list-styles":
-            from web.services.image_service import get_image_generation_service
-
-            service = get_image_generation_service()
-            styles = service.get_styles()
-            print_json({"success": True, "styles": styles})
-
-    except Exception as e:
-        print_json({"success": False, "error": str(e)})
-        sys.exit(1)
-
-
-def run_video_command():
-    """Handle video generation commands via CLI.
-
-    Usage:
-        ShadowBridge.exe video generate "A cat dancing in the rain"
-        ShadowBridge.exe video generate --prompt_b64 <base64>
-        ShadowBridge.exe video status
-        ShadowBridge.exe video install hunyuan-15
-        ShadowBridge.exe video list-models
-    """
-    import argparse
-
-    def print_json(data):
-        """Print JSON with strict markers to avoid parsing issues."""
-        print("<<<VIDEO_JSON_START>>>")
-        print(json.dumps(data))
-        print("<<<VIDEO_JSON_END>>>")
-
-    # Remove "video" from argv for argparse
-    argv = sys.argv[2:]  # Skip program name and "video"
-
-    parser = argparse.ArgumentParser(
-        description="Generate videos using local AI models"
-    )
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    # Generate command
-    gen_parser = subparsers.add_parser("generate", help="Generate a video")
-    gen_parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Text prompt for video generation",
-    )
-    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
-    gen_parser.add_argument(
-        "--model",
-        default="hunyuan-15",
-        choices=["hunyuan-15", "wan-21", "ltx-video"],
-        help="Model to use (default: hunyuan-15)",
-    )
-    gen_parser.add_argument(
-        "--duration",
-        type=int,
-        default=10,
-        help="Video duration in seconds (default: 10)",
-    )
-    gen_parser.add_argument(
-        "--aspect_ratio",
-        default="16:9",
-        choices=["16:9", "9:16", "1:1"],
-        help="Video aspect ratio (default: 16:9)",
-    )
-    gen_parser.add_argument(
-        "--negative",
-        type=str,
-        default=None,
-        help="Negative prompt",
-    )
-    gen_parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Seed for reproducibility",
-    )
-
-    # Install command
-    install_parser = subparsers.add_parser("install", help="Install a video model")
-    install_parser.add_argument(
-        "model",
-        choices=["hunyuan-15", "wan-21", "ltx-video"],
-        help="Model to install",
-    )
-
-    # Status command
-    status_parser = subparsers.add_parser(
-        "status", help="Check video generation status"
-    )
-    status_parser.add_argument("--model", help="Check specific model status")
-
-    # List models command
-    subparsers.add_parser("list-models", help="List available video models")
-
-    # Unload command
-    subparsers.add_parser("unload", help="Unload models and free VRAM")
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
-    try:
-        if args.command == "generate":
-            # Import video generation functions
-            from web.routes.video import (
-                generate_video_local,
-                MODELS,
-                is_model_installed,
-                _load_generations,
-                _save_generations,
-            )
-
-            # Handle prompt input
-            prompt = args.prompt
-            if args.prompt_b64:
-                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
-
-            if not prompt:
-                print_json({"success": False, "error": "No prompt provided"})
-                sys.exit(1)
-
-            # Validate model
-            if args.model not in MODELS:
-                print_json({"success": False, "error": f"Unknown model: {args.model}"})
-                sys.exit(1)
-
-            # Check if model is installed
-            if not is_model_installed(args.model):
-                print_json(
-                    {
-                        "success": False,
-                        "error": f"Model {args.model} is not installed. Run 'video install {args.model}' first.",
-                    }
-                )
-                sys.exit(1)
-
-            generation_id = f"gen_{int(time.time() * 1000)}"
-            generations = _load_generations() or {"generations": []}
-            generations.setdefault("generations", []).append(
-                {
-                    "id": generation_id,
-                    "prompt": prompt,
-                    "mode": "free",
-                    "model": args.model,
-                    "input_type": "text",
-                    "status": "pending",
-                    "progress": 0,
-                    "created_at": datetime.now().isoformat(),
-                    "video_path": None,
-                }
-            )
-            _save_generations(generations)
-
-            # Progress callback function
-            def progress_callback(progress_data):
-                print_json(
-                    {
-                        "type": "progress",
-                        "status": progress_data.get("status", "Unknown"),
-                        "message": progress_data.get("message", ""),
-                        "progress": progress_data.get("progress", 0),
-                    }
-                )
-
-                updates = {
-                    "status": "running",
-                    "progress": progress_data.get("progress", 0),
-                    "message": progress_data.get("message", ""),
-                }
-                generations = _load_generations()
-                if generations and "generations" in generations:
-                    for gen in generations["generations"]:
-                        if gen.get("id") == generation_id:
-                            gen.update(updates)
-                            break
-                    _save_generations(generations)
-
-            # Prepare generation options
-            options = {
-                "prompt": prompt,
-                "model": args.model,
-                "duration": args.duration,
-                "aspect_ratio": args.aspect_ratio,
-                "negative_prompt": args.negative,
-                "seed": args.seed,
-            }
-
-            # Generate video (Synchronous call)
-            try:
-                result = generate_video_local(options, progress_callback)
-
-                generations = _load_generations()
-                if generations and "generations" in generations:
-                    for gen in generations["generations"]:
-                        if gen.get("id") == generation_id:
-                            gen["status"] = (
-                                "completed" if result.get("success") else "failed"
-                            )
-                            gen["video_url"] = result.get("videoUrl")
-                            gen["video_path"] = result.get("videoPath")
-                            gen["duration"] = result.get("duration")
-                            gen["cost"] = 0
-                            gen["error"] = result.get("error")
-                            gen["completed_at"] = (
-                                datetime.now().isoformat()
-                                if result.get("success")
-                                else None
-                            )
-                            break
-                    _save_generations(generations)
-                print_json(result)
-            except Exception as e:
-                print_json({"success": False, "error": str(e)})
-                sys.exit(1)
-
-        elif args.command == "install":
-            from web.routes.video import install_model, MODELS
-
-            if args.model not in MODELS:
-                print_json({"success": False, "error": f"Unknown model: {args.model}"})
-                sys.exit(1)
-
-            # Progress callback for installation
-            def install_progress_callback(progress_data):
-                print_json(
-                    {
-                        "type": "install_progress",
-                        "status": progress_data.get("status", "Installing"),
-                        "message": progress_data.get("message", ""),
-                        "progress": progress_data.get("progress", 0),
-                    }
-                )
-
-            # Install model
-            import asyncio
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                result = loop.run_until_complete(
-                    install_model(args.model, install_progress_callback)
-                )
-                print_json(result)
-            finally:
-                loop.close()
-
-        elif args.command == "unload":
-            from web.routes.video import unload_all_models
-
-            print_json(unload_all_models())
-
-        elif args.command == "status":
-            from web.routes.video import MODELS, is_model_installed, _load_generations
-
-            status_data = {
-                "models": {},
-                "total_generations": 0,
-                "recent_generations": [],
-            }
-
-            # Check each model
-            for model_key, model_info in MODELS.items():
-                model_status = {
-                    "name": model_info["name"],
-                    "installed": is_model_installed(model_key),
-                    "path": model_info["path"],
-                }
-                status_data["models"][model_key] = model_status
-
-            # Load generation statistics
-            generations_data = _load_generations()
-            all_generations = generations_data.get("generations", [])
-
-            status_data["total_generations"] = len(all_generations)
-
-            # Get recent generations (last 10)
-            recent = sorted(
-                all_generations, key=lambda x: x.get("created_at", ""), reverse=True
-            )[:10]
-            status_data["recent_generations"] = recent
-
-            print_json(status_data)
-
-        elif args.command == "list-models":
-            from web.routes.video import MODELS, is_model_installed
-
-            models_data = []
-            for model_key, model_info in MODELS.items():
-                models_data.append(
-                    {
-                        "id": model_key,
-                        "name": model_info["name"],
-                        "installed": is_model_installed(model_key),
-                        "repo": model_info["repo"],
-                        "description": model_info.get("description", ""),
-                    }
-                )
-
-            print_json({"models": models_data})
-
-    except Exception as e:
-        print_json({"success": False, "error": str(e)})
-        sys.exit(1)
-
-
-def run_assembly_command():
-    """Handle media assembly commands via CLI.
-
-    Usage:
-        ShadowBridge.exe assembly run '{"steps": [...]}'
-        ShadowBridge.exe assembly status
-    """
-    import argparse
-
-    def print_json(data):
-        """Print JSON with strict markers to avoid parsing issues."""
-        print("<<<ASSEMBLY_JSON_START>>>")
-        print(json.dumps(data))
-        print("<<<ASSEMBLY_JSON_END>>>")
-
-    # Remove "assembly" from argv for argparse
-    argv = sys.argv[2:]
-
-    parser = argparse.ArgumentParser(
-        description="Assemble media assets into movies/games"
-    )
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    # Run command
-    run_parser = subparsers.add_parser("run", help="Run an assembly plan")
-    run_parser.add_argument(
-        "plan",
-        help="JSON assembly plan or path to JSON file",
-    )
-
-    # Status command
-    subparsers.add_parser("status", help="Check assembly service status")
-
-    args = parser.parse_args(argv)
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
-    try:
-        from web.services.media_assembler import get_media_assembler
-
-        service = get_media_assembler()
-
-        if args.command == "run":
-            plan = args.plan
-            # If it's a file path, load it
-            if os.path.exists(plan):
-                with open(plan, "r", encoding="utf-8") as f:
-                    plan = f.read()
-
-            result = service.run_assembly_plan(plan)
-            print_json(result)
-
-        elif args.command == "status":
-            print_json(
-                {
-                    "status": "ready",
-                    "capabilities": ["image_to_video", "concat", "audio_overlay"],
-                }
-            )
-
-    except Exception as e:
-        print_json({"success": False, "error": str(e)})
-        sys.exit(1)
-
-
-def run_browser_command():
-    """Handle browser automation commands via CLI.
-
-    Usage:
-        ShadowBridge.exe browser search "latest spacex news"
-        ShadowBridge.exe browser summarize --url "https://google.com"
-        ShadowBridge.exe browser setup
-    """
-    import argparse
-    import asyncio
-    from browser_automation import get_browser_service
-
-    def print_json(data):
-        """Print JSON with strict markers to avoid parsing issues."""
-        print("<<<BROWSER_JSON_START>>>")
-        print(json.dumps(data))
-        print("<<<BROWSER_JSON_END>>>")
-
-    # Ensure script directory is in path
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    if script_dir not in sys.path:
-        sys.path.insert(0, script_dir)
-
-    # Remove "browser" from argv
-    argv = sys.argv[2:]
-
-    parser = argparse.ArgumentParser(description="Browser automation CLI")
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    # Search command
-    search_parser = subparsers.add_parser("search", help="Search and summarize")
-    search_parser.add_argument("query", help="Search query")
-
-    # Summarize command
-    sum_parser = subparsers.add_parser("summarize", help="Summarize page")
-    sum_parser.add_argument("--url", required=True, help="URL to summarize")
-
-    # Setup command
-    subparsers.add_parser("setup", help="Install browser environment")
-
-    args = parser.parse_args(argv)
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
-    service = get_browser_service()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        if args.command == "setup":
-            print("Setting up browser environment...")
-            result = loop.run_until_complete(service.setup())
-            print_json(result)
-        elif args.command == "search":
-            result = loop.run_until_complete(service.search_and_summarize(args.query))
-            print_json(result)
-        elif args.command == "summarize":
-            result = loop.run_until_complete(service.get_page_content(args.url))
-            print_json(result)
-    except Exception as e:
-        print_json({"success": False, "error": str(e)})
-    finally:
-        loop.close()
 
 
 def is_admin():
@@ -1004,10 +291,13 @@ if ENVIRONMENT == "DEBUG": NOTE_CONTENT_PORT = 19295
 elif ENVIRONMENT == "AIDEV": NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.118"
+APP_VERSION = "1.124"
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
+AGENTS_FILE = os.path.join(HOME_DIR, ".shadowai", "agents.json")
+TASKS_FILE = os.path.join(HOME_DIR, ".shadowai", "tasks.json")
+AUTOMATIONS_FILE = os.path.join(HOME_DIR, ".shadowai", "automations.json")
 WINDOW_STATE_FILE = os.path.join(HOME_DIR, ".shadowai", "window_state.json")
 SETTINGS_FILE = os.path.join(HOME_DIR, ".shadowai", "settings.json")
 
@@ -1274,11 +564,6 @@ def get_local_ip(wait=False):
     """Get primary local IP address - non-blocking cached version unless wait=True."""
     global _cached_local_ip
     
-    # 1. Prioritize Tailscale IP if available (stable across networks)
-    ts_ip = get_tailscale_ip()
-    if ts_ip and ts_ip != "Detecting...":
-        return ts_ip
-
     if _cached_local_ip and _cached_local_ip != "Detecting...":
         return _cached_local_ip
 
@@ -1288,37 +573,98 @@ def get_local_ip(wait=False):
 
         def detect():
             global _cached_local_ip
+            candidate_ip = None
+            
             try:
-                # 1. Try fast local hostname resolution first
+                # 1. Prefer IPv4 Route (Best for legacy SSH/QR codes)
                 try:
-                    _cached_local_ip = socket.gethostbyname(socket.gethostname())
-                except Exception:
-                    pass
-
-                # 2. Check for primary network IP (socket method) - most reliable for LAN
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.settimeout(1)
-                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.settimeout(1.0)
                     s.connect(("8.8.8.8", 80))
-                    _cached_local_ip = s.getsockname()[0]
+                    ip = s.getsockname()[0]
+                    s.close()
+                    # Prioritize LAN over Tailscale for the primary displayed IP
+                    if not ip.startswith("127.") and not ip.startswith("169.254.") and not ip.startswith("100."):
+                        candidate_ip = ip
                 except Exception:
                     pass
-                finally:
-                    s.close()
 
-                # 3. If socket failed, try get_all_ips
-                if not _cached_local_ip or _cached_local_ip.startswith("127."):
-                    all_ips = get_all_ips()
-                    if all_ips["local"]:
-                        _cached_local_ip = all_ips["local"][0]
-                    elif all_ips["other"]:
-                        _cached_local_ip = all_ips["other"][0]
+                # 2. Tailscale Fallback (If LAN unavailable or route points there)
+                if not candidate_ip:
+                    ts_ip = get_tailscale_ip()
+                    if ts_ip and ts_ip != "Detecting...":
+                        candidate_ip = ts_ip
 
-                # 4. Final fallback
-                if not _cached_local_ip:
-                    _cached_local_ip = "127.0.0.1"
+                # 3. IPv6 Route (If IPv4 unavailable)
+                if not candidate_ip:
+                    try:
+                        s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+                        s.settimeout(1.0)
+                        s.connect(("2001:4860:4860::8888", 80))
+                        ip = s.getsockname()[0]
+                        s.close()
+                        # Exclude Link-Local (fe80:) as they require Scope IDs which are hard for clients
+                        if not ip.startswith("fe80:") and not ip.startswith("::1"):
+                            candidate_ip = ip
+                    except Exception:
+                        pass
 
-            except Exception:
+                # 4. Fallback: Iterate all interfaces (AF_UNSPEC for v4 and v6)
+                if not candidate_ip:
+                    try:
+                        hostname = socket.gethostname()
+                        # AF_UNSPEC gets both v4 and v6
+                        all_ips = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                        
+                        ipv4_candidates = []
+                        ipv6_candidates = []
+
+                        for item in all_ips:
+                            ip = item[4][0]
+                            # Skip loopback
+                            if ip.startswith("127.") or ip == "::1": continue
+                            # Skip APIPA
+                            if ip.startswith("169.254."): continue
+                            
+                            if ":" in ip: # IPv6
+                                ipv6_candidates.append(ip)
+                            else: # IPv4
+                                ipv4_candidates.append(ip)
+                        
+                        # Preference logic:
+                        # 1. 192.168.x.x (Standard Home)
+                        # 2. 10.x.x.x (Corporate/VPN)
+                        # 3. 172.x.x.x (Docker/Corporate - lower priority as often virtual)
+                        # 4. Global IPv6
+                        # 5. Tailscale (100.x.x.x)
+                        # 6. Other IPv4
+                        
+                        prio_192 = [i for i in ipv4_candidates if i.startswith("192.168.")]
+                        prio_10 = [i for i in ipv4_candidates if i.startswith("10.") and not i.startswith("100.")]
+                        prio_172 = [i for i in ipv4_candidates if i.startswith("172.")]
+                        prio_ts = [i for i in ipv4_candidates if i.startswith("100.")]
+                        
+                        if prio_192: candidate_ip = prio_192[0]
+                        elif prio_10: candidate_ip = prio_10[0]
+                        elif ipv6_candidates: 
+                            global_v6 = [i for i in ipv6_candidates if not i.startswith("fe80:")]
+                            candidate_ip = global_v6[0] if global_v6 else ipv6_candidates[0]
+                        elif prio_172: candidate_ip = prio_172[0]
+                        elif prio_ts: candidate_ip = prio_ts[0]
+                        elif ipv4_candidates: candidate_ip = ipv4_candidates[0]
+                        
+                    except Exception:
+                        pass
+
+                # 5. Final Fallback
+                if not candidate_ip:
+                    candidate_ip = "127.0.0.1"
+                
+                _cached_local_ip = candidate_ip
+                log.info(f"Detected primary Local IP (LAN prioritized): {_cached_local_ip}")
+
+            except Exception as e:
+                log.error(f"IP detection failed: {e}")
                 _cached_local_ip = "127.0.0.1"
             finally:
                 get_local_ip._detecting = False
@@ -1329,7 +675,6 @@ def get_local_ip(wait=False):
             threading.Thread(target=detect, daemon=True).start()
 
     if wait and (not _cached_local_ip or _cached_local_ip == "Detecting..."):
-         # Should have been set by detect(), but just in case
          pass
 
     return _cached_local_ip
@@ -2298,7 +1643,7 @@ class DataReceiver(threading.Thread):
 
     # Rate limiting settings
     RATE_LIMIT_WINDOW = 60  # seconds
-    RATE_LIMIT_MAX = 30  # max attempts per window (increased for retry flows)
+    RATE_LIMIT_MAX = 100  # max attempts per window (increased for retry flows)
 
     # SECURITY: Limit concurrent connections to prevent resource exhaustion
     MAX_WORKERS = 10
@@ -2584,13 +1929,14 @@ class DataReceiver(threading.Thread):
     def _relay_to_all_devices(self, message):
         """Relay a message to all connected Android devices."""
         with self._conns_lock:
-            for device_id, conn_info in list(self._device_conns.items()):
+            for device_id, conn in list(self._device_conns.items()):
                 try:
-                    conn = conn_info.get("conn")
                     if conn:
                         self._send_to_conn(conn, message)
                 except Exception as e:
                     log.debug(f"Failed to relay to device {device_id}: {e}")
+                    # Remove broken connection
+                    self._device_conns.pop(device_id, None)
 
     def approve_device(self, device_id):
         """Approve a device for SSH key installation."""
@@ -2889,6 +2235,10 @@ class DataReceiver(threading.Thread):
                                 "message": "Key already installed",
                             }
                             self._send_response(conn, response)
+                        elif TRUST_ALL:
+                            log.info(f"TRUST_ALL enabled: auto-approving key from {device_name}")
+                            result = self._install_ssh_key(public_key, device_name)
+                            self._send_response(conn, result)
                         else:
                             # Queue for approval (even if device is known, a new key requires approval)
                             log.info(
@@ -2937,6 +2287,18 @@ class DataReceiver(threading.Thread):
                                     f"Including {len(pending['projects'])} pending projects for sync to device"
                                 )
                         self._send_response(conn, response)
+                    elif "agents" in payload:
+                        # Handle agents data
+                        self._save_agents(device_id, device_name, ip, payload["agents"])
+                        self._send_response(conn, {"success": True, "message": "Agents synced"})
+                    elif "tasks" in payload:
+                        # Handle tasks data
+                        self._save_tasks(device_id, device_name, ip, payload["tasks"])
+                        self._send_response(conn, {"success": True, "message": "Tasks synced"})
+                    elif "automations" in payload:
+                        # Handle automations data
+                        self._save_automations(device_id, device_name, ip, payload["automations"])
+                        self._send_response(conn, {"success": True, "message": "Automations synced"})
                     elif "notes" in payload:
                         # Handle notes data (titles only, content fetched on-demand)
                         ip_candidates = payload.get("ip_candidates")
@@ -3502,6 +2864,69 @@ class DataReceiver(threading.Thread):
         except Exception:
             log.exception("Failed to save notes")
 
+    def _save_agents(self, device_id, device_name, ip, agents):
+        """Save per-device agents to local file."""
+        try:
+            if not isinstance(agents, list): return
+            with self._storage_lock:
+                state = load_agents_state()
+                devices = state.get("devices", {})
+                device = devices.get(device_id, {})
+                device.update({
+                    "id": device_id,
+                    "name": device_name,
+                    "ip": ip,
+                    "last_seen": time.time(),
+                    "agents": agents
+                })
+                devices[device_id] = device
+                save_agents_state({"devices": devices})
+                log.info(f"Saved {len(agents)} agents for {device_name}")
+        except Exception:
+            log.exception("Failed to save agents")
+
+    def _save_tasks(self, device_id, device_name, ip, tasks):
+        """Save per-device tasks to local file."""
+        try:
+            if not isinstance(tasks, list): return
+            with self._storage_lock:
+                state = load_tasks_state()
+                devices = state.get("devices", {})
+                device = devices.get(device_id, {})
+                device.update({
+                    "id": device_id,
+                    "name": device_name,
+                    "ip": ip,
+                    "last_seen": time.time(),
+                    "tasks": tasks
+                })
+                devices[device_id] = device
+                save_tasks_state({"devices": devices})
+                log.info(f"Saved {len(tasks)} tasks for {device_name}")
+        except Exception:
+            log.exception("Failed to save tasks")
+
+    def _save_automations(self, device_id, device_name, ip, automations):
+        """Save per-device automations to local file."""
+        try:
+            if not isinstance(automations, list): return
+            with self._storage_lock:
+                state = load_automations_state()
+                devices = state.get("devices", {})
+                device = devices.get(device_id, {})
+                device.update({
+                    "id": device_id,
+                    "name": device_name,
+                    "ip": ip,
+                    "last_seen": time.time(),
+                    "automations": automations
+                })
+                devices[device_id] = device
+                save_automations_state({"devices": devices})
+                log.info(f"Saved {len(automations)} automations for {device_name}")
+        except Exception:
+            log.exception("Failed to save automations")
+
     def _migrate_saved_device(self, old_device_id, new_device_id, device_name, ip):
         """Migrate persisted projects from an IP-based id to a stable device id."""
         try:
@@ -3649,6 +3074,66 @@ def save_notes_state(state):
             json.dump(payload, f, indent=2)
     except Exception:
         pass
+
+def load_agents_state():
+    """Load per-device agents state from local file."""
+    try:
+        if os.path.exists(AGENTS_FILE):
+            with open(AGENTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("devices"), dict):
+                    return data
+    except Exception: pass
+    return {"version": 1, "updated": 0.0, "devices": {}}
+
+def save_agents_state(state):
+    """Persist per-device agents state to local file."""
+    try:
+        os.makedirs(os.path.dirname(AGENTS_FILE), exist_ok=True)
+        payload = {"version": 1, "updated": time.time(), "devices": state.get("devices", {})}
+        with open(AGENTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception: pass
+
+def load_tasks_state():
+    """Load per-device tasks state from local file."""
+    try:
+        if os.path.exists(TASKS_FILE):
+            with open(TASKS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("devices"), dict):
+                    return data
+    except Exception: pass
+    return {"version": 1, "updated": 0.0, "devices": {}}
+
+def save_tasks_state(state):
+    """Persist per-device tasks state to local file."""
+    try:
+        os.makedirs(os.path.dirname(TASKS_FILE), exist_ok=True)
+        payload = {"version": 1, "updated": time.time(), "devices": state.get("devices", {})}
+        with open(TASKS_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception: pass
+
+def load_automations_state():
+    """Load per-device automations state from local file."""
+    try:
+        if os.path.exists(AUTOMATIONS_FILE):
+            with open(AUTOMATIONS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("devices"), dict):
+                    return data
+    except Exception: pass
+    return {"version": 1, "updated": 0.0, "devices": {}}
+
+def save_automations_state(state):
+    """Persist per-device automations state to local file."""
+    try:
+        os.makedirs(os.path.dirname(AUTOMATIONS_FILE), exist_ok=True)
+        payload = {"version": 1, "updated": time.time(), "devices": state.get("devices", {})}
+        with open(AUTOMATIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception: pass
 
 
 def get_note_content_from_cache(note_id):
@@ -3811,7 +3296,18 @@ class CompanionRelayServer(threading.Thread):
 
     def _handle_connection(self, conn, addr):
         """Handle incoming connection (either plugin or device)."""
-        log.info(f"Companion connection from {addr}")
+        # Categorize connection source for debugging multi-IP strategy
+        ip = addr[0]
+        if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
+            conn_type = "LAN"
+        elif ip.startswith("100."):
+            conn_type = "Tailscale"
+        elif ip.startswith("127."):
+            conn_type = "Localhost"
+        else:
+            conn_type = "Other"
+
+        log.info(f"Companion connection from {addr} ({conn_type})")
         client_type = None
         device_id = None
 
@@ -4004,6 +3500,11 @@ class CompanionRelayServer(threading.Thread):
             log.debug(f"Companion connection closed: {e}")
         finally:
             # Clean up connection
+            try:
+                conn.shutdown(socket.SHUT_WR)
+                time.sleep(0.5)  # Allow time for data flush
+            except (socket.error, OSError):
+                pass
             with self._conns_lock:
                 if client_type == "plugin" and self._plugin_conn == conn:
                     self._plugin_conn = None
@@ -4799,35 +4300,41 @@ class DiscoveryServer(threading.Thread):
                 tailscale_ip = get_tailscale_ip()
                 ssh_port = self.connection_info.get("port", 22)
 
-                # Register Local IP
-                if local_ip:
-                    info_local = ServiceInfo(
-                        "_shadowai._tcp.local.",
-                        f"{hostname} (Local)._shadowai._tcp.local.",
-                        addresses=[socket.inet_aton(local_ip)],
-                        port=ssh_port,
-                        properties=desc,
-                        server=f"{hostname}.local.",
-                    )
-                    self.zeroconf.register_service(info_local)
-                    self.service_infos.append(info_local)
-                    log.info(f"[OK] mDNS service registered (Local): {local_ip}")
+                # 1. Register Local IP
+                if local_ip and local_ip not in ("Detecting...", "127.0.0.1", "0.0.0.0"):
+                    try:
+                        info_local = ServiceInfo(
+                            "_shadowai._tcp.local.",
+                            f"{hostname} (Local)._shadowai._tcp.local.",
+                            addresses=[socket.inet_aton(local_ip)],
+                            port=ssh_port,
+                            properties=desc,
+                            server=f"{hostname}.local.",
+                        )
+                        self.zeroconf.register_service(info_local)
+                        self.service_infos.append(info_local)
+                        log.info(f"[OK] mDNS service registered (Local): {local_ip}")
+                    except Exception as e:
+                        log.debug(f"Failed to register local mDNS: {e}")
 
                 # Register Tailscale IP if available
-                if tailscale_ip:
-                    info_ts = ServiceInfo(
-                        "_shadowai._tcp.local.",
-                        f"{hostname} (Tailscale)._shadowai._tcp.local.",
-                        addresses=[socket.inet_aton(tailscale_ip)],
-                        port=ssh_port,
-                        properties=desc,
-                        server=f"{hostname}-ts.local.",
-                    )
-                    self.zeroconf.register_service(info_ts)
-                    self.service_infos.append(info_ts)
-                    log.info(
-                        f"[OK] mDNS service registered (Tailscale): {tailscale_ip}"
-                    )
+                if tailscale_ip and tailscale_ip not in ("Detecting...", "127.0.0.1", "0.0.0.0"):
+                    try:
+                        info_ts = ServiceInfo(
+                            "_shadowai._tcp.local.",
+                            f"{hostname} (Tailscale)._shadowai._tcp.local.",
+                            addresses=[socket.inet_aton(tailscale_ip)],
+                            port=ssh_port,
+                            properties=desc,
+                            server=f"{hostname}-ts.local.",
+                        )
+                        self.zeroconf.register_service(info_ts)
+                        self.service_infos.append(info_ts)
+                        log.info(
+                            f"[OK] mDNS service registered (Tailscale): {tailscale_ip}"
+                        )
+                    except Exception as e:
+                        log.debug(f"Failed to register tailscale mDNS: {e}")
 
             except Exception as e:
                 log.warning(f"Failed to register mDNS service: {e}")
@@ -4886,10 +4393,18 @@ class DiscoveryServer(threading.Thread):
                 try:
                     data, addr = self.sock.recvfrom(1024)
                     if data.startswith(DISCOVERY_MAGIC):
-                        # Skip verbose logging to reduce spam
-                        # Refresh info before responding to ensure IPs are current
+                        # Refresh info before responding to ensure IPs are current with LAN priority
+                        fresh_info = self.connection_info
+                        if self.app_instance and hasattr(self.app_instance, "get_connection_info"):
+                            fresh_info = self.app_instance.get_connection_info()
+
+                        # Log discovery response with IP count for debugging
+                        num_hosts = len(fresh_info.get("hosts", []))
+                        primary = fresh_info.get("host", "N/A")
+                        log.debug(f"Discovery response to {addr[0]}: {num_hosts} IPs (primary: {primary})")
+
                         response = (
-                            DISCOVERY_MAGIC + json.dumps(self.connection_info).encode()
+                            DISCOVERY_MAGIC + json.dumps(fresh_info).encode()
                         )
                         self.sock.sendto(response, addr)
                 except socket.timeout:
@@ -5225,6 +4740,23 @@ class ShadowBridgeApp:
         self.root.after(1500, self.check_for_updates_on_startup)
         self.root.after(1800, self.check_web_server_status)
         self.root.after(2000, self.check_tools)  # Check tool status once at startup
+
+        if AUTO_INSTALL:
+            self.root.after(3000, self.check_and_auto_install_tools)
+
+    def check_and_auto_install_tools(self):
+        """Check for missing essential tools and auto-install them."""
+        log.info("Checking for essential tools to auto-install...")
+        essential_tools = ["claude", "gemini"]
+        
+        for tool_id in essential_tools:
+            if not check_tool_installed(tool_id):
+                log.info(f"Auto-installing missing essential tool: {tool_id}")
+                spec = self._tool_specs.get(tool_id)
+                if spec:
+                    self.install_tool(tool_id, tool_id.capitalize(), spec)
+                else:
+                    log.warning(f"No spec found for essential tool: {tool_id}")
 
     def setup_styles(self):
         """Configure ttk styles for modern M3-inspired look."""
@@ -6348,15 +5880,19 @@ class ShadowBridgeApp:
         canvas.itemconfig("dot", fill=color)
 
     def get_connection_info(self):
-        """Get connection info with simplified fallback options.
+        """Get connection info with multi-IP fallback strategy.
 
-        Only advertises 2 connection options:
-        1. Private LAN IP (most common use case)
-        2. Tailscale IP (for cross-network access)
+        Returns ALL available IPs in priority order:
+        1. Private LAN IPs (192.168.x.x, 10.x.x.x, 172.x.x.x) - FASTEST
+        2. Tailscale IPs (100.x.x.x) - Cross-network VPN
+        3. Other public/VPN IPs - Last resort
+
+        Android app should try IPs in order until one succeeds.
         """
         tailscale_ip = get_tailscale_ip()
         local_ip = get_local_ip()
         hostname_local = get_hostname_local()
+        all_ips = get_all_local_ips()
 
         # Get the dynamic encryption salt for note sync (Phase 5.3 requirement)
         try:
@@ -6366,41 +5902,61 @@ class ShadowBridgeApp:
         except Exception:
             salt_b64 = None
 
-        # Build simplified list of hosts (max 2 options)
-        # Only show: LAN IP and Tailscale IP (if available)
+        # Build comprehensive list of hosts with priority ordering
+        # CRITICAL: Android app must try these IN ORDER
         hosts_to_try = []
 
-        # 1. Private LAN IP (most common home/office use)
-        if local_ip and not local_ip.startswith("127."):
-            hosts_to_try.append(
-                {"host": local_ip, "type": "local", "stable": False, "label": "LAN"}
-            )
+        # Priority 1: Private LAN IPs (FASTEST - same Wi-Fi network)
+        for ip in all_ips.get("local", []):
+            if ip and not ip.startswith("127."):
+                hosts_to_try.append(
+                    {"host": ip, "type": "local", "stable": False, "label": "LAN", "priority": 1}
+                )
 
-        # 2. Tailscale IP (works across networks)
-        if tailscale_ip:
+        # Priority 2: Tailscale IPs (Cross-network VPN - works anywhere but slower)
+        for ip in all_ips.get("tailscale", []):
             hosts_to_try.append(
                 {
-                    "host": tailscale_ip,
+                    "host": ip,
                     "type": "tailscale",
                     "stable": True,
                     "label": "Tailscale",
+                    "priority": 2,
                 }
             )
 
-        # Primary host (best available - prefer Tailscale for stability)
-        primary_host = tailscale_ip or local_ip
-        mode = "tailscale" if tailscale_ip else "local"
+        # Priority 3: VPN IPs (OpenVPN, WireGuard, etc.)
+        for ip in all_ips.get("vpn", []):
+            hosts_to_try.append(
+                {"host": ip, "type": "vpn", "stable": False, "label": "VPN", "priority": 3}
+            )
+
+        # Priority 4: Other IPs (Public or unknown)
+        for ip in all_ips.get("other", []):
+            hosts_to_try.append(
+                {"host": ip, "type": "other", "stable": False, "label": "Other", "priority": 4}
+            )
+
+        # Primary host (best available - PREFER LAN, Tailscale as fallback)
+        primary_host = local_ip or tailscale_ip
+        mode = "local" if local_ip else "tailscale"
+
+        # Log multi-IP advertising for debugging
+        if hosts_to_try:
+            ip_summary = ", ".join([f"{h['label']}:{h['host']}" for h in hosts_to_try[:4]])
+            log.debug(f"Advertising {len(hosts_to_try)} IPs (primary: {primary_host}): {ip_summary}")
 
         return {
             "type": "shadowai_connect",
-            "version": 4,  # Bumped version for simplified host list
+            "version": 6,  # Bumped version for multi-IP priority strategy
             "mode": mode,
-            "host": primary_host,  # Primary for QR display
+            "host": primary_host,  # Primary for QR display (LAN preferred)
             "port": self.ssh_port,
+            "data_port": DATA_PORT, # Port for key exchange and data sync
             "username": get_username(),
             "hostname": socket.gethostname(),
             "hostname_local": hostname_local,
-            "hosts": hosts_to_try,  # Simplified: only LAN and Tailscale
+            "hosts": hosts_to_try,  # Multi-IP array with priority ordering
             "local_ip": local_ip,
             "tailscale_ip": tailscale_ip,
             "encryption_salt": salt_b64,
@@ -9132,201 +8688,6 @@ def run_web_dashboard_server(open_browser: bool):
         raise
 
 
-def run_audio_command():
-    """Handle audio generation commands via CLI.
-
-    Usage:
-        ShadowBridge.exe audio generate "A mellow lo-fi track"
-        ShadowBridge.exe audio generate --prompt_b64 <base64>
-        ShadowBridge.exe audio status
-        ShadowBridge.exe audio setup
-        ShadowBridge.exe audio list-models
-    """
-    import argparse
-
-    def print_json(data):
-        """Print JSON with strict markers to avoid parsing issues."""
-        print("<<<AUDIO_JSON_START>>>")
-        print(json.dumps(data))
-        print("<<<AUDIO_JSON_END>>>")
-
-    argv = sys.argv[2:]
-
-    parser = argparse.ArgumentParser(description="Generate audio using local AI models")
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    gen_parser = subparsers.add_parser("generate", help="Generate audio")
-    gen_parser.add_argument(
-        "prompt", nargs="?", help="Text prompt for audio generation"
-    )
-    gen_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
-    gen_parser.add_argument(
-        "--mode",
-        default="music",
-        choices=["music", "sfx"],
-        help="Audio mode (music or sfx)",
-    )
-    gen_parser.add_argument(
-        "--model",
-        default="musicgen-small",
-        help="Model ID (default: musicgen-small)",
-    )
-    gen_parser.add_argument(
-        "--duration", type=float, default=8, help="Duration in seconds"
-    )
-    gen_parser.add_argument(
-        "--temperature", type=float, default=1.0, help="Sampling temperature"
-    )
-    gen_parser.add_argument("--top_k", type=int, default=250, help="Top-k sampling")
-    gen_parser.add_argument("--top_p", type=float, default=0.0, help="Top-p sampling")
-    gen_parser.add_argument(
-        "--seed", type=int, default=None, help="Seed for reproducibility"
-    )
-
-    subparsers.add_parser("status", help="Check audio service status")
-    subparsers.add_parser("setup", help="Install audio dependencies")
-    subparsers.add_parser("list-models", help="List available models")
-
-    args = parser.parse_args(argv)
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
-    try:
-        if args.command == "generate":
-            from web.routes.audio import _load_generations, _save_generations
-            from web.services.audio_service import get_audio_generation_service
-
-            prompt = args.prompt
-            if args.prompt_b64:
-                prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
-
-            if not prompt:
-                print_json({"success": False, "error": "No prompt provided"})
-                sys.exit(1)
-
-            generation_id = f"aud_{int(time.time() * 1000)}"
-            generations = _load_generations() or {"generations": []}
-            generations.setdefault("generations", []).append(
-                {
-                    "id": generation_id,
-                    "prompt": prompt,
-                    "mode": args.mode,
-                    "model": args.model,
-                    "duration": args.duration,
-                    "status": "pending",
-                    "progress": 0,
-                    "created_at": datetime.now().isoformat(),
-                    "audio_path": None,
-                }
-            )
-            _save_generations(generations)
-
-            def update_generation(updates):
-                generations = _load_generations()
-                if generations and "generations" in generations:
-                    for gen in generations["generations"]:
-                        if gen.get("id") == generation_id:
-                            gen.update(updates)
-                            break
-                    _save_generations(generations)
-
-            update_generation({"status": "running", "progress": 20})
-
-            service = get_audio_generation_service()
-            result = service.generate_audio(
-                prompt=prompt,
-                duration_seconds=args.duration,
-                model_id=args.model,
-                mode=args.mode,
-                output_name=generation_id,
-                seed=args.seed,
-                temperature=args.temperature,
-                top_k=args.top_k,
-                top_p=args.top_p,
-            )
-
-            if result.success:
-                update_generation(
-                    {
-                        "status": "completed",
-                        "progress": 100,
-                        "audio_path": result.audio_path,
-                        "duration": result.duration_seconds,
-                        "sample_rate": result.sample_rate,
-                        "completed_at": datetime.now().isoformat(),
-                    }
-                )
-            else:
-                update_generation(
-                    {
-                        "status": "failed",
-                        "progress": 100,
-                        "error": result.error,
-                    }
-                )
-
-            payload = result.to_dict()
-            payload["generation_id"] = generation_id
-            print_json(payload)
-
-        elif args.command == "status":
-            from web.routes.audio import _load_generations
-            from web.services.audio_service import (
-                get_audio_service_status,
-                get_audio_setup_status,
-            )
-
-            generations = _load_generations()
-            all_generations = generations.get("generations", [])
-            recent = sorted(
-                all_generations, key=lambda x: x.get("created_at", ""), reverse=True
-            )[:10]
-
-            print_json(
-                {
-                    "service": get_audio_service_status(),
-                    "setup": get_audio_setup_status(),
-                    "total_generations": len(all_generations),
-                    "recent_generations": recent,
-                }
-            )
-
-        elif args.command == "setup":
-            from web.services.audio_service import (
-                start_audio_setup,
-                get_audio_setup_status,
-            )
-
-            print("Starting audio setup (PyTorch + AudioCraft)...")
-            start_audio_setup()
-
-            # Wait for completion in CLI mode
-            last_msg = ""
-            while True:
-                status = get_audio_setup_status()
-                msg = status.get("message", "")
-                if msg != last_msg:
-                    print(f"[{status.get('stage', 'running')}] {msg}")
-                    last_msg = msg
-
-                if status.get("status") in ["ready", "error"]:
-                    break
-                time.sleep(1)
-
-            print_json(status)
-
-        elif args.command == "list-models":
-            from web.services.audio_service import DEFAULT_MODELS
-
-            print_json({"models": DEFAULT_MODELS})
-
-    except Exception as e:
-        print_json({"success": False, "error": str(e)})
-        sys.exit(1)
-
-
 def handle_exception(exc_type, exc_value, exc_traceback):
     """Global exception handler to log tracebacks."""
     if issubclass(exc_type, KeyboardInterrupt):
@@ -9514,6 +8875,10 @@ def main():
 
     if start_minimized and HAS_TRAY:
         app.root.after(500, app.minimize_to_tray)
+
+    if HEADLESS_MODE:
+        log.info("Running in Headless mode (window hidden)")
+        app.root.withdraw()
 
     app.run()
 
