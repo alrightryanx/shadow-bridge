@@ -1,452 +1,185 @@
 {% extends "base.html" %}
 
-{% block title %}Shadow Web - AI Agents & Workflows{% endblock %}
-{% block page_title %}Agents & Workflows{% endblock %}
+{% block title %}Shadow Web - Agents{% endblock %}
+{% block page_title %}Agents{% endblock %}
 
 {% block content %}
-<!-- Unified Dashboard Header -->
-<div class="stats-grid small">
-    <div class="stat-card">
-        <div class="stat-info">
-            <span class="stat-value" id="active-staff-count">0</span>
-            <span class="stat-label">Active Staff</span>
+<!-- Overview Section (Always Visible) -->
+<section class="overview-section">
+    <h2 class="overview-title">Overview</h2>
+    <div class="overview-cards">
+        <div class="overview-card">
+            <div class="overview-card-icon">
+                <span class="material-symbols-outlined">smart_toy</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="overview-total-agents">0</div>
+                <div class="overview-card-label">Total Agents</div>
+            </div>
+        </div>
+        <div class="overview-card">
+            <div class="overview-card-icon active">
+                <span class="material-symbols-outlined">play_circle</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="overview-active-agents">0</div>
+                <div class="overview-card-label">Active</div>
+            </div>
+        </div>
+        <div class="overview-card">
+            <div class="overview-card-icon">
+                <span class="material-symbols-outlined">assignment</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="overview-total-tasks">0</div>
+                <div class="overview-card-label">Tasks</div>
+            </div>
+        </div>
+        <div class="overview-card">
+            <div class="overview-card-icon success">
+                <span class="material-symbols-outlined">task_alt</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="overview-completed-tasks">0</div>
+                <div class="overview-card-label">Completed</div>
+            </div>
         </div>
     </div>
-    <div class="stat-card">
-        <div class="stat-info">
-            <span class="stat-value" id="active-swarms-count">0</span>
-            <span class="stat-label">Active Swarms</span>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-info">
-            <span class="stat-value" id="tasks-completed-count">0</span>
-            <span class="stat-label">Tasks Done</span>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-info">
-            <span class="stat-value" id="system-load">Low</span>
-            <span class="stat-label">AI System Load</span>
-        </div>
-    </div>
+</section>
+
+<!-- Main Tabs (Android App Style) -->
+<div class="main-tabs">
+    <button class="tab-button active" data-tab="agents" onclick="switchMainTab('agents')">
+        <span class="material-symbols-outlined">smart_toy</span>
+        <span>Agents</span>
+    </button>
+    <button class="tab-button" data-tab="tasks" onclick="switchMainTab('tasks')">
+        <span class="material-symbols-outlined">assignment</span>
+        <span>Tasks</span>
+    </button>
+    <button class="tab-button" data-tab="monitor" onclick="switchMainTab('monitor')">
+        <span class="material-symbols-outlined">monitor_heart</span>
+        <span>Monitor</span>
+    </button>
 </div>
 
-<!-- Tab Navigation (M3 Style) -->
-<div class="page-actions" style="margin-top: var(--spacing-lg); margin-bottom: var(--spacing-lg);">
-    <div class="tab-toggle" id="agents-tab-toggle" style="flex-wrap: wrap; gap: 8px;">
-        <button class="btn active" data-tab="staffing" onclick="switchTab('staffing')">
-            <span class="material-symbols-outlined">badge</span> Staffing
-        </button>
-        <button class="btn" data-tab="teams" onclick="switchTab('teams')">
-            <span class="material-symbols-outlined">groups</span> Teams
-        </button>
-        <button class="btn" data-tab="tasks" onclick="switchTab('tasks')">
-            <span class="material-symbols-outlined">assignment</span> Tasks
-        </button>
-        <button class="btn" data-tab="ralph" onclick="switchTab('ralph')">
-            <span class="material-symbols-outlined">rocket_launch</span> Ralph
-        </button>
-        <button class="btn" data-tab="activity" onclick="switchTab('activity')">
-            <span class="material-symbols-outlined">history</span> Activity
-        </button>
-        <button class="btn" data-tab="live" onclick="switchTab('live')">
-            <span class="material-symbols-outlined">online_prediction</span> Live Agents
+<!-- Agents Tab -->
+<div id="tab-agents" class="main-tab-content active">
+    <div class="tab-header">
+        <h3>Active Agents</h3>
+        <button class="btn btn-primary" onclick="showSpawnAgentModal()">
+            <span class="material-symbols-outlined">add</span>
+            Spawn Agent
         </button>
     </div>
-    
-    <div class="emergency-controls" style="display: flex; gap: 8px;">
-        <button class="btn btn-warning btn-small" id="global-pause-btn" onclick="globalPause()">
-            <span class="material-symbols-outlined">pause</span> Pause All
-        </button>
-        <button class="btn btn-danger btn-small" onclick="globalKill()">
-            <span class="material-symbols-outlined">cancel</span> Kill All
-        </button>
+
+    <div class="agents-grid" id="agents-grid">
+        <div class="empty-state">
+            <span class="material-symbols-outlined">smart_toy</span>
+            <p>No agents running</p>
+            <button class="btn btn-primary" onclick="showSpawnAgentModal()">Spawn Your First Agent</button>
+        </div>
     </div>
-</div>
-
-<!-- Staffing Tab -->
-<div id="tab-staffing" class="tab-content">
-    <section class="section dashboard-card">
-        <div class="section-header">
-            <h2><span class="material-symbols-outlined">person_add</span> Hire Virtual Staff</h2>
-            <div class="header-actions">
-                <button class="btn btn-primary btn-small" onclick="showAddCustomAgentModal()">+ Custom Agent</button>
-            </div>
-        </div>
-        <p class="section-subtitle">Deploy dedicated AI agents with specific job roles to your project.</p>
-        
-        <div class="staffing-gallery" id="role-gallery">
-            <!-- Roles will be populated here -->
-            <div class="loading">Loading roles...</div>
-        </div>
-    </section>
-
-    <section class="section">
-        <div class="section-header">
-            <h2>Current Staff Roster</h2>
-            <div class="filter-group">
-                <select id="team-filter" class="form-select-small" onchange="refreshAllStatus()">
-                    <option value="__ALL__">All Teams</option>
-                </select>
-            </div>
-        </div>
-        <div class="agents-grid" id="staff-roster">
-            <div class="empty-state">No individual staff members hired yet.</div>
-        </div>
-    </section>
-</div>
-
-<!-- Teams Tab -->
-<div id="tab-teams" class="tab-content hidden">
-    <section class="section">
-        <div class="section-header">
-            <h2><span class="material-symbols-outlined">groups</span> Collaborative Teams</h2>
-            <button class="btn btn-primary btn-small" onclick="openCreateTeamModal()">
-                <span class="material-symbols-outlined">add</span> Create Team
-            </button>
-        </div>
-        <p class="section-description">Manage your human+AI collaborative teams and permissions.</p>
-
-        <div id="teams-requires-email" style="display: none;">
-            <div class="info-banner">
-                <span class="material-symbols-outlined">info</span>
-                <span>Verify your email in <a href="/settings" style="color: var(--accent);">Settings</a> to enable team features.</span>
-            </div>
-        </div>
-
-        <div id="teams-content" style="display: none;">
-            <!-- Pending Invitations -->
-            <div id="pending-invitations-section" class="team-subsection" style="display: none; margin-bottom: 2rem;">
-                <h3>Pending Invitations</h3>
-                <div id="pending-invitations-list" class="invitations-list"></div>
-            </div>
-
-            <!-- My Teams -->
-            <div class="team-subsection">
-                <div id="my-teams-list" class="teams-list">
-                    <div class="empty-state">
-                        <span class="material-symbols-outlined">groups</span>
-                        <p>You're not a member of any teams yet.</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
 </div>
 
 <!-- Tasks Tab -->
-<div id="tab-tasks" class="tab-content hidden">
-    <section class="section">
-        <div class="section-header">
-            <h2><span class="material-symbols-outlined">assignment</span> Agent Task Board</h2>
-            <button class="btn btn-primary btn-small" onclick="showCreateTaskModal()">+ New Task</button>
-        </div>
-        
-        <div class="tasks-columns">
-            <div class="task-column">
-                <div class="task-column-header">
-                    <span class="task-column-title">Pending</span>
-                    <span class="task-column-count" id="pending-count">0</span>
-                </div>
-                <div class="task-list" id="pending-tasks-list"></div>
-            </div>
-            <div class="task-column">
-                <div class="task-column-header">
-                    <span class="task-column-title">In Progress</span>
-                    <span class="task-column-count" id="progress-count">0</span>
-                </div>
-                <div class="task-list" id="progress-tasks-list"></div>
-            </div>
-            <div class="task-column">
-                <div class="task-column-header">
-                    <span class="task-column-title">Completed</span>
-                    <span class="task-column-count" id="completed-count">0</span>
-                </div>
-                <div class="task-list" id="completed-tasks-list"></div>
-            </div>
-        </div>
-    </section>
-</div>
+<div id="tab-tasks" class="main-tab-content">
+    <div class="tab-header">
+        <h3>Tasks</h3>
+        <button class="btn btn-primary" onclick="showCreateTaskModal()">
+            <span class="material-symbols-outlined">add</span>
+            New Task
+        </button>
+    </div>
 
-<!-- Ralph Tab -->
-<div id="tab-ralph" class="tab-content hidden">
-    <div class="ralph-layout">
-        <div class="ralph-sidebar">
-            <section class="section dashboard-card">
-                <div class="section-header">
-                    <h2>Deploy Ralph Swarm</h2>
-                </div>
-                <div class="form-group">
-                    <label>Target Project</label>
-                    <input type="text" id="swarm-project-dir" class="form-input" value="C:/shadow">
-                </div>
-                <div class="form-group">
-                    <label>Mission Goal</label>
-                    <textarea id="swarm-goal" class="form-textarea" rows="3" placeholder="Describe the comprehensive goal for the swarm..."></textarea>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Agent Count</label>
-                        <input type="number" id="swarm-agent-count" class="form-input" value="5" min="1" max="20">
-                    </div>
-                    <div class="form-group">
-                        <label>Model</label>
-                        <select id="swarm-model" class="form-select">
-                            <option value="opencode/glm-4.7-free">GLM 4.7 (Free)</option>
-                            <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-                            <option value="gpt-4o">GPT-4o</option>
-                        </select>
-                    </div>
-                </div>
-                <button class="btn btn-primary btn-full" onclick="deploySwarm()">
-                    <span class="material-symbols-outlined">rocket_launch</span> Launch Swarm
-                </button>
-            </section>
-
-            <!-- Ralph Engines (Moved here from separate tab) -->
-            <section class="section dashboard-card" style="margin-top: 1rem;">
-                <div class="section-header">
-                    <h3>Ralph Engines</h3>
-                </div>
-                
-                <div class="engine-mini-card">
-                    <div class="engine-header">
-                        <span class="material-symbols-outlined">temp_agent</span>
-                        <h4>Brainstormer</h4>
-                    </div>
-                    <p class="small-text">Recursive planning and multi-model debate.</p>
-                    <button class="btn btn-secondary btn-small btn-full" onclick="switchTab('engines')">Open Engines</button>
-                </div>
-            </section>
+    <div class="task-board">
+        <div class="task-column">
+            <div class="task-column-header">
+                <h4>Pending</h4>
+                <span class="task-count" id="pending-count">0</span>
+            </div>
+            <div class="task-list" id="pending-tasks"></div>
         </div>
-        
-        <div class="ralph-main">
-            <section class="section">
-                <div class="section-header">
-                    <h2>Active Swarm Agents</h2>
-                    <button class="btn btn-small btn-secondary" onclick="refreshSwarms()">
-                        <span class="material-symbols-outlined">refresh</span>
-                    </button>
-                </div>
-                <div class="agents-list" id="swarm-roster">
-                    <div class="empty-state">No swarm active. Launch a mission to begin.</div>
-                </div>
-            </section>
-
-            <!-- Sub-tab for Engines if preferred, but for now we'll just keep the section below -->
-            <section class="section" id="ralph-engines-content">
-                <div class="section-header">
-                    <h2>Workflow Engines</h2>
-                </div>
-                <div class="engines-grid">
-                    <div class="dashboard-card engine-card">
-                        <h3>Brainstormer</h3>
-                        <p>Strategic planning via multi-round debates.</p>
-                        <textarea id="brainstorm-objective" class="form-textarea" rows="2" placeholder="What high-level plans do you need?"></textarea>
-                        <button class="btn btn-primary btn-full" onclick="launchBrainstormer()">Launch</button>
-                    </div>
-                    <div class="dashboard-card engine-card">
-                        <h3>Looping Engine</h3>
-                        <p>Iterative refinement of specific tasks.</p>
-                        <textarea id="loop-task" class="form-textarea" rows="2" placeholder="Describe the task to iterate on..."></textarea>
-                        <button class="btn btn-secondary btn-full" onclick="launchLooper()">Launch</button>
-                    </div>
-                </div>
-            </section>
+        <div class="task-column">
+            <div class="task-column-header">
+                <h4>In Progress</h4>
+                <span class="task-count" id="progress-count">0</span>
+            </div>
+            <div class="task-list" id="progress-tasks"></div>
+        </div>
+        <div class="task-column">
+            <div class="task-column-header">
+                <h4>Completed</h4>
+                <span class="task-count" id="completed-count">0</span>
+            </div>
+            <div class="task-list" id="completed-tasks"></div>
         </div>
     </div>
 </div>
 
-<!-- Live Agents Tab (WebSocket-Connected Persistent Agents) -->
-<div id="tab-live" class="tab-content hidden">
-    <section class="section">
-        <div class="section-header">
-            <h2><span class="material-symbols-outlined">online_prediction</span> Live Agent Monitoring</h2>
-            <button class="btn btn-primary btn-small" onclick="showSpawnAgentModal()">
-                <span class="material-symbols-outlined">add</span> Spawn Agent
+<!-- Monitor Tab -->
+<div id="tab-monitor" class="main-tab-content">
+    <div class="tab-header">
+        <h3>Activity Monitor</h3>
+        <div class="monitor-controls">
+            <span class="live-indicator">
+                <span class="pulse"></span>
+                LIVE
+            </span>
+            <button class="btn btn-small" onclick="clearActivityFeed()">
+                <span class="material-symbols-outlined">clear_all</span>
+                Clear
             </button>
         </div>
-        <p class="section-subtitle">Real-time monitoring of persistent AI agents running on your PC.</p>
+    </div>
 
-        <div class="agents-grid" id="live-agents-grid">
-            <div class="loading">Connecting to agent orchestrator...</div>
+    <div class="monitor-grid">
+        <div class="monitor-section">
+            <h4>Activity Feed</h4>
+            <div class="activity-feed" id="activity-feed">
+                <div class="empty-state-small">Waiting for agent activity...</div>
+            </div>
         </div>
-    </section>
-</div>
-
-<!-- Activity Tab -->
-<div id="tab-activity" class="tab-content hidden">
-    <div class="activity-layout">
-        <section class="section">
-            <div class="section-header">
-                <h2>Live Activity Feed</h2>
-                <div class="feed-controls">
-                    <span class="live-indicator" id="live-indicator">
-                        <span class="pulse"></span> LIVE
-                    </span>
-                    <button class="btn btn-small" onclick="clearFeed()">Clear</button>
+        <div class="monitor-section">
+            <h4>System Metrics</h4>
+            <div class="metrics-cards">
+                <div class="metric-card">
+                    <div class="metric-label">CPU Usage</div>
+                    <div class="metric-value" id="metric-cpu">0%</div>
+                    <div class="metric-bar">
+                        <div class="metric-bar-fill" id="metric-cpu-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Memory Usage</div>
+                    <div class="metric-value" id="metric-memory">0 MB</div>
+                    <div class="metric-bar">
+                        <div class="metric-bar-fill" id="metric-memory-bar" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Active Processes</div>
+                    <div class="metric-value" id="metric-processes">0</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Uptime</div>
+                    <div class="metric-value" id="metric-uptime">0s</div>
                 </div>
             </div>
-            <div class="activity-feed" id="activity-feed-container">
-                <div class="loading">Waiting for agent activity...</div>
-            </div>
-        </section>
-
-        <section class="section">
-            <div class="section-header">
-                <h2>Unified Logs</h2>
-                <div class="log-controls">
-                    <select id="log-target-select" class="form-select-small" style="min-width: 200px;" onchange="updateUnifiedLogs()">
-                        <option value="">Select Target...</option>
-                    </select>
-                    <button class="btn btn-icon-small" onclick="updateUnifiedLogs()">
-                        <span class="material-symbols-outlined">refresh</span>
-                    </button>
-                </div>
-            </div>
-            <div class="log-container">
-                <pre id="unified-log-output" class="log-display">Select an agent or swarm to view live logs...</pre>
-            </div>
-        </section>
+        </div>
     </div>
 </div>
 
 <!-- Modals -->
 
-<!-- Hire Role Modal -->
-<div id="hire-role-modal" class="modal hidden">
-    <div class="modal-content modal-small">
-        <div class="modal-header">
-            <h2 id="hire-role-title">Hire Specialist</h2>
-            <button class="modal-close" onclick="closeHireModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="role-preview-card" id="role-preview"></div>
-            <div class="form-group">
-                <label>Assigned Project</label>
-                <select id="hire-project-select" class="form-select"></select>
-            </div>
-            <div class="form-group">
-                <label>Instructions</label>
-                <textarea id="hire-instructions" class="form-textarea" placeholder="Constraints or focus areas..."></textarea>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeHireModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="confirmHire()">Deploy Agent</button>
-        </div>
-    </div>
-</div>
-
-<!-- Create Task Modal -->
-<div id="create-task-modal" class="modal hidden">
-    <div class="modal-content modal-small">
-        <div class="modal-header">
-            <h2>Create New Task</h2>
-            <button class="modal-close" onclick="closeCreateTaskModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="form-group">
-                <label>Task Title</label>
-                <input type="text" id="task-title" class="form-input" placeholder="e.g., Refactor auth logic">
-            </div>
-            <div class="form-group">
-                <label>Description</label>
-                <textarea id="task-description" class="form-textarea" placeholder="Context..."></textarea>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Priority</label>
-                    <select id="task-priority" class="form-select">
-                        <option value="LOW">Low</option>
-                        <option value="MEDIUM" selected>Medium</option>
-                        <option value="HIGH">High</option>
-                        <option value="URGENT">Urgent</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Assign To</label>
-                    <select id="task-agent-select" class="form-select">
-                        <option value="">Unassigned</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeCreateTaskModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="confirmCreateTask()">Create Task</button>
-        </div>
-    </div>
-</div>
-
-<!-- Collaborative Team Modals (Moved from settings) -->
-<div id="create-team-modal" class="modal hidden">
-    <div class="modal-content modal-small">
-        <div class="modal-header">
-            <h2><span class="material-symbols-outlined">group_add</span> Create Team</h2>
-            <button class="modal-close" onclick="closeCreateTeamModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="form-group">
-                <label for="new-team-name">Team Name</label>
-                <input type="text" id="new-team-name" class="form-input" placeholder="My Team">
-            </div>
-            <div class="form-group">
-                <label for="new-team-description">Description</label>
-                <textarea id="new-team-description" class="form-input form-textarea" placeholder="What is this team for?"></textarea>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeCreateTeamModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="confirmCreateTeam()">
-                <span class="material-symbols-outlined">check</span> Create
-            </button>
-        </div>
-    </div>
-</div>
-
-<div id="team-details-modal" class="modal hidden">
-    <div class="modal-content modal-medium">
-        <div class="modal-header">
-            <h2><span class="material-symbols-outlined">groups</span> <span id="team-details-name">Team</span></h2>
-            <button class="modal-close" onclick="closeTeamDetailsModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <p id="team-details-description" class="team-description" style="color: var(--text-dim); margin-bottom: 1rem;"></p>
-            <div class="team-members-section">
-                <div class="subsection-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <h3>Members</h3>
-                    <button class="btn btn-small btn-primary" id="invite-member-btn" onclick="toggleInviteForm()" style="display: none;">
-                        <span class="material-symbols-outlined">person_add</span> Invite
-                    </button>
-                </div>
-                <div id="invite-member-form" class="invite-form" style="display: none; background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1rem;">
-                    <div class="invite-form-row" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                        <input type="email" id="invite-email" class="form-input" style="flex: 1; min-width: 200px;" placeholder="email@example.com">
-                        <select id="invite-role" class="form-select" style="width: auto;">
-                            <option value="member">Member</option>
-                            <option value="admin">Admin</option>
-                        </select>
-                        <button class="btn btn-primary" onclick="inviteMember()">Send</button>
-                        <button class="btn btn-secondary" onclick="toggleInviteForm()">Cancel</button>
-                    </div>
-                </div>
-                <div id="team-members-list" class="members-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
-            </div>
-            <div id="team-actions" class="team-actions" style="display: none; gap: 1rem; margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
-                <button class="btn btn-danger" id="leave-team-btn" onclick="leaveTeam()">Leave Team</button>
-                <button class="btn btn-danger" id="delete-team-btn" onclick="deleteTeam()" style="display: none;">Delete Team</button>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Spawn Agent Modal -->
 <div id="spawn-agent-modal" class="modal hidden">
-    <div class="modal-content modal-medium">
+    <div class="modal-content">
         <div class="modal-header">
-            <h2><span class="material-symbols-outlined">add_circle</span> Spawn Persistent Agent</h2>
+            <h2>
+                <span class="material-symbols-outlined">add_circle</span>
+                Spawn Agent
+            </h2>
             <button class="modal-close" onclick="closeSpawnAgentModal()">&times;</button>
         </div>
         <div class="modal-body">
@@ -463,8 +196,8 @@
                     <option value="documentation">Documentation</option>
                     <option value="refactoring">Refactoring</option>
                     <option value="debugging">Debugging</option>
-                    <option value="performance">Performance</option>
-                    <option value="security">Security</option>
+                    <option value="performance">Performance Optimization</option>
+                    <option value="security">Security Analysis</option>
                 </select>
             </div>
             <div class="form-row">
@@ -478,7 +211,7 @@
                 </div>
                 <div class="form-group">
                     <label>Model</label>
-                    <input type="text" id="spawn-agent-model" class="form-input" placeholder="claude-sonnet-4-20250514">
+                    <input type="text" id="spawn-agent-model" class="form-input" value="claude-sonnet-4-20250514">
                 </div>
             </div>
             <div class="form-group">
@@ -486,7 +219,7 @@
                 <input type="text" id="spawn-agent-workdir" class="form-input" placeholder="C:/shadow">
             </div>
             <div class="form-group">
-                <label style="display: flex; align-items: center; gap: 8px;">
+                <label class="checkbox-label">
                     <input type="checkbox" id="spawn-agent-auto-accept" checked>
                     <span>Auto-accept edits</span>
                 </label>
@@ -495,7 +228,55 @@
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeSpawnAgentModal()">Cancel</button>
             <button class="btn btn-primary" onclick="confirmSpawnAgent()">
-                <span class="material-symbols-outlined">rocket_launch</span> Spawn
+                <span class="material-symbols-outlined">rocket_launch</span>
+                Spawn
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Create Task Modal -->
+<div id="create-task-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>
+                <span class="material-symbols-outlined">add_task</span>
+                Create Task
+            </h2>
+            <button class="modal-close" onclick="closeCreateTaskModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Task Title</label>
+                <input type="text" id="task-title" class="form-input" placeholder="e.g., Refactor authentication">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea id="task-description" class="form-textarea" rows="3" placeholder="Task details..."></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Priority</label>
+                    <select id="task-priority" class="form-select">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="urgent">Urgent</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Assign To</label>
+                    <select id="task-agent" class="form-select">
+                        <option value="">Unassigned</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateTaskModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmCreateTask()">
+                <span class="material-symbols-outlined">check</span>
+                Create
             </button>
         </div>
     </div>
@@ -505,103 +286,188 @@
 <div id="assign-task-modal" class="modal hidden">
     <div class="modal-content modal-small">
         <div class="modal-header">
-            <h2><span class="material-symbols-outlined">assignment</span> Assign Task</h2>
+            <h2>
+                <span class="material-symbols-outlined">assignment</span>
+                Assign Task
+            </h2>
             <button class="modal-close" onclick="closeAssignTaskModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="form-group">
                 <label>Task Description</label>
-                <textarea id="assign-task-input" class="form-textarea" rows="4" placeholder="Describe the task for the agent to complete..."></textarea>
+                <textarea id="assign-task-input" class="form-textarea" rows="4" placeholder="Describe what the agent should do..."></textarea>
             </div>
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeAssignTaskModal()">Cancel</button>
             <button class="btn btn-primary" onclick="confirmAssignTask()">
-                <span class="material-symbols-outlined">send</span> Assign
+                <span class="material-symbols-outlined">send</span>
+                Assign
             </button>
         </div>
     </div>
 </div>
 
 <style>
-/* Consolidated Agent Styles */
-.stats-grid.small {
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+/* Overview Section */
+.overview-section {
+    margin-bottom: var(--spacing-xl);
+}
+
+.overview-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: var(--spacing-md);
+    color: var(--text);
+}
+
+.overview-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: var(--spacing-md);
 }
 
-@media (max-width: 600px) {
-    .stats-grid.small {
-        grid-template-columns: 1fr 1fr;
-    }
-    .page-actions {
-        flex-direction: column;
-        align-items: stretch;
-    }
-    .emergency-controls {
-        margin-top: var(--spacing-md);
-        justify-content: space-between;
-    }
-    .emergency-controls .btn {
-        flex: 1;
-    }
-}
-
-.section-subtitle { color: var(--text-dim); font-size: 0.9rem; margin-bottom: var(--spacing-md); }
-.staffing-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--spacing-md); margin-top: var(--spacing-md); }
-.role-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--spacing-md); cursor: pointer; transition: all 0.2s ease; display: flex; flex-direction: column; gap: 8px; }
-.role-card:hover { border-color: var(--accent); transform: translateY(-2px); background: var(--bg-hover); }
-.role-icon { font-size: 32px; color: var(--accent); margin-bottom: 4px; }
-.role-name { font-weight: 600; font-size: 1.1rem; color: var(--text); }
-.role-desc { font-size: 0.85rem; color: var(--text-dim); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.engines-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-lg); margin-top: 1rem; }
-@media (max-width: 900px) { .engines-grid { grid-template-columns: 1fr; } }
-.engine-card { display: flex; flex-direction: column; gap: var(--spacing-md); padding: 1.5rem; }
-.engine-mini-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
-.engine-header { display: flex; align-items: center; gap: 0.5rem; color: var(--accent); }
-.engine-header span { font-size: 20px; }
-.small-text { font-size: 0.8rem; color: var(--text-dim); }
-.btn-full { width: 100%; justify-content: center; }
-.ralph-layout { display: grid; grid-template-columns: 320px 1fr; gap: 1.5rem; }
-@media (max-width: 1024px) { .ralph-layout { grid-template-columns: 1fr; } }
-.activity-feed { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); max-height: 400px; overflow-y: auto; padding: var(--spacing-sm); font-family: monospace; font-size: 0.85rem; }
-.log-container { background: #0d0d0d; color: #4af626; padding: 1rem; border-radius: var(--radius-lg); font-family: monospace; font-size: 0.85rem; height: 500px; overflow-y: auto; border: 1px solid var(--border); }
-.log-display { white-space: pre-wrap; word-break: break-all; margin: 0; }
-.tasks-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-lg); margin-top: var(--spacing-md); }
-@media (max-width: 1024px) { .tasks-columns { grid-template-columns: 1fr; } }
-.task-column { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); display: flex; flex-direction: column; min-height: 500px; }
-.task-column-header { padding: var(--spacing-md); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-hover); }
-.task-column-title { font-weight: 700; font-size: 0.9rem; text-transform: uppercase; color: var(--text-dim); }
-.task-column-count { background: var(--accent-container); color: var(--accent); padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 700; }
-.task-list { padding: var(--spacing-sm); flex: 1; display: flex; flex-direction: column; gap: var(--spacing-sm); }
-.task-card { background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--spacing-md); cursor: pointer; transition: all 0.2s ease; border-left: 4px solid var(--accent); }
-.task-card:hover { transform: translateY(-2px); border-color: var(--accent); }
-.task-card.priority-high { border-left-color: var(--error); }
-.task-card.priority-urgent { border-left-color: #ff1744; box-shadow: 0 0 10px rgba(255, 23, 68, 0.2); }
-.task-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; }
-.task-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 0.75rem; color: var(--text-dim); }
-.pulse { width: 8px; height: 8px; background: #4CAF50; border-radius: 50%; display: inline-block; margin-right: 4px; animation: pulse-anim 1.5s infinite; }
-@keyframes pulse-anim { 0% { transform: scale(0.95); } 70% { transform: scale(1); } 100% { transform: scale(0.95); } }
-
-/* Team Tab Specific Styles */
-.teams-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
-.team-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; cursor: pointer; transition: 0.2s; }
-.team-card:hover { background: var(--bg-hover); transform: translateY(-2px); border-color: var(--accent); }
-.team-card-header { display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-weight: 600; }
-.team-card-footer { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-dim); margin-top: 1rem; }
-.member-row { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: var(--bg-card); border-radius: 4px; }
-.member-row.is-me { border: 1px solid var(--accent); }
-.info-banner { display: flex; align-items: center; gap: 0.5rem; padding: 1rem; background: var(--bg-card); border-left: 4px solid var(--warning); color: var(--text-dim); }
-
-/* Live Agents Styles */
-.agent-card.live {
+.overview-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: var(--spacing-md);
+    padding: var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    transition: all 0.2s ease;
+}
+
+.overview-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+}
+
+.overview-card-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--accent-container);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.overview-card-icon span {
+    font-size: 28px;
+    color: var(--accent);
+}
+
+.overview-card-icon.active span {
+    color: var(--success);
+}
+
+.overview-card-icon.success span {
+    color: var(--success);
+}
+
+.overview-card-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+}
+
+.overview-card-label {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    margin-top: 4px;
+}
+
+/* Main Tabs (Android Style) */
+.main-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: var(--spacing-lg);
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 0;
+}
+
+.tab-button {
+    background: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    padding: var(--spacing-md) var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-dim);
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    bottom: -2px;
+}
+
+.tab-button:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+
+.tab-button.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.tab-button .material-symbols-outlined {
+    font-size: 22px;
+}
+
+/* Tab Content */
+.main-tab-content {
+    display: none;
+    animation: fadeIn 0.3s ease;
+}
+
+.main-tab-content.active {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.tab-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+.tab-header h3 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+/* Agents Grid (Card Style) */
+.agents-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+.agent-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
     display: flex;
     flex-direction: column;
     gap: var(--spacing-md);
+    transition: all 0.2s ease;
+}
+
+.agent-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
 }
 
 .agent-card-header {
@@ -614,30 +480,70 @@
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
+    flex: 1;
 }
 
-.agent-icon {
-    font-size: 32px;
+.agent-card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--accent-container);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.agent-card-icon span {
+    font-size: 24px;
     color: var(--accent);
 }
 
-.agent-card-title h3 {
+.agent-card-title h4 {
     margin: 0;
     font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
 }
 
-.agent-specialty {
+.agent-card-subtitle {
     font-size: 0.85rem;
     color: var(--text-dim);
+    margin-top: 2px;
 }
 
-.agent-card-metrics {
+.status-badge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.status-badge.idle {
+    background: var(--text-dim);
+    color: var(--bg);
+}
+
+.status-badge.busy {
+    background: var(--warning);
+    color: var(--bg);
+}
+
+.status-badge.error {
+    background: var(--error);
+    color: white;
+}
+
+.agent-metrics {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    background: var(--bg-hover);
+    border-radius: var(--radius-md);
 }
 
-.metric {
+.agent-metric {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -645,36 +551,32 @@
     color: var(--text-dim);
 }
 
-.metric .material-symbols-outlined {
-    font-size: 18px;
+.agent-metric span.material-symbols-outlined {
+    font-size: 16px;
 }
 
 .agent-current-task {
-    background: var(--bg-hover);
     padding: var(--spacing-sm);
-    border-radius: var(--radius-md);
+    background: var(--bg-hover);
     border-left: 3px solid var(--warning);
+    border-radius: var(--radius-md);
 }
 
 .agent-current-task strong {
     display: block;
-    margin-bottom: 4px;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     color: var(--text-dim);
-}
-
-.task-text {
-    font-size: 0.9rem;
+    margin-bottom: 4px;
 }
 
 .agent-output {
     background: #0d0d0d;
     color: #4af626;
     font-family: monospace;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     padding: var(--spacing-sm);
     border-radius: var(--radius-md);
-    max-height: 200px;
+    max-height: 150px;
     overflow-y: auto;
     border: 1px solid var(--border);
 }
@@ -691,22 +593,271 @@
 .agent-card-actions {
     display: flex;
     gap: var(--spacing-sm);
-    flex-wrap: wrap;
+    margin-top: auto;
 }
 
-.modal-content.modal-medium {
-    max-width: 600px;
+/* Task Board */
+.task-board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-lg);
 }
 
+@media (max-width: 1024px) {
+    .task-board {
+        grid-template-columns: 1fr;
+    }
+}
+
+.task-column {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    display: flex;
+    flex-direction: column;
+    min-height: 400px;
+}
+
+.task-column-header {
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-hover);
+}
+
+.task-column-header h4 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.task-count {
+    background: var(--accent-container);
+    color: var(--accent);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.task-list {
+    padding: var(--spacing-md);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.task-card {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.task-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
+}
+
+.task-card.priority-high {
+    border-left-color: var(--error);
+}
+
+.task-card.priority-urgent {
+    border-left-color: #ff1744;
+}
+
+.task-card-title {
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.task-card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+/* Monitor Grid */
+.monitor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+}
+
+@media (max-width: 1024px) {
+    .monitor-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.monitor-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+}
+
+.monitor-section h4 {
+    margin: 0 0 var(--spacing-md) 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.activity-feed {
+    max-height: 500px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+.activity-item {
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.metrics-cards {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-md);
+}
+
+.metric-card {
+    padding: var(--spacing-md);
+    background: var(--bg-hover);
+    border-radius: var(--radius-md);
+}
+
+.metric-label {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+}
+
+.metric-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.metric-bar {
+    height: 4px;
+    background: var(--bg-card);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.metric-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.3s ease;
+}
+
+.live-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--success);
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.pulse {
+    width: 8px;
+    height: 8px;
+    background: var(--success);
+    border-radius: 50%;
+    animation: pulse-anim 1.5s infinite;
+}
+
+@keyframes pulse-anim {
+    0%, 100% { transform: scale(0.95); opacity: 0.7; }
+    50% { transform: scale(1.1); opacity: 1; }
+}
+
+.monitor-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+/* Empty States */
+.empty-state {
+    text-align: center;
+    padding: var(--spacing-xl);
+    color: var(--text-dim);
+}
+
+.empty-state .material-symbols-outlined {
+    font-size: 64px;
+    color: var(--text-dim);
+    margin-bottom: var(--spacing-md);
+}
+
+.empty-state p {
+    margin: var(--spacing-md) 0;
+    font-size: 1.1rem;
+}
+
+.empty-state-small {
+    text-align: center;
+    padding: var(--spacing-md);
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+
+/* Form Styles */
 .form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--spacing-md);
 }
 
-@media (max-width: 600px) {
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .overview-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .agents-grid {
+        grid-template-columns: 1fr;
+    }
+
     .form-row {
         grid-template-columns: 1fr;
+    }
+
+    .main-tabs {
+        overflow-x: auto;
+    }
+
+    .tab-button span:not(.material-symbols-outlined) {
+        display: none;
     }
 }
 </style>
@@ -715,582 +866,200 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/agents.js') }}"></script>
 <script>
-let currentTab = 'staffing';
-let allAgents = [];
-let swarmAgents = [];
-let allTeams = [];
-let allTasks = [];
-let jobRoles = {};
-let pollingInterval = null;
-let logPollingInterval = null;
-let lastActivityTs = 0;
+// Main tab switching
+function switchMainTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
 
-// Collaborative Teams state
-let currentVerifiedEmail = null;
-let currentTeamId = null;
-let currentUserRole = null;
+    // Update tab content
+    document.querySelectorAll('.main-tab-content').forEach(content => {
+        content.classList.toggle('active', content.id === `tab-${tabName}`);
+    });
+}
 
-const ROLE_ICONS = {
-    "Lead-Architect": "architecture",
-    "UI-Designer": "palette",
-    "Conn-Specialist": "settings_input_component",
-    "Bridge-Core": "hub",
-    "Marketing-Lead": "campaign",
-    "Legal-Counsel": "gavel",
-    "HR-Manager": "groups",
-    "QA-Specialist": "fact_check",
-    "Refactor-Bot": "cleaning_services",
-    "Docs-Manager": "menu_book"
-};
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+    // Connect to agent orchestrator
+    if (typeof orchestrator !== 'undefined') {
+        orchestrator.connect();
 
-document.addEventListener('DOMContentLoaded', async function() {
-    await initAgentsPage();
-    
-    // Start periodic status polling
-    pollingInterval = setInterval(refreshAllStatus, 5000);
+        // Override updateAgentUI to use new grid
+        orchestrator.updateAgentUI = function() {
+            const container = document.getElementById('agents-grid');
+            if (!container) return;
+
+            if (this.agents.size === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <span class="material-symbols-outlined">smart_toy</span>
+                        <p>No agents running</p>
+                        <button class="btn btn-primary" onclick="showSpawnAgentModal()">Spawn Your First Agent</button>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = Array.from(this.agents.values())
+                    .map(agent => renderAgentCard(agent))
+                    .join('');
+            }
+
+            updateOverview();
+        };
+
+        // Update overview metrics every 5 seconds
+        setInterval(updateOverview, 5000);
+    }
 });
 
-async function initAgentsPage() {
-    await loadJobRoles();
-    await loadProjects();
-    await loadTeams();
-    await loadTasks();
-    await loadTeamManagement(); // Load collaborative teams
-    await refreshAllStatus();
-}
-
-// ============ Collaborative Team Management (Moved from settings) ============
-
-async function loadTeamManagement() {
-    const deviceId = getCurrentDeviceId();
-    try {
-        const response = await fetch(`/api/email/verified/${encodeURIComponent(deviceId)}`);
-        const data = await response.json();
-        if (data.email) {
-            currentVerifiedEmail = data.email;
-            document.getElementById('teams-requires-email').style.display = 'none';
-            document.getElementById('teams-content').style.display = 'block';
-            await Promise.all([loadMyTeams(), loadPendingInvitations()]);
-        } else {
-            currentVerifiedEmail = null;
-            document.getElementById('teams-requires-email').style.display = 'block';
-            document.getElementById('teams-content').style.display = 'none';
-        }
-    } catch (e) { console.error('Failed to load team management:', e); }
-}
-
-function getCurrentDeviceId() {
-    let deviceId = localStorage.getItem('shadow_device_id');
-    if (!deviceId) {
-        deviceId = 'web_' + Math.random().toString(36).substr(2, 9);
-        localStorage.setItem('shadow_device_id', deviceId);
-    }
-    return deviceId;
-}
-
-async function loadMyTeams() {
-    if (!currentVerifiedEmail) return;
-    try {
-        const response = await fetch(`/api/teams/my-teams?email=${encodeURIComponent(currentVerifiedEmail)}`);
-        const data = await response.json();
-        const container = document.getElementById('my-teams-list');
-        if (!data.teams || data.teams.length === 0) {
-            container.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>No teams joined yet.</p></div>';
-            return;
-        }
-        container.innerHTML = data.teams.map(team => `
-            <div class="team-card" onclick="openTeamDetails('${team.id}')">
-                <div class="team-card-header"><span class="team-name">${escapeHtml(team.name)}</span></div>
-                <p class="small-text">${escapeHtml(team.description || 'No description')}</p>
-                <div class="team-card-footer">
-                    <span><span class="material-symbols-outlined" style="font-size:14px">group</span> ${team.members?.length || 0}</span>
-                    <span>${new Date(team.created_at).toLocaleDateString()}</span>
-                </div>
-            </div>
-        `).join('');
-    } catch (e) {}
-}
-
-async function loadPendingInvitations() {
-    if (!currentVerifiedEmail) return;
-    try {
-        const response = await fetch(`/api/teams/invitations/pending?email=${encodeURIComponent(currentVerifiedEmail)}`);
-        const data = await response.json();
-        const section = document.getElementById('pending-invitations-section');
-        const container = document.getElementById('pending-invitations-list');
-        if (!data.invitations || data.invitations.length === 0) {
-            section.style.display = 'none';
-            return;
-        }
-        section.style.display = 'block';
-        container.innerHTML = data.invitations.map(inv => `
-            <div class="dashboard-card" style="padding:1rem; display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; border:1px solid var(--accent);">
-                <div>
-                    <strong>${escapeHtml(inv.team_name)}</strong><br>
-                    <span class="small-text">Invited by ${escapeHtml(inv.inviter_email)}</span>
-                </div>
-                <button class="btn btn-small btn-primary" onclick="acceptInvitation('${inv.code}')">Accept</button>
-            </div>
-        `).join('');
-    } catch (e) {}
-}
-
-async function acceptInvitation(code) {
-    try {
-        const response = await fetch('/api/teams/invitations/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                invitation_code: code,
-                accepter_email: currentVerifiedEmail,
-                accepter_device: getCurrentDeviceId()
-            })
-        });
-        if ((await response.json()).success) {
-            showToast('Invitation accepted!', 'success');
-            await Promise.all([loadMyTeams(), loadPendingInvitations()]);
-        }
-    } catch (e) { showToast('Failed to accept invitation', 'error'); }
-}
-
-function openCreateTeamModal() {
-    document.getElementById('create-team-modal').classList.remove('hidden');
-}
-
-function closeCreateTeamModal() {
-    document.getElementById('create-team-modal').classList.add('hidden');
-}
-
-async function confirmCreateTeam() {
-    const name = document.getElementById('new-team-name').value.trim();
-    const desc = document.getElementById('new-team-description').value.trim();
-    if (!name) return showToast('Name required', 'warning');
-    try {
-        const response = await fetch('/api/teams', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, description: desc, owner_email: currentVerifiedEmail, owner_device: getCurrentDeviceId() })
-        });
-        if ((await response.json()).id) {
-            showToast('Team created!', 'success');
-            closeCreateTeamModal();
-            loadMyTeams();
-        }
-    } catch (e) { showToast('Failed to create team', 'error'); }
-}
-
-async function openTeamDetails(teamId) {
-    currentTeamId = teamId;
-    try {
-        const response = await fetch(`/api/teams/${teamId}`);
-        const team = await response.json();
-        document.getElementById('team-details-name').textContent = team.name;
-        document.getElementById('team-details-description').textContent = team.description || '';
-        
-        const myMem = team.members?.find(m => m.email === currentVerifiedEmail);
-        currentUserRole = myMem?.role || 'member';
-        
-        document.getElementById('invite-member-btn').style.display = (currentUserRole === 'owner' || currentUserRole === 'admin') ? 'flex' : 'none';
-        renderTeamMembers(team.members || []);
-        
-        document.getElementById('team-actions').style.display = 'flex';
-        document.getElementById('leave-team-btn').style.display = currentUserRole === 'owner' ? 'none' : 'block';
-        document.getElementById('delete-team-btn').style.display = currentUserRole === 'owner' ? 'block' : 'none';
-        
-        document.getElementById('team-details-modal').classList.remove('hidden');
-    } catch (e) {}
-}
-
-function closeTeamDetailsModal() {
-    document.getElementById('team-details-modal').classList.add('hidden');
-    document.getElementById('invite-member-form').style.display = 'none';
-}
-
-function renderTeamMembers(members) {
-    const container = document.getElementById('team-members-list');
-    container.innerHTML = members.map(m => `
-        <div class="member-row ${m.email === currentVerifiedEmail ? 'is-me' : ''}">
-            <span>${escapeHtml(m.email)} (${m.role})</span>
-            ${(currentUserRole === 'owner' && m.email !== currentVerifiedEmail) ? `<button class="btn-icon-small btn-danger" onclick="removeMember('${m.email}')"><span class="material-symbols-outlined">close</span></button>` : ''}
-        </div>
-    `).join('');
-}
-
-function toggleInviteForm() {
-    const f = document.getElementById('invite-member-form');
-    f.style.display = f.style.display === 'none' ? 'block' : 'none';
-}
-
-async function inviteMember() {
-    const email = document.getElementById('invite-email').value.trim();
-    if (!email) return;
-    try {
-        const response = await fetch(`/api/teams/${currentTeamId}/invite`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ inviter_email: currentVerifiedEmail, invitee_email: email, role: document.getElementById('invite-role').value })
-        });
-        if ((await response.json()).success) {
-            showToast(`Invited ${email}`, 'success');
-            toggleInviteForm();
-        }
-    } catch (e) {}
-}
-
-async function deleteTeam() {
-    if (!confirm("Delete this team forever?")) return;
-    try {
-        const response = await fetch(`/api/teams/${currentTeamId}`, { method: 'DELETE' });
-        if ((await response.json()).success) {
-            showToast('Team deleted', 'success');
-            closeTeamDetailsModal();
-            loadMyTeams();
-        }
-    } catch (e) {}
-}
-
-async function leaveTeam() {
-    if (!confirm("Leave this team?")) return;
-    try {
-        const response = await fetch(`/api/teams/${currentTeamId}/members/${encodeURIComponent(currentVerifiedEmail)}?remover_email=${encodeURIComponent(currentVerifiedEmail)}`, { method: 'DELETE' });
-        if ((await response.json()).success) {
-            showToast('Left team', 'success');
-            closeTeamDetailsModal();
-            loadMyTeams();
-        }
-    } catch (e) {}
-}
-
-// ============ Existing Agent Page Logic ============
-
-async function loadJobRoles() {
-    try {
-        const data = await api.getRalphRoles();
-        jobRoles = data.roles || {};
-        renderRoleGallery();
-    } catch (e) {}
-}
-
-async function loadProjects() {
-    try {
-        const projects = await api.getProjects();
-        const hireSelect = document.getElementById('hire-project-select');
-        hireSelect.innerHTML = projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-    } catch (e) {}
-}
-
-async function loadTeams() {
-    try {
-        allTeams = await api.getTeams();
-        const filter = document.getElementById('team-filter');
-        const currentVal = filter.value;
-        filter.innerHTML = '<option value="__ALL__">All Teams</option>' + 
-            allTeams.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
-        filter.value = currentVal;
-    } catch (e) {}
-}
-
-async function loadTasks() {
-    try {
-        allTasks = await api.getTasks();
-        renderTaskBoard();
-    } catch (e) {}
-}
-
-function renderRoleGallery() {
-    const container = document.getElementById('role-gallery');
-    container.innerHTML = Object.entries(jobRoles).map(([id, desc]) => `
-        <div class="role-card" onclick="openHireModal('${id}')">
-            <span class="material-symbols-outlined role-icon">${ROLE_ICONS[id] || 'smart_toy'}</span>
-            <div class="role-name">${id.replace(/-/g, ' ')}</div>
-            <div class="role-desc">${desc}</div>
-            <button class="btn btn-small btn-secondary" style="margin-top: auto;">Hire Role</button>
-        </div>
-    `).join('');
-}
-
-function switchTab(tabId) {
-    document.querySelectorAll('#agents-tab-toggle .btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tabId));
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.toggle('hidden', content.id !== `tab-${tabId}`));
-    currentTab = tabId;
-}
-
-async function refreshAllStatus() {
-    await Promise.all([updateStaffRoster(), updateSwarmStatus(), updateMetrics(), pollActivity(), loadTasks()]);
-}
-
-async function updateMetrics() {
-    try {
-        const metrics = await api.getAgentMetrics();
-        document.getElementById('active-staff-count').textContent = metrics.active_agents || 0;
-        document.getElementById('tasks-completed-count').textContent = metrics.total_tasks_completed || 0;
-        const swarmData = await api.getRalphStatus('C:/shadow');
-        document.getElementById('active-swarms-count').textContent = swarmData.active > 0 ? 1 : 0;
-    } catch (e) {}
-}
-
-async function updateStaffRoster() {
-    try {
-        const agents = await api.getAgents();
-        allAgents = agents || [];
-        const container = document.getElementById('staff-roster');
-        const teamFilter = document.getElementById('team-filter').value;
-        let filtered = allAgents;
-        if (teamFilter !== '__ALL__') {
-            const team = allTeams.find(t => t.id === teamFilter);
-            const teamMemberIds = (team?.members || []).map(m => m.id);
-            filtered = allAgents.filter(a => teamMemberIds.includes(a.id));
-        }
-        if (filtered.length === 0) {
-            container.innerHTML = '<div class="empty-state">No individual staff members hired yet.</div>';
-            return;
-        }
-        container.innerHTML = filtered.map(a => `
-            <div class="agent-card ${a.status}">
-                <div class="agent-header">
-                    <div class="agent-avatar">${(a.name || '?').charAt(0)}</div>
-                    <div class="agent-info">
-                        <div class="agent-name">${escapeHtml(a.name)}</div>
-                        <span class="status-badge ${a.status}">${a.status}</span>
+// Render agent card (Android style)
+function renderAgentCard(agent) {
+    const statusClass = agent.status || 'idle';
+    return `
+        <div class="agent-card" id="agent-${agent.id}">
+            <div class="agent-card-header">
+                <div class="agent-card-title">
+                    <div class="agent-card-icon">
+                        <span class="material-symbols-outlined">smart_toy</span>
                     </div>
-                    <button class="btn btn-icon-small btn-danger" onclick="killStaff('${a.id}')"><span class="material-symbols-outlined">close</span></button>
+                    <div>
+                        <h4>${escapeHtml(agent.name)}</h4>
+                        <div class="agent-card-subtitle">${escapeHtml(agent.specialty)}</div>
+                    </div>
                 </div>
-                <div class="agent-specialty">${escapeHtml(a.role || 'Specialist')}</div>
-                ${a.current_task ? `<div class="agent-task"><span class="task-name">${escapeHtml(a.current_task)}</span></div>` : ''}
+                <span class="status-badge ${statusClass}">${statusClass.toUpperCase()}</span>
             </div>
-        `).join('');
-        populateTaskAgentSelector();
-    } catch (e) {}
-}
 
-function renderTaskBoard() {
-    const pending = allTasks.filter(t => t.status === 'PENDING');
-    const inProgress = allTasks.filter(t => t.status === 'IN_PROGRESS');
-    const completed = allTasks.filter(t => t.status === 'COMPLETED');
-    document.getElementById('pending-count').textContent = pending.length;
-    document.getElementById('progress-count').textContent = inProgress.length;
-    document.getElementById('completed-count').textContent = completed.length;
-    document.getElementById('pending-tasks-list').innerHTML = pending.map(t => renderTaskCard(t)).join('') || '<div class="empty-state-small">No pending tasks</div>';
-    document.getElementById('progress-tasks-list').innerHTML = inProgress.map(t => renderTaskCard(t)).join('') || '<div class="empty-state-small">No tasks in progress</div>';
-    document.getElementById('completed-tasks-list').innerHTML = completed.map(t => renderTaskCard(t)).join('') || '<div class="empty-state-small">No completed tasks</div>';
-}
+            <div class="agent-metrics">
+                <div class="agent-metric">
+                    <span class="material-symbols-outlined">memory</span>
+                    <span>${agent.cpu_percent || 0}% CPU</span>
+                </div>
+                <div class="agent-metric">
+                    <span class="material-symbols-outlined">storage</span>
+                    <span>${agent.memory_mb || 0} MB</span>
+                </div>
+                <div class="agent-metric">
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>${formatUptime(agent.uptime_seconds)}</span>
+                </div>
+                <div class="agent-metric">
+                    <span class="material-symbols-outlined">task_alt</span>
+                    <span>${agent.tasks_completed || 0} tasks</span>
+                </div>
+            </div>
 
-function renderTaskCard(task) {
-    const pClass = (task.priority || 'medium').toLowerCase();
-    const agent = allAgents.find(a => a.id === task.assigned_agent_id);
-    return `<div class="task-card priority-${pClass}" onclick="editTask('${task.id}')">
-        <div class="task-title">${escapeHtml(task.title)}</div>
-        <div class="task-footer">
-            <span class="task-assignee"><span class="material-symbols-outlined" style="font-size: 14px;">person</span> ${agent ? escapeHtml(agent.name) : 'Unassigned'}</span>
-            <div class="task-actions">
-                ${task.status === 'PENDING' ? `<button class="btn-icon-small" onclick="event.stopPropagation(); updateTaskStatus('${task.id}', 'IN_PROGRESS')"><span class="material-symbols-outlined">play_arrow</span></button>` : ''}
-                ${task.status === 'IN_PROGRESS' ? `<button class="btn-icon-small" onclick="event.stopPropagation(); updateTaskStatus('${task.id}', 'COMPLETED')"><span class="material-symbols-outlined">check</span></button>` : ''}
+            ${agent.current_task ? `
+                <div class="agent-current-task">
+                    <strong>Current Task:</strong>
+                    ${escapeHtml(agent.current_task)}
+                </div>
+            ` : ''}
+
+            <div class="agent-output" id="agent-output-${agent.id}">
+                ${(agent.output_lines || []).map(line =>
+                    `<div class="output-line">${escapeHtml(line.line)}</div>`
+                ).join('')}
+            </div>
+
+            <div class="agent-card-actions">
+                <button class="btn btn-small" onclick="showAssignTaskModal('${agent.id}')">
+                    <span class="material-symbols-outlined">assignment</span>
+                    Assign
+                </button>
+                <button class="btn btn-small btn-secondary" onclick="orchestrator.getAgentStatus('${agent.id}')">
+                    <span class="material-symbols-outlined">refresh</span>
+                </button>
+                <button class="btn btn-small btn-danger" onclick="confirmStopAgent('${agent.id}')">
+                    <span class="material-symbols-outlined">stop_circle</span>
+                    Stop
+                </button>
             </div>
         </div>
-    </div>`;
-}
-
-async function updateTaskStatus(taskId, status) {
-    try { await api.updateTask(taskId, { status }); showToast('Task updated', 'success'); loadTasks(); } catch (e) {}
-}
-
-function showCreateTaskModal() { document.getElementById('create-task-modal').classList.remove('hidden'); populateTaskAgentSelector(); }
-function closeCreateTaskModal() { document.getElementById('create-task-modal').classList.add('hidden'); }
-
-function populateTaskAgentSelector() {
-    const s = document.getElementById('task-agent-select');
-    if (!s) return;
-    const cur = s.value;
-    s.innerHTML = '<option value="">Unassigned</option>' + allAgents.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
-    s.value = cur;
-}
-
-async function confirmCreateTask() {
-    const title = document.getElementById('task-title').value;
-    const desc = document.getElementById('task-description').value;
-    if (!title) return showToast('Title required', 'warning');
-    try {
-        await api.createTask({ title, description: desc, priority: document.getElementById('task-priority').value, assigned_agent_id: document.getElementById('task-agent-select').value || null, status: 'PENDING' });
-        showToast('Task created', 'success'); closeCreateTaskModal(); loadTasks();
-    } catch (e) {}
-}
-
-let selectedRoleId = null;
-function openHireModal(roleId) {
-    selectedRoleId = roleId;
-    document.getElementById('hire-role-title').textContent = `Hire ${roleId.replace(/-/g, ' ')}`;
-    document.getElementById('role-preview').innerHTML = `<div class="role-card" style="border:none; background:transparent;"><span class="material-symbols-outlined role-icon">${ROLE_ICONS[roleId] || 'smart_toy'}</span><div class="role-name">${roleId}</div><div class="role-desc">${jobRoles[roleId]}</div></div>`;
-    document.getElementById('hire-role-modal').classList.remove('hidden');
-}
-function closeHireModal() { document.getElementById('hire-role-modal').classList.add('hidden'); }
-
-async function confirmHire() {
-    const roleName = selectedRoleId;
-    showToast(`Hiring ${roleName}...`, 'info');
-    try {
-        const res = await api.addAgent({ name: roleName, role: roleName, project_id: document.getElementById('hire-project-select').value, instructions: document.getElementById('hire-instructions').value, status: 'idle' });
-        if (res.success) { showToast("Specialist deployed!", "success"); closeHireModal(); refreshAllStatus(); }
-    } catch (e) {}
-}
-
-async function deploySwarm() {
-    const goal = document.getElementById('swarm-goal').value;
-    if (!goal) return showToast('Goal required', 'warning');
-    showToast('Deploying Ralph Swarm...', 'info');
-    try {
-        const res = await api.launchRalphSwarm({ project_dir: document.getElementById('swarm-project-dir').value, goal, max_iterations: 20, model: document.getElementById('swarm-model').value, count: parseInt(document.getElementById('swarm-agent-count').value) });
-        if (res.success) { showToast('Ralph Swarm deployed!', 'success'); refreshAllStatus(); }
-    } catch (e) { showToast('Launch failed', 'error'); }
-}
-
-async function launchBrainstormer() {
-    const obj = document.getElementById('brainstorm-objective').value;
-    if (!obj) return showToast('Objective required', 'warning');
-    try { if ((await api.launchBrainstormer(obj)).success) { showToast("Initialized!", "success"); switchTab('activity'); } } catch (e) {}
-}
-
-async function launchLooper() {
-    const t = document.getElementById('loop-task').value;
-    if (!t) return showToast('Task required', 'warning');
-    try { if ((await api.launchLooper(t)).success) { showToast("Engine active!", "success"); switchTab('activity'); } } catch (e) {}
-}
-
-function clearFeed() { const c = document.getElementById('activity-feed-container'); if (c) c.innerHTML = '<div class="empty-state">Feed cleared.</div>'; }
-
-async function updateUnifiedLogs() {
-    const target = document.getElementById('log-target-select').value;
-    const output = document.getElementById('unified-log-output');
-    if (!target) { output.textContent = 'Select a target...'; return; }
-    const [type, id] = target.split(':');
-    try {
-        let text = type === 'swarm' ? await api.getRalphLogs(id, 'out', 200, 'C:/shadow') : "Logs not yet streaming for staff.";
-        output.textContent = (typeof text === 'string' ? text : await text.text()) || "No logs.";
-        const container = document.querySelector('.log-container');
-        container.scrollTop = container.scrollHeight;
-    } catch (e) {}
-}
-
-async function killStaff(id) { if (!confirm("Terminate specialist?")) return; try { await api.deleteAgent(id); refreshAllStatus(); } catch (e) {} }
-async function globalKill() { if (!confirm("KILL ALL agents and swarms?")) return; try { await api.killRalphSwarm('C:/shadow'); await fetch('/api/agents/kill-all', { method: 'POST' }); refreshAllStatus(); } catch (e) {} }
-
-async function globalPause() {
-    showToast("Pausing all agents...", "info");
-    try {
-        await Promise.all([
-            fetch('/api/agents/pause', { method: 'POST' }),
-            fetch('/api/ralph/pause-all', { method: 'POST' })
-        ]);
-        showToast("All agents paused", "success");
-        refreshAllStatus();
-    } catch (e) {
-        showToast("Failed to pause agents", "error");
-    }
-}
-
-function escapeHtml(text) { if (!text) return ""; const d = document.createElement('div'); d.textContent = text; return d.innerHTML; }
-
-// Dummy functions for API endpoints that might be missing or different
-async function pollActivity() {
-    // WebSocket handles this now, but we can poll for initial state if needed
-}
-
-function handleActivityEvent(data) {
-    const container = document.getElementById('activity-feed-container');
-    if (!container) return;
-    
-    // Remove loading or empty state
-    const loading = container.querySelector('.loading, .empty-state');
-    if (loading) container.innerHTML = '';
-    
-    const time = new Date(data.timestamp).toLocaleTimeString();
-    const eventEl = document.createElement('div');
-    eventEl.className = 'activity-item';
-    eventEl.style.padding = '4px 8px';
-    eventEl.style.borderBottom = '1px solid var(--border-subtle)';
-    eventEl.style.animation = 'fadeIn 0.3s ease-out';
-    
-    let icon = 'info';
-    if (data.event_type === 'create') icon = 'add_circle';
-    if (data.event_type === 'edit') icon = 'edit';
-    if (data.event_type === 'delete') icon = 'delete';
-    if (data.event_type === 'open') icon = 'folder_open';
-    
-    eventEl.innerHTML = `
-        <span style="color: var(--text-dim); margin-right: 8px;">[${time}]</span>
-        <span class="material-symbols-outlined" style="font-size: 14px; vertical-align: middle; margin-right: 4px;">${icon}</span>
-        <strong>${data.event_type.toUpperCase()}</strong> ${data.resource_type}: 
-        <span style="color: var(--accent);">${escapeHtml(data.resource_title)}</span>
     `;
-    
-    container.insertBefore(eventEl, container.firstChild);
-    
-    // Limit to 50 items
-    if (container.children.length > 50) {
-        container.removeChild(container.lastChild);
-    }
 }
 
-// Alias for WebSocket global refresh
-window.loadAgents = updateStaffRoster;
+// Update overview metrics
+function updateOverview() {
+    if (typeof orchestrator === 'undefined') return;
 
-function updateLogSelectors() {
-    const select = document.getElementById('log-target-select');
-    if (!select) return;
-    const cur = select.value;
-    select.innerHTML = '<option value="">Select Target...</option>';
-    
-    // Add specialists
-    if (allAgents.length > 0) {
-        const group = document.createElement('optgroup');
-        group.label = 'Specialists';
-        allAgents.forEach(a => {
-            const opt = document.createElement('option');
-            opt.value = `agent:${a.id}`;
-            opt.textContent = a.name;
-            group.appendChild(opt);
-        });
-        select.appendChild(group);
-    }
-    
-    // Add swarms
-    if (swarmAgents.length > 0) {
-        const group = document.createElement('optgroup');
-        group.label = 'Swarms';
-        const opt = document.createElement('option');
-        opt.value = 'swarm:current';
-        opt.textContent = 'Active Ralph Swarm';
-        group.appendChild(opt);
-        select.appendChild(group);
-    }
-    
-    select.value = cur;
+    const totalAgents = orchestrator.agents.size;
+    const activeAgents = Array.from(orchestrator.agents.values())
+        .filter(a => a.status === 'busy').length;
+
+    document.getElementById('overview-total-agents').textContent = totalAgents;
+    document.getElementById('overview-active-agents').textContent = activeAgents;
+
+    // Calculate total tasks and completed
+    let totalTasks = 0;
+    let completedTasks = 0;
+    orchestrator.agents.forEach(agent => {
+        completedTasks += agent.tasks_completed || 0;
+        if (agent.current_task) totalTasks++;
+    });
+    totalTasks += completedTasks;
+
+    document.getElementById('overview-total-tasks').textContent = totalTasks;
+    document.getElementById('overview-completed-tasks').textContent = completedTasks;
+
+    // Update system metrics
+    let totalCpu = 0;
+    let totalMemory = 0;
+    orchestrator.agents.forEach(agent => {
+        totalCpu += agent.cpu_percent || 0;
+        totalMemory += agent.memory_mb || 0;
+    });
+
+    document.getElementById('metric-cpu').textContent = `${totalCpu.toFixed(1)}%`;
+    document.getElementById('metric-cpu-bar').style.width = `${Math.min(totalCpu, 100)}%`;
+    document.getElementById('metric-memory').textContent = `${totalMemory.toFixed(0)} MB`;
+    document.getElementById('metric-memory-bar').style.width = `${Math.min(totalMemory / 10, 100)}%`;
+    document.getElementById('metric-processes').textContent = totalAgents;
+
+    // Calculate max uptime
+    let maxUptime = 0;
+    orchestrator.agents.forEach(agent => {
+        if (agent.uptime_seconds > maxUptime) maxUptime = agent.uptime_seconds;
+    });
+    document.getElementById('metric-uptime').textContent = formatUptime(maxUptime);
 }
 
-async function updateSwarmStatus() {
-    try {
-        const swarmData = await api.getRalphStatus('C:/shadow');
-        swarmAgents = swarmData.agents || [];
-        const container = document.getElementById('swarm-roster');
-        
-        updateLogSelectors(); // Update the log dropdown when swarm status changes
-        
-        if (swarmAgents.length === 0) {
-            container.innerHTML = '<div class="empty-state">No swarm active. Launch a mission to begin.</div>';
-            return;
-        }
-        container.innerHTML = swarmAgents.map(a => `
-            <div class="agent-card running">
-                <div class="agent-header">
-                    <div class="agent-avatar">R</div>
-                    <div class="agent-info">
-                        <div class="agent-name">${escapeHtml(a.name)}</div>
-                        <span class="status-badge running">ACTIVE</span>
-                    </div>
-                </div>
-                <div class="agent-specialty">${escapeHtml(a.role || 'Ralph Agent')}</div>
-            </div>
-        `).join('');
-    } catch (e) {}
+// Format uptime
+function formatUptime(seconds) {
+    if (!seconds) return '0s';
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m ${secs}s`;
+    return `${secs}s`;
+}
+
+// Activity feed
+function clearActivityFeed() {
+    document.getElementById('activity-feed').innerHTML = '<div class="empty-state-small">Feed cleared</div>';
+}
+
+// Escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Task management (placeholder)
+function showCreateTaskModal() {
+    document.getElementById('create-task-modal').classList.remove('hidden');
+}
+
+function closeCreateTaskModal() {
+    document.getElementById('create-task-modal').classList.add('hidden');
+}
+
+function confirmCreateTask() {
+    // TODO: Implement task creation
+    closeCreateTaskModal();
 }
 </script>
 {% endblock %}
