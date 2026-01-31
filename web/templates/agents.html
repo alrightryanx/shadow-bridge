@@ -6,7 +6,32 @@
 {% block content %}
 <!-- Overview Section (Always Visible) -->
 <section class="overview-section">
-    <h2 class="overview-title">Overview</h2>
+    <div class="overview-header">
+        <h2 class="overview-title">Overview</h2>
+        <div class="autonomous-controls" id="autonomous-controls">
+            <span class="autonomous-status-badge" id="auto-status-badge">STOPPED</span>
+            <button class="btn btn-small btn-primary" id="auto-start-btn" onclick="autonomousStart()">
+                <span class="material-symbols-outlined">play_arrow</span>
+                Start
+            </button>
+            <button class="btn btn-small btn-secondary" id="auto-pause-btn" onclick="autonomousPause()" style="display:none;">
+                <span class="material-symbols-outlined">pause</span>
+                Pause
+            </button>
+            <button class="btn btn-small btn-secondary" id="auto-resume-btn" onclick="autonomousResume()" style="display:none;">
+                <span class="material-symbols-outlined">play_arrow</span>
+                Resume
+            </button>
+            <button class="btn btn-small btn-danger" id="auto-stop-btn" onclick="autonomousStop()" style="display:none;">
+                <span class="material-symbols-outlined">stop</span>
+                Stop
+            </button>
+            <button class="btn btn-small" id="auto-scan-btn" onclick="autonomousScan()">
+                <span class="material-symbols-outlined">search</span>
+                Scan
+            </button>
+        </div>
+    </div>
     <div class="overview-cards">
         <div class="overview-card">
             <div class="overview-card-icon">
@@ -42,6 +67,15 @@
             <div class="overview-card-content">
                 <div class="overview-card-value" id="overview-completed-tasks">0</div>
                 <div class="overview-card-label">Completed</div>
+            </div>
+        </div>
+        <div class="overview-card" id="overview-cycle-card">
+            <div class="overview-card-icon">
+                <span class="material-symbols-outlined">autorenew</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="overview-cycles">0</div>
+                <div class="overview-card-label">Cycles</div>
             </div>
         </div>
     </div>
@@ -227,6 +261,22 @@
             </div>
         </div>
     </div>
+
+    <!-- Build History Section -->
+    <div class="monitor-section" style="margin-top: var(--spacing-lg);">
+        <h4>Build History</h4>
+        <div class="build-history" id="build-history">
+            <div class="empty-state-small">No builds yet</div>
+        </div>
+    </div>
+
+    <!-- Deploy Log Section -->
+    <div class="monitor-section" style="margin-top: var(--spacing-lg);">
+        <h4>Deploy Log</h4>
+        <div class="deploy-log" id="deploy-log">
+            <div class="empty-state-small">No deploys yet</div>
+        </div>
+    </div>
 </div>
 
 <!-- Modals -->
@@ -310,12 +360,152 @@
     margin-bottom: var(--spacing-xl);
 }
 
+.overview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+}
+
 .overview-title {
     font-size: 1.5rem;
     font-weight: 600;
-    margin-bottom: var(--spacing-md);
     color: var(--text);
+    margin: 0;
 }
+
+/* Autonomous Controls */
+.autonomous-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.autonomous-status-badge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--text-dim);
+    color: var(--bg);
+}
+
+.autonomous-status-badge.running {
+    background: var(--success);
+    color: white;
+    animation: pulse-anim 2s infinite;
+}
+
+.autonomous-status-badge.paused {
+    background: var(--warning);
+    color: var(--bg);
+}
+
+.autonomous-status-badge.stopped {
+    background: var(--text-dim);
+    color: var(--bg);
+}
+
+/* Build History */
+.build-history {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.build-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-bottom: 1px solid var(--border);
+}
+
+.build-item:last-child {
+    border-bottom: none;
+}
+
+.build-status-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.build-status-icon.success {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success);
+}
+
+.build-status-icon.failed {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--error);
+}
+
+.build-status-icon .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.build-info {
+    flex: 1;
+}
+
+.build-info-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.build-info-meta {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+}
+
+/* Deploy Log */
+.deploy-log {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.deploy-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: 6px var(--spacing-md);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+
+.deploy-item .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.deploy-item.success .material-symbols-outlined {
+    color: var(--success);
+}
+
+.deploy-item.failed .material-symbols-outlined {
+    color: var(--error);
+}
+
+/* Task category badges */
+.category-badge {
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.category-badge.todo { background: #4f46e5; color: white; }
+.category-badge.smell { background: #f59e0b; color: #1a1a1a; }
+.category-badge.error_handling { background: #ef4444; color: white; }
+.category-badge.performance { background: #06b6d4; color: #1a1a1a; }
+.category-badge.test_gap { background: #8b5cf6; color: white; }
 
 .overview-cards {
     display: grid;
@@ -1275,8 +1465,313 @@ function closeCreateTaskModal() {
 }
 
 function confirmCreateTask() {
-    // TODO: Implement task creation
     closeCreateTaskModal();
 }
+
+// ============ Autonomous Agent System ============
+
+let autonomousState = { running: false, paused: false };
+
+async function autonomousStart() {
+    const btn = document.getElementById('auto-start-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined" style="animation:spin 1s linear infinite">autorenew</span> Starting...';
+
+    try {
+        const resp = await fetch('/api/autonomous/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                count: 5,
+                focus: 'backend-polish',
+                provider: 'claude',
+                model: 'claude-sonnet-4-20250514'
+            })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            addActivityItem('Autonomous loop started with ' + Object.keys(data.status.agents || {}).length + ' agents', 'success');
+            updateAutonomousUI(data.status);
+        } else {
+            addActivityItem('Failed to start: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (e) {
+        addActivityItem('Error starting autonomous loop: ' + e.message, 'error');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-symbols-outlined">play_arrow</span> Start';
+}
+
+async function autonomousStop() {
+    if (!confirm('Stop all autonomous agents?')) return;
+    try {
+        const resp = await fetch('/api/autonomous/stop', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            addActivityItem('Autonomous loop stopped', 'info');
+            autonomousState = { running: false, paused: false };
+            updateAutonomousControls();
+        }
+    } catch (e) {
+        addActivityItem('Error stopping: ' + e.message, 'error');
+    }
+}
+
+async function autonomousPause() {
+    try {
+        const resp = await fetch('/api/autonomous/pause', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            autonomousState.paused = true;
+            updateAutonomousControls();
+            addActivityItem('Autonomous loop paused', 'info');
+        }
+    } catch (e) {
+        addActivityItem('Error pausing: ' + e.message, 'error');
+    }
+}
+
+async function autonomousResume() {
+    try {
+        const resp = await fetch('/api/autonomous/resume', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            autonomousState.paused = false;
+            updateAutonomousControls();
+            addActivityItem('Autonomous loop resumed', 'info');
+        }
+    } catch (e) {
+        addActivityItem('Error resuming: ' + e.message, 'error');
+    }
+}
+
+async function autonomousScan() {
+    const btn = document.getElementById('auto-scan-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined" style="animation:spin 1s linear infinite">autorenew</span> Scanning...';
+
+    try {
+        const resp = await fetch('/api/autonomous/scan', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success) {
+            addActivityItem(`Scan found ${data.tasks_found} tasks`, 'success');
+            // Update task board with scan results
+            if (data.tasks && data.tasks.length > 0) {
+                renderAutonomousTasks(data.tasks);
+            }
+        }
+    } catch (e) {
+        addActivityItem('Scan error: ' + e.message, 'error');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-symbols-outlined">search</span> Scan';
+}
+
+function updateAutonomousUI(status) {
+    autonomousState.running = status.running;
+    autonomousState.paused = status.paused;
+    updateAutonomousControls();
+
+    // Update cycle count
+    const cyclesEl = document.getElementById('overview-cycles');
+    if (cyclesEl) cyclesEl.textContent = status.cycle_count || 0;
+
+    // Update task counts from autonomous data
+    if (status.tasks_completed !== undefined) {
+        document.getElementById('overview-completed-tasks').textContent =
+            (status.tasks_completed || 0);
+    }
+    if (status.task_queue !== undefined) {
+        document.getElementById('overview-total-tasks').textContent =
+            (status.task_queue || 0) + (status.tasks_completed || 0);
+    }
+
+    // Update build history
+    if (status.build_history) {
+        renderBuildHistory(status.build_history);
+    }
+}
+
+function updateAutonomousControls() {
+    const badge = document.getElementById('auto-status-badge');
+    const startBtn = document.getElementById('auto-start-btn');
+    const stopBtn = document.getElementById('auto-stop-btn');
+    const pauseBtn = document.getElementById('auto-pause-btn');
+    const resumeBtn = document.getElementById('auto-resume-btn');
+
+    if (autonomousState.running) {
+        badge.textContent = autonomousState.paused ? 'PAUSED' : 'RUNNING';
+        badge.className = 'autonomous-status-badge ' + (autonomousState.paused ? 'paused' : 'running');
+        startBtn.style.display = 'none';
+        stopBtn.style.display = '';
+        pauseBtn.style.display = autonomousState.paused ? 'none' : '';
+        resumeBtn.style.display = autonomousState.paused ? '' : 'none';
+    } else {
+        badge.textContent = 'STOPPED';
+        badge.className = 'autonomous-status-badge stopped';
+        startBtn.style.display = '';
+        stopBtn.style.display = 'none';
+        pauseBtn.style.display = 'none';
+        resumeBtn.style.display = 'none';
+    }
+}
+
+function renderAutonomousTasks(tasks) {
+    const pendingEl = document.getElementById('pending-tasks');
+    const progressEl = document.getElementById('progress-tasks');
+    const completedEl = document.getElementById('completed-tasks');
+
+    if (!pendingEl) return;
+
+    let pendingCount = 0, progressCount = 0, completedCount = 0;
+
+    const pendingHtml = [];
+    const progressHtml = [];
+
+    tasks.forEach(task => {
+        const card = renderTaskCard(task);
+        if (task.status === 'in_progress') {
+            progressHtml.push(card);
+            progressCount++;
+        } else {
+            pendingHtml.push(card);
+            pendingCount++;
+        }
+    });
+
+    if (pendingHtml.length > 0) pendingEl.innerHTML = pendingHtml.join('');
+    if (progressHtml.length > 0) progressEl.innerHTML = progressHtml.join('');
+
+    document.getElementById('pending-count').textContent = pendingCount;
+    document.getElementById('progress-count').textContent = progressCount;
+}
+
+function renderTaskCard(task) {
+    const priorityClass = task.priority <= 2 ? 'priority-urgent' : (task.priority <= 3 ? 'priority-high' : '');
+    return `
+        <div class="task-card ${priorityClass}">
+            <div class="task-card-title">${escapeHtml(task.title)}</div>
+            <div class="task-card-footer">
+                <span class="category-badge ${task.category}">${task.category}</span>
+                <span>${task.repo}</span>
+            </div>
+        </div>
+    `;
+}
+
+function renderBuildHistory(builds) {
+    const container = document.getElementById('build-history');
+    if (!container || !builds || builds.length === 0) return;
+
+    container.innerHTML = builds.map(b => `
+        <div class="build-item">
+            <div class="build-status-icon ${b.success ? 'success' : 'failed'}">
+                <span class="material-symbols-outlined">${b.success ? 'check_circle' : 'error'}</span>
+            </div>
+            <div class="build-info">
+                <div class="build-info-title">${escapeHtml(b.build_type || 'unknown')}</div>
+                <div class="build-info-meta">${b.duration_seconds ? b.duration_seconds.toFixed(0) + 's' : ''} ${b.timestamp || ''}</div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function addActivityItem(message, type) {
+    const feed = document.getElementById('activity-feed');
+    if (!feed) return;
+
+    // Remove empty state
+    const empty = feed.querySelector('.empty-state-small');
+    if (empty) empty.remove();
+
+    const time = new Date().toLocaleTimeString();
+    const colors = { success: 'var(--success)', error: 'var(--error)', info: 'var(--accent)' };
+    const item = document.createElement('div');
+    item.className = 'activity-item';
+    item.innerHTML = `<span style="color:var(--text-dim)">[${time}]</span> <span style="color:${colors[type] || 'var(--text)'}">${escapeHtml(message)}</span>`;
+    feed.prepend(item);
+
+    // Keep max 100 items
+    while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+}
+
+// Poll autonomous status every 10s
+let autoStatusInterval = null;
+
+async function pollAutonomousStatus() {
+    try {
+        const resp = await fetch('/api/autonomous/status');
+        const data = await resp.json();
+        updateAutonomousUI(data);
+
+        // Also update tasks if running
+        if (data.running) {
+            const tasksResp = await fetch('/api/autonomous/tasks');
+            const tasksData = await tasksResp.json();
+            if (tasksData.tasks) {
+                renderAutonomousTasks(tasksData.tasks);
+            }
+            if (tasksData.completed) {
+                document.getElementById('completed-count').textContent = tasksData.completed.length;
+            }
+        }
+    } catch (e) {
+        // Silently fail - bridge might be restarting
+    }
+}
+
+// Listen for WebSocket autonomous events
+function setupAutonomousWebSocket() {
+    if (typeof io === 'undefined') return;
+
+    const socket = io ? io() : null;
+    if (!socket) return;
+
+    socket.on('autonomous_status', (data) => {
+        updateAutonomousUI(data);
+    });
+
+    socket.on('autonomous_task_assigned', (data) => {
+        addActivityItem(`Task assigned: ${data.task_title} -> ${data.agent_name}`, 'info');
+    });
+
+    socket.on('autonomous_task_completed', (data) => {
+        addActivityItem(`Task completed: ${data.task_title}`, 'success');
+    });
+
+    socket.on('autonomous_task_failed', (data) => {
+        addActivityItem(`Task failed: ${data.task_title}`, 'error');
+    });
+
+    socket.on('autonomous_build_started', (data) => {
+        addActivityItem(`Build started: ${data.repo}`, 'info');
+    });
+
+    socket.on('autonomous_build_success', (data) => {
+        addActivityItem(`Build succeeded: ${data.build_type} (${data.duration?.toFixed(0)}s)`, 'success');
+    });
+
+    socket.on('autonomous_build_failed', (data) => {
+        addActivityItem(`Build failed: ${data.error || 'Unknown'}`, 'error');
+    });
+
+    socket.on('autonomous_scan_complete', (data) => {
+        addActivityItem(`Scan found ${data.tasks_found} tasks (queue: ${data.queue_size})`, 'info');
+    });
+}
+
+// Init autonomous system on page load
+document.addEventListener('DOMContentLoaded', () => {
+    // Initial status check
+    pollAutonomousStatus();
+
+    // Start polling
+    autoStatusInterval = setInterval(pollAutonomousStatus, 10000);
+
+    // Setup WebSocket listeners
+    setupAutonomousWebSocket();
+});
 </script>
 {% endblock %}

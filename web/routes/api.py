@@ -5613,3 +5613,159 @@ def api_image_estimate():
     except Exception as e:
         logger.error(f"Estimate error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============ Autonomous Agent System ============
+
+
+@api_bp.route("/autonomous/start", methods=["POST"])
+@rate_limit
+@api_error_handler
+def autonomous_start():
+    """Start the autonomous agent loop."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    loop = get_autonomous_loop()
+    if loop.running:
+        return jsonify({"error": "Autonomous loop already running"}), 409
+
+    data = request.get_json() or {}
+    count = data.get("count", 5)
+    focus = data.get("focus", "backend-polish")
+    provider = data.get("provider", "claude")
+    model = data.get("model", "claude-sonnet-4-20250514")
+    agent_configs = data.get("configs")
+
+    loop.start(
+        agent_count=count,
+        focus=focus,
+        provider=provider,
+        model=model,
+        agent_configs=agent_configs,
+    )
+
+    return jsonify({"success": True, "status": loop.get_status()})
+
+
+@api_bp.route("/autonomous/stop", methods=["POST"])
+@rate_limit
+@api_error_handler
+def autonomous_stop():
+    """Stop the autonomous agent loop."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    loop = get_autonomous_loop()
+    if not loop.running:
+        return jsonify({"error": "Autonomous loop not running"}), 409
+
+    loop.stop()
+    return jsonify({"success": True})
+
+
+@api_bp.route("/autonomous/pause", methods=["POST"])
+@rate_limit
+@api_error_handler
+def autonomous_pause():
+    """Pause the autonomous agent loop (agents stay alive)."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    loop = get_autonomous_loop()
+    if not loop.running:
+        return jsonify({"error": "Autonomous loop not running"}), 409
+
+    loop.pause()
+    return jsonify({"success": True, "paused": True})
+
+
+@api_bp.route("/autonomous/resume", methods=["POST"])
+@rate_limit
+@api_error_handler
+def autonomous_resume():
+    """Resume the autonomous agent loop."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    loop = get_autonomous_loop()
+    if not loop.running:
+        return jsonify({"error": "Autonomous loop not running"}), 409
+
+    loop.resume()
+    return jsonify({"success": True, "paused": False})
+
+
+@api_bp.route("/autonomous/status")
+@rate_limit
+@api_error_handler
+def autonomous_status():
+    """Get autonomous loop status."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    loop = get_autonomous_loop()
+    return jsonify(loop.get_status())
+
+
+@api_bp.route("/autonomous/scan", methods=["POST"])
+@rate_limit
+@api_error_handler
+def autonomous_scan():
+    """Trigger a code scan without starting the full loop."""
+    from ..services.autonomous_scanner import AutonomousScanner
+
+    scanner = AutonomousScanner()
+    tasks = scanner.scan_all()
+
+    return jsonify({
+        "success": True,
+        "tasks_found": len(tasks),
+        "tasks": tasks[:50],  # Return first 50 for preview
+        "categories": _count_by_key(tasks, "category"),
+        "repos": _count_by_key(tasks, "repo"),
+    })
+
+
+@api_bp.route("/autonomous/tasks")
+@rate_limit
+@api_error_handler
+def autonomous_tasks():
+    """Get the autonomous task queue."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    loop = get_autonomous_loop()
+    category = request.args.get("category")
+    repo = request.args.get("repo")
+    status = request.args.get("status")
+
+    tasks = loop.get_tasks()
+
+    if category:
+        tasks = [t for t in tasks if t.get("category") == category]
+    if repo:
+        tasks = [t for t in tasks if t.get("repo") == repo]
+    if status:
+        tasks = [t for t in tasks if t.get("status") == status]
+
+    return jsonify({
+        "tasks": tasks,
+        "total": len(tasks),
+        "completed": loop.get_completed_tasks()[-20:],  # Last 20
+        "failed": loop.failed_tasks[-10:],  # Last 10
+    })
+
+
+@api_bp.route("/autonomous/builds")
+@rate_limit
+@api_error_handler
+def autonomous_builds():
+    """Get build history."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    loop = get_autonomous_loop()
+    return jsonify({"builds": loop.get_builds()})
+
+
+def _count_by_key(items: list, key: str) -> dict:
+    """Count items by a key value."""
+    counts = {}
+    for item in items:
+        val = item.get(key, "unknown")
+        counts[val] = counts.get(val, 0) + 1
+    return counts
