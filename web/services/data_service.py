@@ -1532,6 +1532,180 @@ def sync_agents_from_device(device_id: str, agents_data: List[Dict]) -> Dict:
     }
 
 
+# ============ Review Queue ============
+
+def get_review_queue(device_id: Optional[str] = None) -> List[Dict]:
+    """Get review queue items."""
+    data = _read_json_file(REVIEW_QUEUE_FILE) or {}
+    items = []
+
+    for item_device_id, device_data in data.items():
+        if device_id and item_device_id != device_id:
+            continue
+
+        for item in device_data.get("items", []):
+            items.append({
+                **item,
+                "device_id": item_device_id
+            })
+
+    # Sort by priority (urgent > high > medium > low) then by created_at
+    priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+    items.sort(key=lambda x: (
+        priority_order.get(x.get("priority", "medium"), 2),
+        -(x.get("created_at", 0))
+    ))
+
+    return items
+
+
+def add_to_review_queue(device_id: str, item_data: Dict) -> Dict:
+    """Add an item to the review queue."""
+    import uuid
+
+    data = _read_json_file(REVIEW_QUEUE_FILE) or {}
+
+    if device_id not in data:
+        data[device_id] = {"items": []}
+
+    item = {
+        "id": str(uuid.uuid4()),
+        "type": item_data.get("type", "code_change"),  # code_change, config, deployment, etc.
+        "title": item_data.get("title", ""),
+        "description": item_data.get("description", ""),
+        "priority": item_data.get("priority", "medium"),
+        "status": "pending",  # pending, approved, rejected, in_review
+        "created_at": int(time.time() * 1000),
+        "created_by": item_data.get("created_by", "system"),
+        "agent_id": item_data.get("agent_id"),  # If created by an agent
+        "session_id": item_data.get("session_id"),  # Link to session
+        "files_changed": item_data.get("files_changed", []),
+        "diff": item_data.get("diff"),
+        "metadata": item_data.get("metadata", {})
+    }
+
+    data[device_id]["items"].append(item)
+    _write_json_file(REVIEW_QUEUE_FILE, data)
+
+    return item
+
+
+def update_review_item(item_id: str, updates: Dict) -> Dict:
+    """Update a review queue item."""
+    data = _read_json_file(REVIEW_QUEUE_FILE) or {}
+
+    for device_id, device_data in data.items():
+        for item in device_data.get("items", []):
+            if item["id"] == item_id:
+                # Update fields
+                item.update(updates)
+                item["updated_at"] = int(time.time() * 1000)
+
+                _write_json_file(REVIEW_QUEUE_FILE, data)
+                return {"success": True, "item": item}
+
+    return {"success": False, "error": "Item not found"}
+
+
+def delete_review_item(item_id: str) -> Dict:
+    """Delete a review queue item."""
+    data = _read_json_file(REVIEW_QUEUE_FILE) or {}
+
+    for device_id, device_data in data.items():
+        items = device_data.get("items", [])
+        original_count = len(items)
+        device_data["items"] = [i for i in items if i["id"] != item_id]
+
+        if len(device_data["items"]) < original_count:
+            _write_json_file(REVIEW_QUEUE_FILE, data)
+            return {"success": True}
+
+    return {"success": False, "error": "Item not found"}
+
+
+# ============ Briefings ============
+
+def get_briefings(device_id: Optional[str] = None, limit: int = 50) -> List[Dict]:
+    """Get briefings (daily summaries, insights, recommendations)."""
+    data = _read_json_file(BRIEFINGS_FILE) or {}
+    briefings = []
+
+    for briefing_device_id, device_data in data.items():
+        if device_id and briefing_device_id != device_id:
+            continue
+
+        for briefing in device_data.get("briefings", []):
+            briefings.append({
+                **briefing,
+                "device_id": briefing_device_id
+            })
+
+    # Sort by date (newest first)
+    briefings.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+
+    return briefings[:limit]
+
+
+def create_briefing(device_id: str, briefing_data: Dict) -> Dict:
+    """Create a new briefing."""
+    import uuid
+
+    data = _read_json_file(BRIEFINGS_FILE) or {}
+
+    if device_id not in data:
+        data[device_id] = {"briefings": []}
+
+    briefing = {
+        "id": str(uuid.uuid4()),
+        "type": briefing_data.get("type", "daily"),  # daily, weekly, monthly, insight
+        "title": briefing_data.get("title", ""),
+        "summary": briefing_data.get("summary", ""),
+        "sections": briefing_data.get("sections", []),  # List of {title, content, metrics}
+        "created_at": int(time.time() * 1000),
+        "date": briefing_data.get("date", datetime.now().strftime("%Y-%m-%d")),
+        "priority": briefing_data.get("priority", "normal"),
+        "read": False,
+        "metadata": briefing_data.get("metadata", {})
+    }
+
+    data[device_id]["briefings"].append(briefing)
+    _write_json_file(BRIEFINGS_FILE, data)
+
+    return briefing
+
+
+def mark_briefing_read(briefing_id: str) -> Dict:
+    """Mark a briefing as read."""
+    data = _read_json_file(BRIEFINGS_FILE) or {}
+
+    for device_id, device_data in data.items():
+        for briefing in device_data.get("briefings", []):
+            if briefing["id"] == briefing_id:
+                briefing["read"] = True
+                briefing["read_at"] = int(time.time() * 1000)
+
+                _write_json_file(BRIEFINGS_FILE, data)
+                return {"success": True, "briefing": briefing}
+
+    return {"success": False, "error": "Briefing not found"}
+
+
+def delete_briefing(briefing_id: str) -> Dict:
+    """Delete a briefing."""
+    data = _read_json_file(BRIEFINGS_FILE) or {}
+
+    for device_id, device_data in data.items():
+        briefings = device_data.get("briefings", [])
+        original_count = len(briefings)
+        device_data["briefings"] = [b for b in briefings if b["id"] != briefing_id]
+
+        if len(device_data["briefings"]) < original_count:
+            _write_json_file(BRIEFINGS_FILE, data)
+            return {"success": True}
+
+    return {"success": False, "error": "Briefing not found"}
+
+
 # ============ Analytics ============
 
 
@@ -1675,7 +1849,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.129",
+        "version": "1.130",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,
@@ -1702,6 +1876,8 @@ TODOS_FILE = SHADOWAI_DIR / "todos.json"
 WORKFLOWS_FILE = SHADOWAI_DIR / "workflows.json"
 AUDITS_FILE = SHADOWAI_DIR / "audits.json"
 FAVORITES_FILE = SHADOWAI_DIR / "web_favorites.json"
+REVIEW_QUEUE_FILE = SHADOWAI_DIR / "review_queue.json"
+BRIEFINGS_FILE = SHADOWAI_DIR / "briefings.json"
 
 
 def _write_json_file(filepath: Path, data: Dict) -> bool:

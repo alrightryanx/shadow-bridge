@@ -1369,6 +1369,72 @@ def api_kill_agent(agent_id):
     return jsonify({"success": True, "message": f"Kill command sent for {agent_name}"})
 
 
+@api_bp.route("/review-queue")
+def api_get_review_queue():
+    """Get review queue items."""
+    device_id = request.args.get("device_id")
+    from ..services.data_service import get_review_queue
+    return jsonify(get_review_queue(device_id))
+
+
+@api_bp.route("/review-queue", methods=["POST"])
+def api_add_review_item():
+    """Add item to review queue."""
+    data = request.get_json() or {}
+    device_id = data.get("device_id", "web")
+    from ..services.data_service import add_to_review_queue
+    item = add_to_review_queue(device_id, data)
+    return jsonify(item)
+
+
+@api_bp.route("/review-queue/<item_id>", methods=["PUT"])
+def api_update_review_item(item_id):
+    """Update review queue item (approve/reject/etc)."""
+    data = request.get_json() or {}
+    from ..services.data_service import update_review_item
+    return jsonify(update_review_item(item_id, data))
+
+
+@api_bp.route("/review-queue/<item_id>", methods=["DELETE"])
+def api_delete_review_item(item_id):
+    """Delete review queue item."""
+    from ..services.data_service import delete_review_item
+    return jsonify(delete_review_item(item_id))
+
+
+@api_bp.route("/briefings")
+def api_get_briefings():
+    """Get briefings."""
+    device_id = request.args.get("device_id")
+    limit = request.args.get("limit", 50, type=int)
+    from ..services.data_service import get_briefings
+    return jsonify(get_briefings(device_id, limit))
+
+
+@api_bp.route("/briefings", methods=["POST"])
+def api_create_briefing():
+    """Create a new briefing."""
+    data = request.get_json() or {}
+    device_id = data.get("device_id", "web")
+    from ..services.data_service import create_briefing
+    briefing = create_briefing(device_id, data)
+    return jsonify(briefing)
+
+
+@api_bp.route("/briefings/<briefing_id>/read", methods=["POST"])
+def api_mark_briefing_read(briefing_id):
+    """Mark briefing as read."""
+    from ..services.data_service import mark_briefing_read
+    return jsonify(mark_briefing_read(briefing_id))
+
+
+@api_bp.route("/briefings/<briefing_id>", methods=["DELETE"])
+def api_delete_briefing(briefing_id):
+    """Delete a briefing."""
+    from ..services.data_service import delete_briefing
+    return jsonify(delete_briefing(briefing_id))
+
+
 @api_bp.route("/agents/sync", methods=["POST"])
 def api_agents_sync():
     """
