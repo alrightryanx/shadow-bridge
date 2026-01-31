@@ -67,6 +67,10 @@
 <div id="tab-agents" class="main-tab-content active">
     <div class="tab-header">
         <h3>Active Agents</h3>
+        <div class="connection-status" id="ws-connection-status">
+            <span class="status-dot" id="ws-status-dot"></span>
+            <span class="status-text" id="ws-status-text">Connecting...</span>
+        </div>
     </div>
 
     <div class="agents-grid" id="agents-grid">
@@ -86,9 +90,12 @@
 
             <div class="add-agent-form">
                 <div class="form-group-compact">
-                    <input type="text" id="inline-agent-name" class="form-input-compact" placeholder="Agent name (e.g., Code Reviewer)">
+                    <label class="form-label-compact">Agent Name</label>
+                    <input type="text" id="inline-agent-name" class="form-input-compact" placeholder="e.g., Code Reviewer" required>
+                    <div class="form-error" id="name-error"></div>
                 </div>
                 <div class="form-group-compact">
+                    <label class="form-label-compact">Specialty</label>
                     <select id="inline-agent-specialty" class="form-select-compact">
                         <option value="general">General Assistant</option>
                         <option value="code_review">Code Review</option>
@@ -102,6 +109,7 @@
                 </div>
                 <div class="form-row-compact">
                     <div class="form-group-compact">
+                        <label class="form-label-compact">Provider</label>
                         <select id="inline-agent-provider" class="form-select-compact">
                             <option value="claude">Claude Code</option>
                             <option value="gemini">Gemini CLI</option>
@@ -109,20 +117,24 @@
                         </select>
                     </div>
                     <div class="form-group-compact">
-                        <input type="text" id="inline-agent-model" class="form-input-compact" value="claude-sonnet-4-20250514" placeholder="Model">
+                        <label class="form-label-compact">Model</label>
+                        <input type="text" id="inline-agent-model" class="form-input-compact" value="claude-sonnet-4-20250514" placeholder="Model name">
                     </div>
                 </div>
                 <div class="form-group-compact">
-                    <select id="inline-agent-project" class="form-select-compact">
+                    <label class="form-label-compact">Project</label>
+                    <select id="inline-agent-project" class="form-select-compact" required>
                         <option value="">Select project...</option>
                     </select>
+                    <div class="form-error" id="project-error"></div>
                 </div>
+                <div class="form-status" id="spawn-status"></div>
             </div>
 
             <div class="agent-card-actions">
-                <button class="btn btn-primary btn-block" onclick="confirmSpawnAgent()">
+                <button class="btn btn-primary btn-block" id="spawn-agent-btn" onclick="confirmSpawnAgent()">
                     <span class="material-symbols-outlined">rocket_launch</span>
-                    Spawn Agent
+                    <span id="spawn-btn-text">Spawn Agent</span>
                 </button>
             </div>
         </div>
@@ -609,6 +621,57 @@
 .form-group-compact {
     display: flex;
     flex-direction: column;
+    gap: 4px;
+}
+
+.form-label-compact {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+}
+
+.form-error {
+    font-size: 0.75rem;
+    color: var(--error);
+    margin-top: 4px;
+    display: none;
+}
+
+.form-error.visible {
+    display: block;
+}
+
+.form-status {
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    font-size: 0.85rem;
+    margin-top: 8px;
+    display: none;
+}
+
+.form-status.visible {
+    display: block;
+}
+
+.form-status.success {
+    background: rgba(var(--success-rgb), 0.15);
+    color: var(--success);
+    border: 1px solid rgba(var(--success-rgb), 0.3);
+}
+
+.form-status.error {
+    background: rgba(var(--error-rgb), 0.15);
+    color: var(--error);
+    border: 1px solid rgba(var(--error-rgb), 0.3);
+}
+
+.form-status.info {
+    background: rgba(var(--accent-rgb), 0.15);
+    color: var(--accent);
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
 }
 
 .form-input-compact,
@@ -630,6 +693,18 @@
     background: var(--bg);
 }
 
+/* Fix dropdown option text visibility */
+.form-select-compact option {
+    background: var(--bg-card);
+    color: var(--text);
+    padding: 8px;
+}
+
+.form-input-compact::placeholder {
+    color: var(--text-dim);
+    opacity: 0.7;
+}
+
 .form-row-compact {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -639,6 +714,67 @@
 .btn-block {
     width: 100%;
     justify-content: center;
+}
+
+.btn-block:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-block.loading {
+    position: relative;
+}
+
+.btn-block.loading .material-symbols-outlined {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Connection Status */
+.connection-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warning);
+    animation: pulse-anim 1.5s infinite;
+}
+
+.status-dot.connected {
+    background: var(--success);
+    animation: none;
+}
+
+.status-dot.disconnected {
+    background: var(--error);
+    animation: none;
+}
+
+.status-text {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    font-weight: 500;
+}
+
+.status-text.connected {
+    color: var(--success);
+}
+
+.status-text.disconnected {
+    color: var(--error);
 }
 
 /* Task Board */

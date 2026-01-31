@@ -49,6 +49,7 @@ class AgentOrchestrator {
             console.log('Connected to agent orchestrator');
             this.connected = true;
             this.reconnectAttempts = 0;
+            updateConnectionStatus('connected');
 
             // Request current agents list
             this.getAgents();
@@ -57,11 +58,13 @@ class AgentOrchestrator {
         this.socket.on('disconnect', () => {
             console.log('Disconnected from agent orchestrator');
             this.connected = false;
+            updateConnectionStatus('disconnected');
             this.attemptReconnect();
         });
 
         this.socket.on('connect_error', (error) => {
             console.error('Connection error:', error);
+            updateConnectionStatus('error');
             this.attemptReconnect();
         });
 
@@ -510,41 +513,139 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Global functions for UI interactions
 function confirmSpawnAgent() {
-    const name = document.getElementById('inline-agent-name').value.trim();
+    const nameInput = document.getElementById('inline-agent-name');
+    const projectSelect = document.getElementById('inline-agent-project');
+    const modelInput = document.getElementById('inline-agent-model');
+    const nameError = document.getElementById('name-error');
+    const projectError = document.getElementById('project-error');
+    const statusDiv = document.getElementById('spawn-status');
+    const spawnBtn = document.getElementById('spawn-agent-btn');
+    const btnText = document.getElementById('spawn-btn-text');
+
+    const name = nameInput.value.trim();
     const specialty = document.getElementById('inline-agent-specialty').value;
     const provider = document.getElementById('inline-agent-provider').value;
-    const model = document.getElementById('inline-agent-model').value.trim();
-    const projectSelect = document.getElementById('inline-agent-project');
+    const model = modelInput.value.trim();
     const selectedProject = projectSelect.options[projectSelect.selectedIndex];
 
+    // Clear previous errors
+    nameError.classList.remove('visible');
+    projectError.classList.remove('visible');
+    statusDiv.classList.remove('visible', 'success', 'error', 'info');
+
+    // Validate name
     if (!name) {
-        orchestrator.showToast('Agent name is required', 'warning');
+        nameError.textContent = 'Agent name is required';
+        nameError.classList.add('visible');
+        nameInput.focus();
         return;
     }
 
+    if (name.length < 3) {
+        nameError.textContent = 'Agent name must be at least 3 characters';
+        nameError.classList.add('visible');
+        nameInput.focus();
+        return;
+    }
+
+    // Validate project
     if (!projectSelect.value) {
-        orchestrator.showToast('Please select a project', 'warning');
+        projectError.textContent = 'Please select a project';
+        projectError.classList.add('visible');
+        projectSelect.focus();
         return;
     }
 
     // Get working directory from selected project
     const workingDir = selectedProject.dataset.workingDir;
 
-    orchestrator.spawnAgent({
-        name: name,
-        specialty: specialty,
-        provider: provider,
-        model: model || 'claude-sonnet-4-20250514',
-        workingDirectory: workingDir,
-        autoAcceptEdits: true  // Always true for agents
-    });
+    if (!workingDir) {
+        projectError.textContent = 'Selected project has no working directory';
+        projectError.classList.add('visible');
+        return;
+    }
 
-    // Clear form
+    // Show loading state
+    spawnBtn.disabled = true;
+    spawnBtn.classList.add('loading');
+    btnText.textContent = 'Spawning...';
+    statusDiv.textContent = `Spawning ${name}...`;
+    statusDiv.className = 'form-status visible info';
+
+    try {
+        orchestrator.spawnAgent({
+            name: name,
+            specialty: specialty,
+            provider: provider,
+            model: model || 'claude-sonnet-4-20250514',
+            workingDirectory: workingDir,
+            autoAcceptEdits: true  // Always true for agents
+        });
+
+        // Show success message
+        setTimeout(() => {
+            statusDiv.textContent = `✓ ${name} spawned successfully!`;
+            statusDiv.className = 'form-status visible success';
+
+            // Clear form after 2 seconds
+            setTimeout(() => {
+                clearSpawnForm();
+                statusDiv.classList.remove('visible');
+            }, 2000);
+        }, 500);
+
+    } catch (error) {
+        console.error('Failed to spawn agent:', error);
+        statusDiv.textContent = `✗ Failed to spawn agent: ${error.message || 'Unknown error'}`;
+        statusDiv.className = 'form-status visible error';
+        spawnBtn.disabled = false;
+        spawnBtn.classList.remove('loading');
+        btnText.textContent = 'Spawn Agent';
+    }
+}
+
+function clearSpawnForm() {
     document.getElementById('inline-agent-name').value = '';
     document.getElementById('inline-agent-specialty').value = 'general';
     document.getElementById('inline-agent-provider').value = 'claude';
     document.getElementById('inline-agent-model').value = 'claude-sonnet-4-20250514';
     document.getElementById('inline-agent-project').value = '';
+
+    const spawnBtn = document.getElementById('spawn-agent-btn');
+    const btnText = document.getElementById('spawn-btn-text');
+    spawnBtn.disabled = false;
+    spawnBtn.classList.remove('loading');
+    btnText.textContent = 'Spawn Agent';
+}
+
+function updateConnectionStatus(status) {
+    const statusDot = document.getElementById('ws-status-dot');
+    const statusText = document.getElementById('ws-status-text');
+
+    if (!statusDot || !statusText) return;
+
+    statusDot.className = 'status-dot';
+    statusText.className = 'status-text';
+
+    switch (status) {
+        case 'connected':
+            statusDot.classList.add('connected');
+            statusText.classList.add('connected');
+            statusText.textContent = 'Connected';
+            break;
+        case 'disconnected':
+            statusDot.classList.add('disconnected');
+            statusText.classList.add('disconnected');
+            statusText.textContent = 'Disconnected';
+            break;
+        case 'error':
+            statusDot.classList.add('disconnected');
+            statusText.classList.add('disconnected');
+            statusText.textContent = 'Connection Error';
+            break;
+        default:
+            statusText.textContent = 'Connecting...';
+    }
 }
 
 function showAssignTaskModal(agentId) {
