@@ -509,46 +509,42 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Global functions for UI interactions
-function showSpawnAgentModal() {
-    // Create modal HTML
-    const modal = document.getElementById('spawn-agent-modal');
-    if (!modal) {
-        console.error('Spawn agent modal not found');
-        return;
-    }
-
-    modal.classList.remove('hidden');
-}
-
-function closeSpawnAgentModal() {
-    const modal = document.getElementById('spawn-agent-modal');
-    if (modal) {
-        modal.classList.add('hidden');
-    }
-}
-
 function confirmSpawnAgent() {
-    const name = document.getElementById('spawn-agent-name').value.trim();
-    const specialty = document.getElementById('spawn-agent-specialty').value;
-    const provider = document.getElementById('spawn-agent-provider').value;
-    const model = document.getElementById('spawn-agent-model').value;
-    const workingDir = document.getElementById('spawn-agent-workdir').value.trim();
+    const name = document.getElementById('inline-agent-name').value.trim();
+    const specialty = document.getElementById('inline-agent-specialty').value;
+    const provider = document.getElementById('inline-agent-provider').value;
+    const model = document.getElementById('inline-agent-model').value.trim();
+    const projectSelect = document.getElementById('inline-agent-project');
+    const selectedProject = projectSelect.options[projectSelect.selectedIndex];
 
     if (!name) {
         orchestrator.showToast('Agent name is required', 'warning');
         return;
     }
 
+    if (!projectSelect.value) {
+        orchestrator.showToast('Please select a project', 'warning');
+        return;
+    }
+
+    // Get working directory from selected project
+    const workingDir = selectedProject.dataset.workingDir;
+
     orchestrator.spawnAgent({
         name: name,
         specialty: specialty,
         provider: provider,
-        model: model,
-        workingDirectory: workingDir || null,
-        autoAcceptEdits: document.getElementById('spawn-agent-auto-accept').checked
+        model: model || 'claude-sonnet-4-20250514',
+        workingDirectory: workingDir,
+        autoAcceptEdits: true  // Always true for agents
     });
 
-    closeSpawnAgentModal();
+    // Clear form
+    document.getElementById('inline-agent-name').value = '';
+    document.getElementById('inline-agent-specialty').value = 'general';
+    document.getElementById('inline-agent-provider').value = 'claude';
+    document.getElementById('inline-agent-model').value = 'claude-sonnet-4-20250514';
+    document.getElementById('inline-agent-project').value = '';
 }
 
 function showAssignTaskModal(agentId) {

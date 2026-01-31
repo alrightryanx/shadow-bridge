@@ -291,7 +291,7 @@ if ENVIRONMENT == "DEBUG": NOTE_CONTENT_PORT = 19295
 elif ENVIRONMENT == "AIDEV": NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.124"
+APP_VERSION = "1.126"
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")

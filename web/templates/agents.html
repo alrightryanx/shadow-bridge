@@ -67,17 +67,64 @@
 <div id="tab-agents" class="main-tab-content active">
     <div class="tab-header">
         <h3>Active Agents</h3>
-        <button class="btn btn-primary" onclick="showSpawnAgentModal()">
-            <span class="material-symbols-outlined">add</span>
-            Spawn Agent
-        </button>
     </div>
 
     <div class="agents-grid" id="agents-grid">
-        <div class="empty-state">
-            <span class="material-symbols-outlined">smart_toy</span>
-            <p>No agents running</p>
-            <button class="btn btn-primary" onclick="showSpawnAgentModal()">Spawn Your First Agent</button>
+        <!-- Inline Add Agent Card (Always First) -->
+        <div class="agent-card add-agent-card">
+            <div class="agent-card-header">
+                <div class="agent-card-title">
+                    <div class="agent-card-icon add-icon">
+                        <span class="material-symbols-outlined">add_circle</span>
+                    </div>
+                    <div>
+                        <h4>New Agent</h4>
+                        <div class="agent-card-subtitle">Configure and spawn</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="add-agent-form">
+                <div class="form-group-compact">
+                    <input type="text" id="inline-agent-name" class="form-input-compact" placeholder="Agent name (e.g., Code Reviewer)">
+                </div>
+                <div class="form-group-compact">
+                    <select id="inline-agent-specialty" class="form-select-compact">
+                        <option value="general">General Assistant</option>
+                        <option value="code_review">Code Review</option>
+                        <option value="testing">Testing</option>
+                        <option value="documentation">Documentation</option>
+                        <option value="refactoring">Refactoring</option>
+                        <option value="debugging">Debugging</option>
+                        <option value="performance">Performance Optimization</option>
+                        <option value="security">Security Analysis</option>
+                    </select>
+                </div>
+                <div class="form-row-compact">
+                    <div class="form-group-compact">
+                        <select id="inline-agent-provider" class="form-select-compact">
+                            <option value="claude">Claude Code</option>
+                            <option value="gemini">Gemini CLI</option>
+                            <option value="codex">Codex</option>
+                        </select>
+                    </div>
+                    <div class="form-group-compact">
+                        <input type="text" id="inline-agent-model" class="form-input-compact" value="claude-sonnet-4-20250514" placeholder="Model">
+                    </div>
+                </div>
+                <div class="form-group-compact">
+                    <select id="inline-agent-project" class="form-select-compact">
+                        <option value="">Select project...</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="agent-card-actions">
+                <button class="btn btn-primary btn-block" onclick="confirmSpawnAgent()">
+                    <span class="material-symbols-outlined">rocket_launch</span>
+                    Spawn Agent
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -171,69 +218,6 @@
 </div>
 
 <!-- Modals -->
-
-<!-- Spawn Agent Modal -->
-<div id="spawn-agent-modal" class="modal hidden">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>
-                <span class="material-symbols-outlined">add_circle</span>
-                Spawn Agent
-            </h2>
-            <button class="modal-close" onclick="closeSpawnAgentModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="form-group">
-                <label>Agent Name</label>
-                <input type="text" id="spawn-agent-name" class="form-input" placeholder="e.g., Code Reviewer">
-            </div>
-            <div class="form-group">
-                <label>Specialty</label>
-                <select id="spawn-agent-specialty" class="form-select">
-                    <option value="general">General Assistant</option>
-                    <option value="code_review">Code Review</option>
-                    <option value="testing">Testing</option>
-                    <option value="documentation">Documentation</option>
-                    <option value="refactoring">Refactoring</option>
-                    <option value="debugging">Debugging</option>
-                    <option value="performance">Performance Optimization</option>
-                    <option value="security">Security Analysis</option>
-                </select>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>CLI Provider</label>
-                    <select id="spawn-agent-provider" class="form-select">
-                        <option value="claude">Claude Code</option>
-                        <option value="gemini">Gemini CLI</option>
-                        <option value="codex">Codex</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Model</label>
-                    <input type="text" id="spawn-agent-model" class="form-input" value="claude-sonnet-4-20250514">
-                </div>
-            </div>
-            <div class="form-group">
-                <label>Working Directory</label>
-                <input type="text" id="spawn-agent-workdir" class="form-input" placeholder="C:/shadow">
-            </div>
-            <div class="form-group">
-                <label class="checkbox-label">
-                    <input type="checkbox" id="spawn-agent-auto-accept" checked>
-                    <span>Auto-accept edits</span>
-                </label>
-            </div>
-        </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeSpawnAgentModal()">Cancel</button>
-            <button class="btn btn-primary" onclick="confirmSpawnAgent()">
-                <span class="material-symbols-outlined">rocket_launch</span>
-                Spawn
-            </button>
-        </div>
-    </div>
-</div>
 
 <!-- Create Task Modal -->
 <div id="create-task-modal" class="modal hidden">
@@ -596,6 +580,67 @@
     margin-top: auto;
 }
 
+/* Add Agent Card (Inline) */
+.add-agent-card {
+    border: 2px dashed var(--border);
+    background: var(--bg-hover);
+}
+
+.add-agent-card:hover {
+    border-color: var(--accent);
+    border-style: dashed;
+}
+
+.add-agent-card .agent-card-icon.add-icon {
+    background: transparent;
+    border: 2px dashed var(--accent);
+}
+
+.add-agent-card .agent-card-icon.add-icon span {
+    color: var(--accent);
+}
+
+.add-agent-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.form-group-compact {
+    display: flex;
+    flex-direction: column;
+}
+
+.form-input-compact,
+.form-select-compact {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
+    transition: all 0.2s ease;
+}
+
+.form-input-compact:focus,
+.form-select-compact:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--bg);
+}
+
+.form-row-compact {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-sm);
+}
+
+.btn-block {
+    width: 100%;
+    justify-content: center;
+}
+
 /* Task Board */
 .task-board {
     display: grid;
@@ -879,32 +924,68 @@ function switchMainTab(tabName) {
     });
 }
 
+// Load projects from API
+async function loadProjects() {
+    try {
+        const response = await fetch('/api/projects');
+        const projects = await response.json();
+
+        const projectSelect = document.getElementById('inline-agent-project');
+        if (!projectSelect) return;
+
+        // Clear existing options except the first placeholder
+        projectSelect.innerHTML = '<option value="">Select project...</option>';
+
+        // Add projects
+        if (projects && projects.length > 0) {
+            projects.forEach(project => {
+                const option = document.createElement('option');
+                option.value = project.id;
+                option.textContent = project.name;
+                option.dataset.workingDir = project.workingDirectory || '';
+                projectSelect.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('Failed to load projects:', error);
+    }
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    // Load projects for the inline form
+    loadProjects();
+
     // Connect to agent orchestrator
     if (typeof orchestrator !== 'undefined') {
         orchestrator.connect();
 
-        // Override updateAgentUI to use new grid
+        // Store reference to add-agent-card HTML
+        const getAddAgentCardHtml = () => {
+            const card = document.querySelector('.add-agent-card');
+            return card ? card.outerHTML : '';
+        };
+
+        // Override updateAgentUI to keep add-agent-card first
         orchestrator.updateAgentUI = function() {
             const container = document.getElementById('agents-grid');
             if (!container) return;
 
+            const addAgentCardHtml = getAddAgentCardHtml();
+
             if (this.agents.size === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <span class="material-symbols-outlined">smart_toy</span>
-                        <p>No agents running</p>
-                        <button class="btn btn-primary" onclick="showSpawnAgentModal()">Spawn Your First Agent</button>
-                    </div>
-                `;
+                container.innerHTML = addAgentCardHtml;
             } else {
-                container.innerHTML = Array.from(this.agents.values())
+                const agentCardsHtml = Array.from(this.agents.values())
                     .map(agent => renderAgentCard(agent))
                     .join('');
+                container.innerHTML = addAgentCardHtml + agentCardsHtml;
             }
 
             updateOverview();
+
+            // Reload projects in case they changed
+            loadProjects();
         };
 
         // Update overview metrics every 5 seconds
