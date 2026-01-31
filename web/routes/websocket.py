@@ -554,6 +554,16 @@ def broadcast_agent_status(agent_id, status, task=None):
         )
 
 
+def broadcast_agents_updated(device_id):
+    """Broadcast agents list update to web clients."""
+    if socketio is not None:
+        socketio.emit(
+            "agents_updated",
+            {"device_id": device_id, "timestamp": int(time.time() * 1000)},
+            room="all",
+        )
+
+
 def broadcast_activity(event_type, resource_type, resource_id, resource_title, metadata=None):
     """Broadcast a user activity event."""
     if socketio is not None:

@@ -1502,6 +1502,36 @@ def get_agent_metrics() -> Dict:
     }
 
 
+def sync_agents_from_device(device_id: str, agents_data: List[Dict]) -> Dict:
+    """
+    Sync agents from Android device to web dashboard.
+
+    Args:
+        device_id: Device ID that's syncing agents
+        agents_data: List of agent dicts from device
+
+    Returns:
+        Result dict with success status
+    """
+    data = _read_json_file(AGENTS_FILE) or {}
+
+    # Update device's agents
+    if device_id not in data:
+        data[device_id] = {"agents": []}
+
+    data[device_id]["agents"] = agents_data
+    data[device_id]["last_sync"] = int(time.time() * 1000)
+
+    # Write updated data
+    success = _write_json_file(AGENTS_FILE, data)
+
+    return {
+        "success": success,
+        "agent_count": len(agents_data),
+        "device_id": device_id
+    }
+
+
 # ============ Analytics ============
 
 

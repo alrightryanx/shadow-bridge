@@ -1024,6 +1024,55 @@ def api_session_message_shortcut():
         return jsonify({"error": "session_id is required"}), 400
     return api_session_message(session_id)
 
+@api_bp.route("/sessions/<session_id>/agent-message", methods=["POST"])
+def api_append_agent_message(session_id):
+    """Append an agent output message to a session."""
+    data = request.get_json() or {}
+    agent_id = data.get("agent_id")
+    agent_name = data.get("agent_name", "AI Agent")
+    content = data.get("content", "")
+    message_type = data.get("type", "output")  # output, error, tool_use, etc.
+
+    if not content:
+        return jsonify({"error": "Content is required"}), 400
+
+    # Create message with agent source marker
+    message = {
+        "role": "assistant",
+        "content": content,
+        "timestamp": int(time.time() * 1000),
+        "source": "agent",
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "message_type": message_type,
+        "id": f"agent_{agent_id}_{int(time.time() * 1000)}"
+    }
+
+    result = append_session_message(
+        session_id=session_id,
+        message=message,
+        delta=None,
+        is_final=True,
+        session_meta=None
+    )
+
+    # Broadcast to WebSocket clients
+    try:
+        from .websocket import broadcast_session_message, broadcast_sessions_updated
+        message_payload = result.get("message") if isinstance(result, dict) else None
+        if message_payload:
+            broadcast_session_message(session_id, message_payload, is_update=False)
+        device_id = (result.get("session") or {}).get("device_id", "web")
+        broadcast_sessions_updated(device_id)
+    except Exception as e:
+        print(f"Failed to broadcast agent message: {e}")
+
+    return jsonify({
+        "success": True,
+        "message": result.get("message") if isinstance(result, dict) else None
+    })
+
+
 @api_bp.route("/sessions/sync", methods=["POST"])
 def api_sessions_sync():
     """
@@ -1314,8 +1363,45 @@ def api_kill_agent(agent_id):
     agent = get_agent(agent_id)
     agent_name = agent.get("name", agent_id) if agent else agent_id
     _add_activity("kill", f"Agent {agent_name} terminated", "cancel")
-    
+
     send_command_to_device("agent_command", {"action": "kill", "agentId": agent_id})
+
+    return jsonify({"success": True, "message": f"Kill command sent for {agent_name}"})
+
+
+@api_bp.route("/agents/sync", methods=["POST"])
+def api_agents_sync():
+    """
+    Receive agents sync notification from Android app.
+    Updates local agent registry and broadcasts to WebSocket clients.
+    """
+    try:
+        data = request.get_json() or {}
+        device_id = data.get("device_id")
+        agents_data = data.get("agents", [])
+
+        if not device_id:
+            return jsonify({"error": "device_id is required"}), 400
+
+        # Update agents in data service
+        from ..services.data_service import sync_agents_from_device
+        result = sync_agents_from_device(device_id, agents_data)
+
+        # Broadcast to WebSocket clients
+        try:
+            from .websocket import broadcast_agents_updated
+            broadcast_agents_updated(device_id)
+        except Exception:
+            pass
+
+        return jsonify({
+            "success": True,
+            "synced_count": len(agents_data),
+            "message": f"Synced {len(agents_data)} agents from {device_id}"
+        })
+    except Exception as e:
+        logger.error(f"Agents sync failed: {e}")
+        return jsonify({"error": str(e)}), 500
     
     return jsonify(
         {"success": True, "message": f"Kill command sent for agent {agent_id}"}
@@ -1389,7 +1475,7 @@ def api_start_task():
         if not os.path.exists(cwd):
             return jsonify({"error": f"Path does not exist: {cwd}"}), 400
 
-    task_id = get_task_service().start_task(command, cwd)
+    task_id = get_task_service().start_task(command, cwd, data.get("task_id"))
     _add_activity(
         "task", f"Started supervised task: {' '.join(command)[:50]}...", "play"
     )
@@ -1558,6 +1644,29 @@ def api_activity():
 def api_status():
     """Get system status."""
     return jsonify(get_status())
+
+
+@api_bp.route("/status/health")
+def api_status_health():
+    """Get real-time PC resource usage (CPU/RAM)."""
+    return jsonify(get_task_service().get_system_health())
+
+
+@api_bp.route("/celebrate", methods=["POST"])
+def api_celebrate():
+    """
+    Trigger celebration effects (confetti + sound) on the dashboard.
+    Called by Android app after successful SSH connection test.
+    """
+    try:
+        from .websocket import broadcast_celebrate
+        data = request.get_json() or {}
+        message = data.get("message", "Connection Successful!")
+        broadcast_celebrate(message)
+        return jsonify({"success": True, "message": "Celebration triggered"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 @api_bp.route("/tailscale/status")
 def api_tailscale_status():

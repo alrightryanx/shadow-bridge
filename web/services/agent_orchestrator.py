@@ -43,7 +43,8 @@ def spawn_agent(
     cli_provider: str,
     model: str,
     working_directory: Optional[str] = None,
-    auto_accept_edits: bool = True
+    auto_accept_edits: bool = True,
+    session_id: Optional[str] = None
 ) -> Dict:
     """
     Spawn a new persistent AI agent.
@@ -108,7 +109,8 @@ def spawn_agent(
             "spawned_at": datetime.utcnow().isoformat(),
             "working_directory": cwd,
             "process_id": process.pid,
-            "auto_accept_edits": auto_accept_edits
+            "auto_accept_edits": auto_accept_edits,
+            "session_id": session_id  # Link to session for chat integration
         }
 
         # Store agent info
@@ -385,6 +387,28 @@ def monitor_agent_output(agent_id: str, stdout, stderr):
                     "stream": stream_type,
                     "timestamp": log_entry["timestamp"]
                 })
+
+                # Send to session if linked
+                agent = active_agents.get(agent_id)
+                if agent and agent.get("session_id"):
+                    try:
+                        import requests
+                        session_id = agent["session_id"]
+                        agent_name = agent.get("name", "AI Agent")
+
+                        # Post to session endpoint
+                        requests.post(
+                            f"http://localhost:6767/api/sessions/{session_id}/agent-message",
+                            json={
+                                "agent_id": agent_id,
+                                "agent_name": agent_name,
+                                "content": line,
+                                "type": "error" if stream_type == "stderr" else "output"
+                            },
+                            timeout=2
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to post agent output to session: {e}")
 
         except Exception as e:
             logger.error(f"Error reading {stream_type} for agent {agent_id}: {e}")
