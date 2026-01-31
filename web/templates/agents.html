@@ -1,723 +1,1296 @@
 {% extends "base.html" %}
 
-{% block title %}Shadow Web - Agents{% endblock %}
-{% block page_title %}Agent Team{% endblock %}
+{% block title %}Shadow Web - AI Agents & Workflows{% endblock %}
+{% block page_title %}Agents & Workflows{% endblock %}
 
 {% block content %}
-<!-- Agent Metrics -->
+<!-- Unified Dashboard Header -->
 <div class="stats-grid small">
     <div class="stat-card">
         <div class="stat-info">
-            <span class="stat-value" id="total-agents">-</span>
-            <span class="stat-label">Total Agents</span>
+            <span class="stat-value" id="active-staff-count">0</span>
+            <span class="stat-label">Active Staff</span>
         </div>
     </div>
     <div class="stat-card">
         <div class="stat-info">
-            <span class="stat-value" id="active-agents">-</span>
-            <span class="stat-label">Active</span>
+            <span class="stat-value" id="active-swarms-count">0</span>
+            <span class="stat-label">Active Swarms</span>
         </div>
     </div>
     <div class="stat-card">
         <div class="stat-info">
-            <span class="stat-value" id="idle-agents">-</span>
-            <span class="stat-label">Idle</span>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-info">
-            <span class="stat-value" id="tasks-completed">-</span>
+            <span class="stat-value" id="tasks-completed-count">0</span>
             <span class="stat-label">Tasks Done</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-info">
+            <span class="stat-value" id="system-load">Low</span>
+            <span class="stat-label">AI System Load</span>
         </div>
     </div>
 </div>
 
-<!-- Emergency Controls -->
-<section class="section">
-    <div class="controls-header">
-        <h2>Control Center</h2>
-        <div class="emergency-controls">
-            <button class="btn btn-warning" id="pause-all-btn" onclick="pauseAllAgents()">
-                <span class="material-symbols-outlined">pause_circle</span>
-                Pause All
-            </button>
-            <button class="btn btn-danger" id="kill-all-btn" onclick="killAllAgents()">
-                <span class="material-symbols-outlined">cancel</span>
-                Kill All
-            </button>
-        </div>
+<!-- Tab Navigation (M3 Style) -->
+<div class="page-actions" style="margin-top: var(--spacing-lg); margin-bottom: var(--spacing-lg);">
+    <div class="tab-toggle" id="agents-tab-toggle" style="flex-wrap: wrap; gap: 8px;">
+        <button class="btn active" data-tab="staffing" onclick="switchTab('staffing')">
+            <span class="material-symbols-outlined">badge</span> Staffing
+        </button>
+        <button class="btn" data-tab="teams" onclick="switchTab('teams')">
+            <span class="material-symbols-outlined">groups</span> Teams
+        </button>
+        <button class="btn" data-tab="tasks" onclick="switchTab('tasks')">
+            <span class="material-symbols-outlined">assignment</span> Tasks
+        </button>
+        <button class="btn" data-tab="ralph" onclick="switchTab('ralph')">
+            <span class="material-symbols-outlined">rocket_launch</span> Ralph
+        </button>
+        <button class="btn" data-tab="activity" onclick="switchTab('activity')">
+            <span class="material-symbols-outlined">history</span> Activity
+        </button>
+        <button class="btn" data-tab="live" onclick="switchTab('live')">
+            <span class="material-symbols-outlined">online_prediction</span> Live Agents
+        </button>
     </div>
-</section>
+    
+    <div class="emergency-controls" style="display: flex; gap: 8px;">
+        <button class="btn btn-warning btn-small" id="global-pause-btn" onclick="globalPause()">
+            <span class="material-symbols-outlined">pause</span> Pause All
+        </button>
+        <button class="btn btn-danger btn-small" onclick="globalKill()">
+            <span class="material-symbols-outlined">cancel</span> Kill All
+        </button>
+    </div>
+</div>
 
-<!-- Real-time Activity Feed -->
-<section class="section">
-    <div class="section-header">
-        <h2>Live Activity Feed</h2>
-        <div class="feed-controls">
-            <span class="live-indicator" id="live-indicator">
-                <span class="pulse"></span> LIVE
-            </span>
-            <button class="btn btn-small" onclick="clearActivityFeed()">Clear</button>
+<!-- Staffing Tab -->
+<div id="tab-staffing" class="tab-content">
+    <section class="section dashboard-card">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">person_add</span> Hire Virtual Staff</h2>
+            <div class="header-actions">
+                <button class="btn btn-primary btn-small" onclick="showAddCustomAgentModal()">+ Custom Agent</button>
+            </div>
         </div>
-    </div>
-    <div class="activity-feed" id="activity-feed">
-        <div class="feed-item system">
-            <span class="feed-time">--:--:--</span>
-            <span class="feed-icon">
+        <p class="section-subtitle">Deploy dedicated AI agents with specific job roles to your project.</p>
+        
+        <div class="staffing-gallery" id="role-gallery">
+            <!-- Roles will be populated here -->
+            <div class="loading">Loading roles...</div>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-header">
+            <h2>Current Staff Roster</h2>
+            <div class="filter-group">
+                <select id="team-filter" class="form-select-small" onchange="refreshAllStatus()">
+                    <option value="__ALL__">All Teams</option>
+                </select>
+            </div>
+        </div>
+        <div class="agents-grid" id="staff-roster">
+            <div class="empty-state">No individual staff members hired yet.</div>
+        </div>
+    </section>
+</div>
+
+<!-- Teams Tab -->
+<div id="tab-teams" class="tab-content hidden">
+    <section class="section">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">groups</span> Collaborative Teams</h2>
+            <button class="btn btn-primary btn-small" onclick="openCreateTeamModal()">
+                <span class="material-symbols-outlined">add</span> Create Team
+            </button>
+        </div>
+        <p class="section-description">Manage your human+AI collaborative teams and permissions.</p>
+
+        <div id="teams-requires-email" style="display: none;">
+            <div class="info-banner">
                 <span class="material-symbols-outlined">info</span>
-            </span>
-            <span class="feed-message">Waiting for agent activity...</span>
+                <span>Verify your email in <a href="/settings" style="color: var(--accent);">Settings</a> to enable team features.</span>
+            </div>
+        </div>
+
+        <div id="teams-content" style="display: none;">
+            <!-- Pending Invitations -->
+            <div id="pending-invitations-section" class="team-subsection" style="display: none; margin-bottom: 2rem;">
+                <h3>Pending Invitations</h3>
+                <div id="pending-invitations-list" class="invitations-list"></div>
+            </div>
+
+            <!-- My Teams -->
+            <div class="team-subsection">
+                <div id="my-teams-list" class="teams-list">
+                    <div class="empty-state">
+                        <span class="material-symbols-outlined">groups</span>
+                        <p>You're not a member of any teams yet.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- Tasks Tab -->
+<div id="tab-tasks" class="tab-content hidden">
+    <section class="section">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">assignment</span> Agent Task Board</h2>
+            <button class="btn btn-primary btn-small" onclick="showCreateTaskModal()">+ New Task</button>
+        </div>
+        
+        <div class="tasks-columns">
+            <div class="task-column">
+                <div class="task-column-header">
+                    <span class="task-column-title">Pending</span>
+                    <span class="task-column-count" id="pending-count">0</span>
+                </div>
+                <div class="task-list" id="pending-tasks-list"></div>
+            </div>
+            <div class="task-column">
+                <div class="task-column-header">
+                    <span class="task-column-title">In Progress</span>
+                    <span class="task-column-count" id="progress-count">0</span>
+                </div>
+                <div class="task-list" id="progress-tasks-list"></div>
+            </div>
+            <div class="task-column">
+                <div class="task-column-header">
+                    <span class="task-column-title">Completed</span>
+                    <span class="task-column-count" id="completed-count">0</span>
+                </div>
+                <div class="task-list" id="completed-tasks-list"></div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- Ralph Tab -->
+<div id="tab-ralph" class="tab-content hidden">
+    <div class="ralph-layout">
+        <div class="ralph-sidebar">
+            <section class="section dashboard-card">
+                <div class="section-header">
+                    <h2>Deploy Ralph Swarm</h2>
+                </div>
+                <div class="form-group">
+                    <label>Target Project</label>
+                    <input type="text" id="swarm-project-dir" class="form-input" value="C:/shadow">
+                </div>
+                <div class="form-group">
+                    <label>Mission Goal</label>
+                    <textarea id="swarm-goal" class="form-textarea" rows="3" placeholder="Describe the comprehensive goal for the swarm..."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Agent Count</label>
+                        <input type="number" id="swarm-agent-count" class="form-input" value="5" min="1" max="20">
+                    </div>
+                    <div class="form-group">
+                        <label>Model</label>
+                        <select id="swarm-model" class="form-select">
+                            <option value="opencode/glm-4.7-free">GLM 4.7 (Free)</option>
+                            <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
+                            <option value="gpt-4o">GPT-4o</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-full" onclick="deploySwarm()">
+                    <span class="material-symbols-outlined">rocket_launch</span> Launch Swarm
+                </button>
+            </section>
+
+            <!-- Ralph Engines (Moved here from separate tab) -->
+            <section class="section dashboard-card" style="margin-top: 1rem;">
+                <div class="section-header">
+                    <h3>Ralph Engines</h3>
+                </div>
+                
+                <div class="engine-mini-card">
+                    <div class="engine-header">
+                        <span class="material-symbols-outlined">temp_agent</span>
+                        <h4>Brainstormer</h4>
+                    </div>
+                    <p class="small-text">Recursive planning and multi-model debate.</p>
+                    <button class="btn btn-secondary btn-small btn-full" onclick="switchTab('engines')">Open Engines</button>
+                </div>
+            </section>
+        </div>
+        
+        <div class="ralph-main">
+            <section class="section">
+                <div class="section-header">
+                    <h2>Active Swarm Agents</h2>
+                    <button class="btn btn-small btn-secondary" onclick="refreshSwarms()">
+                        <span class="material-symbols-outlined">refresh</span>
+                    </button>
+                </div>
+                <div class="agents-list" id="swarm-roster">
+                    <div class="empty-state">No swarm active. Launch a mission to begin.</div>
+                </div>
+            </section>
+
+            <!-- Sub-tab for Engines if preferred, but for now we'll just keep the section below -->
+            <section class="section" id="ralph-engines-content">
+                <div class="section-header">
+                    <h2>Workflow Engines</h2>
+                </div>
+                <div class="engines-grid">
+                    <div class="dashboard-card engine-card">
+                        <h3>Brainstormer</h3>
+                        <p>Strategic planning via multi-round debates.</p>
+                        <textarea id="brainstorm-objective" class="form-textarea" rows="2" placeholder="What high-level plans do you need?"></textarea>
+                        <button class="btn btn-primary btn-full" onclick="launchBrainstormer()">Launch</button>
+                    </div>
+                    <div class="dashboard-card engine-card">
+                        <h3>Looping Engine</h3>
+                        <p>Iterative refinement of specific tasks.</p>
+                        <textarea id="loop-task" class="form-textarea" rows="2" placeholder="Describe the task to iterate on..."></textarea>
+                        <button class="btn btn-secondary btn-full" onclick="launchLooper()">Launch</button>
+                    </div>
+                </div>
+            </section>
         </div>
     </div>
-</section>
+</div>
 
-<!-- Agent Cards -->
-<section class="section">
-    <h2>Agent Roster</h2>
-    <div class="agents-grid" id="agents-container">
-        <div class="loading">Loading agents...</div>
-    </div>
-</section>
+<!-- Live Agents Tab (WebSocket-Connected Persistent Agents) -->
+<div id="tab-live" class="tab-content hidden">
+    <section class="section">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">online_prediction</span> Live Agent Monitoring</h2>
+            <button class="btn btn-primary btn-small" onclick="showSpawnAgentModal()">
+                <span class="material-symbols-outlined">add</span> Spawn Agent
+            </button>
+        </div>
+        <p class="section-subtitle">Real-time monitoring of persistent AI agents running on your PC.</p>
 
-<!-- Active Tasks with Kill Switches -->
-<section class="section">
-    <div class="section-header">
-        <h2>Active Tasks</h2>
-        <span class="task-count" id="task-count">0</span>
+        <div class="agents-grid" id="live-agents-grid">
+            <div class="loading">Connecting to agent orchestrator...</div>
+        </div>
+    </section>
+</div>
+
+<!-- Activity Tab -->
+<div id="tab-activity" class="tab-content hidden">
+    <div class="activity-layout">
+        <section class="section">
+            <div class="section-header">
+                <h2>Live Activity Feed</h2>
+                <div class="feed-controls">
+                    <span class="live-indicator" id="live-indicator">
+                        <span class="pulse"></span> LIVE
+                    </span>
+                    <button class="btn btn-small" onclick="clearFeed()">Clear</button>
+                </div>
+            </div>
+            <div class="activity-feed" id="activity-feed-container">
+                <div class="loading">Waiting for agent activity...</div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <h2>Unified Logs</h2>
+                <div class="log-controls">
+                    <select id="log-target-select" class="form-select-small" style="min-width: 200px;" onchange="updateUnifiedLogs()">
+                        <option value="">Select Target...</option>
+                    </select>
+                    <button class="btn btn-icon-small" onclick="updateUnifiedLogs()">
+                        <span class="material-symbols-outlined">refresh</span>
+                    </button>
+                </div>
+            </div>
+            <div class="log-container">
+                <pre id="unified-log-output" class="log-display">Select an agent or swarm to view live logs...</pre>
+            </div>
+        </section>
     </div>
-    <div class="tasks-list" id="active-tasks">
-        <div class="empty-state">No active tasks</div>
+</div>
+
+<!-- Modals -->
+
+<!-- Hire Role Modal -->
+<div id="hire-role-modal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2 id="hire-role-title">Hire Specialist</h2>
+            <button class="modal-close" onclick="closeHireModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="role-preview-card" id="role-preview"></div>
+            <div class="form-group">
+                <label>Assigned Project</label>
+                <select id="hire-project-select" class="form-select"></select>
+            </div>
+            <div class="form-group">
+                <label>Instructions</label>
+                <textarea id="hire-instructions" class="form-textarea" placeholder="Constraints or focus areas..."></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeHireModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmHire()">Deploy Agent</button>
+        </div>
     </div>
-</section>
+</div>
+
+<!-- Create Task Modal -->
+<div id="create-task-modal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2>Create New Task</h2>
+            <button class="modal-close" onclick="closeCreateTaskModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Task Title</label>
+                <input type="text" id="task-title" class="form-input" placeholder="e.g., Refactor auth logic">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea id="task-description" class="form-textarea" placeholder="Context..."></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Priority</label>
+                    <select id="task-priority" class="form-select">
+                        <option value="LOW">Low</option>
+                        <option value="MEDIUM" selected>Medium</option>
+                        <option value="HIGH">High</option>
+                        <option value="URGENT">Urgent</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Assign To</label>
+                    <select id="task-agent-select" class="form-select">
+                        <option value="">Unassigned</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateTaskModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmCreateTask()">Create Task</button>
+        </div>
+    </div>
+</div>
+
+<!-- Collaborative Team Modals (Moved from settings) -->
+<div id="create-team-modal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">group_add</span> Create Team</h2>
+            <button class="modal-close" onclick="closeCreateTeamModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="new-team-name">Team Name</label>
+                <input type="text" id="new-team-name" class="form-input" placeholder="My Team">
+            </div>
+            <div class="form-group">
+                <label for="new-team-description">Description</label>
+                <textarea id="new-team-description" class="form-input form-textarea" placeholder="What is this team for?"></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateTeamModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmCreateTeam()">
+                <span class="material-symbols-outlined">check</span> Create
+            </button>
+        </div>
+    </div>
+</div>
+
+<div id="team-details-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">groups</span> <span id="team-details-name">Team</span></h2>
+            <button class="modal-close" onclick="closeTeamDetailsModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p id="team-details-description" class="team-description" style="color: var(--text-dim); margin-bottom: 1rem;"></p>
+            <div class="team-members-section">
+                <div class="subsection-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h3>Members</h3>
+                    <button class="btn btn-small btn-primary" id="invite-member-btn" onclick="toggleInviteForm()" style="display: none;">
+                        <span class="material-symbols-outlined">person_add</span> Invite
+                    </button>
+                </div>
+                <div id="invite-member-form" class="invite-form" style="display: none; background: var(--bg-input); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1rem;">
+                    <div class="invite-form-row" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <input type="email" id="invite-email" class="form-input" style="flex: 1; min-width: 200px;" placeholder="email@example.com">
+                        <select id="invite-role" class="form-select" style="width: auto;">
+                            <option value="member">Member</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="inviteMember()">Send</button>
+                        <button class="btn btn-secondary" onclick="toggleInviteForm()">Cancel</button>
+                    </div>
+                </div>
+                <div id="team-members-list" class="members-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+            </div>
+            <div id="team-actions" class="team-actions" style="display: none; gap: 1rem; margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+                <button class="btn btn-danger" id="leave-team-btn" onclick="leaveTeam()">Leave Team</button>
+                <button class="btn btn-danger" id="delete-team-btn" onclick="deleteTeam()" style="display: none;">Delete Team</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Spawn Agent Modal -->
+<div id="spawn-agent-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">add_circle</span> Spawn Persistent Agent</h2>
+            <button class="modal-close" onclick="closeSpawnAgentModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Agent Name</label>
+                <input type="text" id="spawn-agent-name" class="form-input" placeholder="e.g., Code Reviewer">
+            </div>
+            <div class="form-group">
+                <label>Specialty</label>
+                <select id="spawn-agent-specialty" class="form-select">
+                    <option value="general">General Assistant</option>
+                    <option value="code_review">Code Review</option>
+                    <option value="testing">Testing</option>
+                    <option value="documentation">Documentation</option>
+                    <option value="refactoring">Refactoring</option>
+                    <option value="debugging">Debugging</option>
+                    <option value="performance">Performance</option>
+                    <option value="security">Security</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>CLI Provider</label>
+                    <select id="spawn-agent-provider" class="form-select">
+                        <option value="claude">Claude Code</option>
+                        <option value="gemini">Gemini CLI</option>
+                        <option value="codex">Codex</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Model</label>
+                    <input type="text" id="spawn-agent-model" class="form-input" placeholder="claude-sonnet-4-20250514">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Working Directory</label>
+                <input type="text" id="spawn-agent-workdir" class="form-input" placeholder="C:/shadow">
+            </div>
+            <div class="form-group">
+                <label style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="spawn-agent-auto-accept" checked>
+                    <span>Auto-accept edits</span>
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeSpawnAgentModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmSpawnAgent()">
+                <span class="material-symbols-outlined">rocket_launch</span> Spawn
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Assign Task Modal -->
+<div id="assign-task-modal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">assignment</span> Assign Task</h2>
+            <button class="modal-close" onclick="closeAssignTaskModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Task Description</label>
+                <textarea id="assign-task-input" class="form-textarea" rows="4" placeholder="Describe the task for the agent to complete..."></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeAssignTaskModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmAssignTask()">
+                <span class="material-symbols-outlined">send</span> Assign
+            </button>
+        </div>
+    </div>
+</div>
 
 <style>
-.controls-header {
+/* Consolidated Agent Styles */
+.stats-grid.small {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--spacing-md);
+}
+
+@media (max-width: 600px) {
+    .stats-grid.small {
+        grid-template-columns: 1fr 1fr;
+    }
+    .page-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .emergency-controls {
+        margin-top: var(--spacing-md);
+        justify-content: space-between;
+    }
+    .emergency-controls .btn {
+        flex: 1;
+    }
+}
+
+.section-subtitle { color: var(--text-dim); font-size: 0.9rem; margin-bottom: var(--spacing-md); }
+.staffing-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--spacing-md); margin-top: var(--spacing-md); }
+.role-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--spacing-md); cursor: pointer; transition: all 0.2s ease; display: flex; flex-direction: column; gap: 8px; }
+.role-card:hover { border-color: var(--accent); transform: translateY(-2px); background: var(--bg-hover); }
+.role-icon { font-size: 32px; color: var(--accent); margin-bottom: 4px; }
+.role-name { font-weight: 600; font-size: 1.1rem; color: var(--text); }
+.role-desc { font-size: 0.85rem; color: var(--text-dim); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.engines-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-lg); margin-top: 1rem; }
+@media (max-width: 900px) { .engines-grid { grid-template-columns: 1fr; } }
+.engine-card { display: flex; flex-direction: column; gap: var(--spacing-md); padding: 1.5rem; }
+.engine-mini-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.engine-header { display: flex; align-items: center; gap: 0.5rem; color: var(--accent); }
+.engine-header span { font-size: 20px; }
+.small-text { font-size: 0.8rem; color: var(--text-dim); }
+.btn-full { width: 100%; justify-content: center; }
+.ralph-layout { display: grid; grid-template-columns: 320px 1fr; gap: 1.5rem; }
+@media (max-width: 1024px) { .ralph-layout { grid-template-columns: 1fr; } }
+.activity-feed { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); max-height: 400px; overflow-y: auto; padding: var(--spacing-sm); font-family: monospace; font-size: 0.85rem; }
+.log-container { background: #0d0d0d; color: #4af626; padding: 1rem; border-radius: var(--radius-lg); font-family: monospace; font-size: 0.85rem; height: 500px; overflow-y: auto; border: 1px solid var(--border); }
+.log-display { white-space: pre-wrap; word-break: break-all; margin: 0; }
+.tasks-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-lg); margin-top: var(--spacing-md); }
+@media (max-width: 1024px) { .tasks-columns { grid-template-columns: 1fr; } }
+.task-column { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); display: flex; flex-direction: column; min-height: 500px; }
+.task-column-header { padding: var(--spacing-md); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-hover); }
+.task-column-title { font-weight: 700; font-size: 0.9rem; text-transform: uppercase; color: var(--text-dim); }
+.task-column-count { background: var(--accent-container); color: var(--accent); padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 700; }
+.task-list { padding: var(--spacing-sm); flex: 1; display: flex; flex-direction: column; gap: var(--spacing-sm); }
+.task-card { background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--spacing-md); cursor: pointer; transition: all 0.2s ease; border-left: 4px solid var(--accent); }
+.task-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.task-card.priority-high { border-left-color: var(--error); }
+.task-card.priority-urgent { border-left-color: #ff1744; box-shadow: 0 0 10px rgba(255, 23, 68, 0.2); }
+.task-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; }
+.task-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 0.75rem; color: var(--text-dim); }
+.pulse { width: 8px; height: 8px; background: #4CAF50; border-radius: 50%; display: inline-block; margin-right: 4px; animation: pulse-anim 1.5s infinite; }
+@keyframes pulse-anim { 0% { transform: scale(0.95); } 70% { transform: scale(1); } 100% { transform: scale(0.95); } }
+
+/* Team Tab Specific Styles */
+.teams-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+.team-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; cursor: pointer; transition: 0.2s; }
+.team-card:hover { background: var(--bg-hover); transform: translateY(-2px); border-color: var(--accent); }
+.team-card-header { display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-weight: 600; }
+.team-card-footer { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-dim); margin-top: 1rem; }
+.member-row { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: var(--bg-card); border-radius: 4px; }
+.member-row.is-me { border: 1px solid var(--accent); }
+.info-banner { display: flex; align-items: center; gap: 0.5rem; padding: 1rem; background: var(--bg-card); border-left: 4px solid var(--warning); color: var(--text-dim); }
+
+/* Live Agents Styles */
+.agent-card.live {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.agent-card-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-}
-
-.emergency-controls {
-    display: flex;
-    gap: 0.5rem;
-}
-
-.btn-warning {
-    background: var(--warning);
-    color: #000;
-}
-
-.btn-warning:hover {
-    background: #e68a00;
-}
-
-.btn-danger {
-    background: var(--error);
-    color: #fff;
-}
-
-.btn-danger:hover {
-    background: #c62828;
-}
-
-.btn-small {
-    padding: 0.25rem 0.75rem;
-    font-size: 0.75rem;
-}
-
-.section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-}
-
-.feed-controls {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-}
-
-.live-indicator {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: #4CAF50;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.live-indicator .pulse {
-    width: 8px;
-    height: 8px;
-    background: #4CAF50;
-    border-radius: 50%;
-    animation: pulse 1.5s infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(1.2); }
-}
-
-.live-indicator.paused {
-    color: var(--warning);
-}
-
-.live-indicator.paused .pulse {
-    background: var(--warning);
-    animation: none;
-}
-
-.activity-feed {
-    background: var(--surface);
-    border-radius: 8px;
-    max-height: 300px;
-    overflow-y: auto;
-    padding: 0.5rem;
-    font-family: 'Consolas', 'Monaco', monospace;
-    font-size: 0.8rem;
-}
-
-.feed-item {
-    display: flex;
     align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.5rem;
-    border-bottom: 1px solid var(--outline);
-    animation: fadeIn 0.3s ease;
 }
 
-.feed-item:last-child {
-    border-bottom: none;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-5px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.feed-time {
-    color: var(--on-surface-variant);
-    font-size: 0.7rem;
-    min-width: 60px;
-}
-
-.feed-icon {
+.agent-card-title {
     display: flex;
     align-items: center;
+    gap: var(--spacing-sm);
 }
 
-.feed-icon .material-symbols-outlined {
-    font-size: 1rem;
+.agent-icon {
+    font-size: 32px;
+    color: var(--accent);
 }
 
-.feed-item.agent-spawn .feed-icon { color: #4CAF50; }
-.feed-item.task-start .feed-icon { color: #2196F3; }
-.feed-item.task-complete .feed-icon { color: #4CAF50; }
-.feed-item.task-error .feed-icon { color: var(--error); }
-.feed-item.thinking .feed-icon { color: #9C27B0; }
-.feed-item.tool-call .feed-icon { color: #FF9800; }
-.feed-item.approval .feed-icon { color: var(--warning); }
-.feed-item.system .feed-icon { color: var(--on-surface-variant); }
-.feed-item.kill .feed-icon { color: var(--error); }
-
-.feed-message {
-    flex: 1;
-    word-break: break-word;
-}
-
-.feed-message .agent-name {
-    color: var(--primary);
-    font-weight: 600;
-}
-
-.feed-message .task-name {
-    color: var(--secondary);
-}
-
-.task-count {
-    background: var(--primary);
-    color: var(--on-primary);
-    padding: 0.25rem 0.75rem;
-    border-radius: 12px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.task-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem;
-    background: var(--surface);
-    border-radius: 8px;
-    margin-bottom: 0.5rem;
-}
-
-.task-item .task-info {
-    flex: 1;
-}
-
-.task-item .task-agent {
-    font-weight: 600;
-    color: var(--primary);
-}
-
-.task-item .task-name {
-    color: var(--on-surface);
-    margin-top: 0.25rem;
-}
-
-.task-item .task-duration {
-    font-size: 0.75rem;
-    color: var(--on-surface-variant);
-    margin-top: 0.25rem;
-}
-
-.task-item .task-actions {
-    display: flex;
-    gap: 0.5rem;
-}
-
-.task-item .btn-icon {
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-}
-
-.task-item .btn-icon .material-symbols-outlined {
+.agent-card-title h3 {
+    margin: 0;
     font-size: 1.1rem;
 }
 
-/* Agent card enhancements */
-.agent-card {
-    position: relative;
+.agent-specialty {
+    font-size: 0.85rem;
+    color: var(--text-dim);
 }
 
-.agent-card .agent-kill-btn {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
-    opacity: 0;
-    transition: opacity 0.2s;
+.agent-card-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--spacing-sm);
 }
 
-.agent-card:hover .agent-kill-btn {
-    opacity: 1;
+.metric {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
 }
 
-.agent-card.busy {
-    border-left: 3px solid var(--primary);
+.metric .material-symbols-outlined {
+    font-size: 18px;
 }
 
-.agent-card.idle {
-    border-left: 3px solid var(--on-surface-variant);
+.agent-current-task {
+    background: var(--bg-hover);
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--warning);
 }
 
-.agent-card.error {
-    border-left: 3px solid var(--error);
+.agent-current-task strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+.task-text {
+    font-size: 0.9rem;
+}
+
+.agent-output {
+    background: #0d0d0d;
+    color: #4af626;
+    font-family: monospace;
+    font-size: 0.8rem;
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-md);
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+}
+
+.output-line {
+    padding: 2px 0;
+    word-break: break-all;
+}
+
+.output-line.stderr {
+    color: #ff6b6b;
+}
+
+.agent-card-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.modal-content.modal-medium {
+    max-width: 600px;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+}
+
+@media (max-width: 600px) {
+    .form-row {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/agents.js') }}"></script>
 <script>
-// Refresh interval for auto-updates (5 seconds for real-time feel)
-const REFRESH_INTERVAL_MS = 5000;
-// Activity feed polling (2 seconds)
-const ACTIVITY_POLL_MS = 2000;
-// Maximum retry attempts
-const MAX_RETRIES = 3;
-// Delay between retries (exponential backoff base)
-const RETRY_DELAY_MS = 1000;
-// Max feed items to keep
-const MAX_FEED_ITEMS = 50;
+let currentTab = 'staffing';
+let allAgents = [];
+let swarmAgents = [];
+let allTeams = [];
+let allTasks = [];
+let jobRoles = {};
+let pollingInterval = null;
+let logPollingInterval = null;
+let lastActivityTs = 0;
 
-let refreshTimer = null;
-let activityTimer = null;
-let isLoading = false;
-let isPaused = false;
-let lastActivityTimestamp = 0;
+// Collaborative Teams state
+let currentVerifiedEmail = null;
+let currentTeamId = null;
+let currentUserRole = null;
 
-// Activity feed state
-const activityFeed = [];
+const ROLE_ICONS = {
+    "Lead-Architect": "architecture",
+    "UI-Designer": "palette",
+    "Conn-Specialist": "settings_input_component",
+    "Bridge-Core": "hub",
+    "Marketing-Lead": "campaign",
+    "Legal-Counsel": "gavel",
+    "HR-Manager": "groups",
+    "QA-Specialist": "fact_check",
+    "Refactor-Bot": "cleaning_services",
+    "Docs-Manager": "menu_book"
+};
 
-document.addEventListener('DOMContentLoaded', function() {
-    loadAll();
-    // Start auto-refresh
-    refreshTimer = setInterval(loadAll, REFRESH_INTERVAL_MS);
-    // Start activity polling
-    activityTimer = setInterval(pollActivity, ACTIVITY_POLL_MS);
-    // Add initial system message
-    addActivityItem('system', 'info', 'Agent dashboard initialized');
+document.addEventListener('DOMContentLoaded', async function() {
+    await initAgentsPage();
+    
+    // Start periodic status polling
+    pollingInterval = setInterval(refreshAllStatus, 5000);
 });
 
-// Cleanup on page unload
-window.addEventListener('beforeunload', function() {
-    if (refreshTimer) clearInterval(refreshTimer);
-    if (activityTimer) clearInterval(activityTimer);
-});
+async function initAgentsPage() {
+    await loadJobRoles();
+    await loadProjects();
+    await loadTeams();
+    await loadTasks();
+    await loadTeamManagement(); // Load collaborative teams
+    await refreshAllStatus();
+}
 
-async function loadAll() {
-    if (isLoading) return;
-    isLoading = true;
+// ============ Collaborative Team Management (Moved from settings) ============
 
+async function loadTeamManagement() {
+    const deviceId = getCurrentDeviceId();
     try {
-        await Promise.all([
-            loadAgents(),
-            loadMetrics()
-        ]);
-    } finally {
-        isLoading = false;
-    }
-}
-
-async function fetchWithRetry(fetchFn, retries = MAX_RETRIES) {
-    let lastError;
-    for (let attempt = 0; attempt < retries; attempt++) {
-        try {
-            return await fetchFn();
-        } catch (error) {
-            lastError = error;
-            console.warn(`Attempt ${attempt + 1} failed:`, error.message);
-            if (attempt < retries - 1) {
-                await new Promise(resolve =>
-                    setTimeout(resolve, RETRY_DELAY_MS * Math.pow(2, attempt))
-                );
-            }
-        }
-    }
-    throw lastError;
-}
-
-// ============ ACTIVITY FEED ============
-
-function getTimeString() {
-    const now = new Date();
-    return now.toTimeString().split(' ')[0];
-}
-
-function addActivityItem(type, icon, message) {
-    const feed = document.getElementById('activity-feed');
-    const iconMap = {
-        'agent-spawn': 'smart_toy',
-        'task-start': 'play_arrow',
-        'task-complete': 'check_circle',
-        'task-error': 'error',
-        'thinking': 'psychology',
-        'tool-call': 'build',
-        'approval': 'verified_user',
-        'system': 'info',
-        'kill': 'cancel'
-    };
-
-    const item = document.createElement('div');
-    item.className = `feed-item ${type}`;
-    item.innerHTML = `
-        <span class="feed-time">${getTimeString()}</span>
-        <span class="feed-icon">
-            <span class="material-symbols-outlined">${iconMap[type] || icon}</span>
-        </span>
-        <span class="feed-message">${message}</span>
-    `;
-
-    // Remove initial waiting message if present
-    const waiting = feed.querySelector('.feed-item.system');
-    if (waiting && waiting.textContent.includes('Waiting for')) {
-        waiting.remove();
-    }
-
-    // Add to top
-    feed.insertBefore(item, feed.firstChild);
-
-    // Trim old items
-    while (feed.children.length > MAX_FEED_ITEMS) {
-        feed.removeChild(feed.lastChild);
-    }
-
-    // Store in array for persistence
-    activityFeed.unshift({ type, message, time: Date.now() });
-    if (activityFeed.length > MAX_FEED_ITEMS) {
-        activityFeed.pop();
-    }
-}
-
-async function pollActivity() {
-    if (isPaused) return;
-
-    try {
-        const response = await fetch(`/api/agents/activity?since=${lastActivityTimestamp}`);
-        if (response.ok) {
-            const data = await response.json();
-            if (data.events && data.events.length > 0) {
-                data.events.forEach(event => {
-                    addActivityItem(event.type, event.icon, event.message);
-                });
-                lastActivityTimestamp = data.timestamp || Date.now();
-            }
-        }
-    } catch (error) {
-        // Silent fail for activity polling
-        console.debug('Activity poll failed:', error.message);
-    }
-}
-
-function clearActivityFeed() {
-    const feed = document.getElementById('activity-feed');
-    feed.innerHTML = `
-        <div class="feed-item system">
-            <span class="feed-time">${getTimeString()}</span>
-            <span class="feed-icon">
-                <span class="material-symbols-outlined">info</span>
-            </span>
-            <span class="feed-message">Activity feed cleared</span>
-        </div>
-    `;
-    activityFeed.length = 0;
-}
-
-// ============ CONTROL FUNCTIONS ============
-
-async function pauseAllAgents() {
-    const btn = document.getElementById('pause-all-btn');
-    const indicator = document.getElementById('live-indicator');
-
-    isPaused = !isPaused;
-
-    if (isPaused) {
-        btn.innerHTML = '<span class="material-symbols-outlined">play_circle</span> Resume All';
-        btn.classList.remove('btn-warning');
-        btn.classList.add('btn-success');
-        indicator.classList.add('paused');
-        indicator.innerHTML = '<span class="pulse"></span> PAUSED';
-        addActivityItem('system', 'pause', 'All agents paused by user');
-
-        // Send pause command to backend
-        try {
-            await fetch('/api/agents/pause', { method: 'POST' });
-        } catch (e) {
-            console.error('Failed to pause agents:', e);
-        }
-    } else {
-        btn.innerHTML = '<span class="material-symbols-outlined">pause_circle</span> Pause All';
-        btn.classList.remove('btn-success');
-        btn.classList.add('btn-warning');
-        indicator.classList.remove('paused');
-        indicator.innerHTML = '<span class="pulse"></span> LIVE';
-        addActivityItem('system', 'play', 'All agents resumed');
-
-        try {
-            await fetch('/api/agents/resume', { method: 'POST' });
-        } catch (e) {
-            console.error('Failed to resume agents:', e);
-        }
-    }
-}
-
-async function killAllAgents() {
-    if (!confirm('Are you sure you want to kill ALL running agents? This cannot be undone.')) {
-        return;
-    }
-
-    addActivityItem('kill', 'cancel', '<strong>KILL ALL</strong> command issued by user');
-
-    try {
-        const response = await fetch('/api/agents/kill-all', { method: 'POST' });
-        if (response.ok) {
-            addActivityItem('system', 'check', 'All agents terminated successfully');
-            showToast('All agents killed', 'success');
-            loadAll(); // Refresh
+        const response = await fetch(`/api/email/verified/${encodeURIComponent(deviceId)}`);
+        const data = await response.json();
+        if (data.email) {
+            currentVerifiedEmail = data.email;
+            document.getElementById('teams-requires-email').style.display = 'none';
+            document.getElementById('teams-content').style.display = 'block';
+            await Promise.all([loadMyTeams(), loadPendingInvitations()]);
         } else {
-            addActivityItem('task-error', 'error', 'Failed to kill all agents');
-            showToast('Failed to kill agents', 'error');
+            currentVerifiedEmail = null;
+            document.getElementById('teams-requires-email').style.display = 'block';
+            document.getElementById('teams-content').style.display = 'none';
         }
-    } catch (error) {
-        console.error('Kill all failed:', error);
-        addActivityItem('task-error', 'error', `Kill failed: ${error.message}`);
-        showToast('Kill command failed', 'error');
-    }
+    } catch (e) { console.error('Failed to load team management:', e); }
 }
 
-async function killAgent(agentId, agentName) {
-    if (!confirm(`Kill agent "${agentName}"?`)) {
-        return;
+function getCurrentDeviceId() {
+    let deviceId = localStorage.getItem('shadow_device_id');
+    if (!deviceId) {
+        deviceId = 'web_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('shadow_device_id', deviceId);
     }
-
-    addActivityItem('kill', 'cancel', `Killing agent <span class="agent-name">${escapeHtml(agentName)}</span>`);
-
-    try {
-        const response = await fetch(`/api/agents/${agentId}/kill`, { method: 'POST' });
-        if (response.ok) {
-            addActivityItem('task-complete', 'check', `Agent <span class="agent-name">${escapeHtml(agentName)}</span> terminated`);
-            showToast(`Agent ${agentName} killed`, 'success');
-            loadAll();
-        } else {
-            addActivityItem('task-error', 'error', `Failed to kill ${escapeHtml(agentName)}`);
-            showToast('Failed to kill agent', 'error');
-        }
-    } catch (error) {
-        console.error('Kill agent failed:', error);
-        showToast('Kill command failed', 'error');
-    }
+    return deviceId;
 }
 
-async function killTask(taskId, taskName) {
-    addActivityItem('kill', 'cancel', `Cancelling task <span class="task-name">${escapeHtml(taskName)}</span>`);
-
+async function loadMyTeams() {
+    if (!currentVerifiedEmail) return;
     try {
-        const response = await fetch(`/api/tasks/${taskId}/cancel`, { method: 'POST' });
-        if (response.ok) {
-            addActivityItem('task-complete', 'check', `Task cancelled: ${escapeHtml(taskName)}`);
-            showToast('Task cancelled', 'success');
-            loadAll();
-        } else {
-            showToast('Failed to cancel task', 'error');
-        }
-    } catch (error) {
-        console.error('Cancel task failed:', error);
-    }
-}
-
-// ============ LOAD FUNCTIONS ============
-
-async function loadAgents() {
-    const container = document.getElementById('agents-container');
-
-    try {
-        const agents = await fetchWithRetry(() => api.getAgents());
-
-        if (!agents || agents.length === 0) {
-            container.innerHTML = '<div class="empty-state">No agents configured</div>';
-            updateActiveTasks([]);
+        const response = await fetch(`/api/teams/my-teams?email=${encodeURIComponent(currentVerifiedEmail)}`);
+        const data = await response.json();
+        const container = document.getElementById('my-teams-list');
+        if (!data.teams || data.teams.length === 0) {
+            container.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">groups</span><p>No teams joined yet.</p></div>';
             return;
         }
-
-        container.innerHTML = agents.map(a => {
-            const statusClass = a.status === 'busy' ? 'busy' :
-                               a.status === 'error' ? 'error' : 'idle';
-            return `
-                <div class="agent-card ${statusClass}" data-agent-id="${escapeHtml(a.id || '')}">
-                    ${a.status === 'busy' ? `
-                        <button class="btn btn-icon btn-danger agent-kill-btn"
-                                onclick="killAgent('${escapeHtml(a.id)}', '${escapeHtml(a.name)}')"
-                                title="Kill this agent">
-                            <span class="material-symbols-outlined">close</span>
-                        </button>
-                    ` : ''}
-                    <div class="agent-header">
-                        <div class="agent-avatar">${(a.name || '?').charAt(0)}</div>
-                        <div class="agent-info">
-                            <div class="agent-name">${escapeHtml(a.name || 'Unknown')}</div>
-                            <span class="status-badge ${escapeHtml(a.status || 'unknown')}">${escapeHtml(a.status || 'unknown')}</span>
-                        </div>
-                    </div>
-                    <div class="agent-specialty">${escapeHtml(a.specialty || 'General purpose')}</div>
-                    ${a.current_task ? `
-                        <div class="agent-task">
-                            <span class="task-label">Current:</span>
-                            <span class="task-name">${escapeHtml(a.current_task)}</span>
-                        </div>
-                    ` : ''}
-                    <div class="agent-stats">
-                        <span>${a.tasks_completed || 0} tasks completed</span>
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        // Update active tasks
-        const activeTasks = agents
-            .filter(a => a.current_task)
-            .map(a => ({
-                id: a.id,
-                agent: a.name,
-                task: a.current_task,
-                startTime: a.task_start_time || Date.now()
-            }));
-        updateActiveTasks(activeTasks);
-
-    } catch (error) {
-        console.error('Failed to load agents:', error);
-        container.innerHTML = `
-            <div class="error-state">
-                <span class="error-icon">!</span>
-                <span class="error-message">Failed to load agents</span>
-                <button class="retry-btn" onclick="loadAgents()">Retry</button>
-            </div>
-        `;
-    }
-}
-
-function formatDuration(startTime) {
-    const elapsed = Date.now() - startTime;
-    const seconds = Math.floor(elapsed / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
-}
-
-function updateActiveTasks(activeTasks) {
-    const tasksContainer = document.getElementById('active-tasks');
-    const taskCount = document.getElementById('task-count');
-
-    taskCount.textContent = activeTasks.length;
-
-    if (!activeTasks || activeTasks.length === 0) {
-        tasksContainer.innerHTML = '<div class="empty-state">No active tasks</div>';
-    } else {
-        tasksContainer.innerHTML = activeTasks.map(t => `
-            <div class="task-item" data-task-id="${escapeHtml(t.id || '')}">
-                <div class="task-info">
-                    <div class="task-agent">${escapeHtml(t.agent || 'Unknown')}</div>
-                    <div class="task-name">${escapeHtml(t.task || 'Unknown task')}</div>
-                    <div class="task-duration">Running for ${formatDuration(t.startTime)}</div>
-                </div>
-                <div class="task-actions">
-                    <button class="btn btn-icon btn-warning"
-                            onclick="killTask('${escapeHtml(t.id)}', '${escapeHtml(t.task)}')"
-                            title="Cancel this task">
-                        <span class="material-symbols-outlined">stop</span>
-                    </button>
+        container.innerHTML = data.teams.map(team => `
+            <div class="team-card" onclick="openTeamDetails('${team.id}')">
+                <div class="team-card-header"><span class="team-name">${escapeHtml(team.name)}</span></div>
+                <p class="small-text">${escapeHtml(team.description || 'No description')}</p>
+                <div class="team-card-footer">
+                    <span><span class="material-symbols-outlined" style="font-size:14px">group</span> ${team.members?.length || 0}</span>
+                    <span>${new Date(team.created_at).toLocaleDateString()}</span>
                 </div>
             </div>
         `).join('');
-    }
+    } catch (e) {}
 }
 
-async function loadMetrics() {
+async function loadPendingInvitations() {
+    if (!currentVerifiedEmail) return;
     try {
-        const metrics = await fetchWithRetry(() => api.getAgentMetrics());
-        document.getElementById('total-agents').textContent = metrics.total_agents || 0;
-        document.getElementById('active-agents').textContent = metrics.active_agents || 0;
-        document.getElementById('idle-agents').textContent = metrics.idle_agents || 0;
-        document.getElementById('tasks-completed').textContent = metrics.total_tasks_completed || 0;
-    } catch (error) {
-        console.error('Failed to load metrics:', error);
-        document.getElementById('total-agents').textContent = '-';
-        document.getElementById('active-agents').textContent = '-';
-        document.getElementById('idle-agents').textContent = '-';
-        document.getElementById('tasks-completed').textContent = '-';
+        const response = await fetch(`/api/teams/invitations/pending?email=${encodeURIComponent(currentVerifiedEmail)}`);
+        const data = await response.json();
+        const section = document.getElementById('pending-invitations-section');
+        const container = document.getElementById('pending-invitations-list');
+        if (!data.invitations || data.invitations.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+        section.style.display = 'block';
+        container.innerHTML = data.invitations.map(inv => `
+            <div class="dashboard-card" style="padding:1rem; display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; border:1px solid var(--accent);">
+                <div>
+                    <strong>${escapeHtml(inv.team_name)}</strong><br>
+                    <span class="small-text">Invited by ${escapeHtml(inv.inviter_email)}</span>
+                </div>
+                <button class="btn btn-small btn-primary" onclick="acceptInvitation('${inv.code}')">Accept</button>
+            </div>
+        `).join('');
+    } catch (e) {}
+}
+
+async function acceptInvitation(code) {
+    try {
+        const response = await fetch('/api/teams/invitations/accept', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                invitation_code: code,
+                accepter_email: currentVerifiedEmail,
+                accepter_device: getCurrentDeviceId()
+            })
+        });
+        if ((await response.json()).success) {
+            showToast('Invitation accepted!', 'success');
+            await Promise.all([loadMyTeams(), loadPendingInvitations()]);
+        }
+    } catch (e) { showToast('Failed to accept invitation', 'error'); }
+}
+
+function openCreateTeamModal() {
+    document.getElementById('create-team-modal').classList.remove('hidden');
+}
+
+function closeCreateTeamModal() {
+    document.getElementById('create-team-modal').classList.add('hidden');
+}
+
+async function confirmCreateTeam() {
+    const name = document.getElementById('new-team-name').value.trim();
+    const desc = document.getElementById('new-team-description').value.trim();
+    if (!name) return showToast('Name required', 'warning');
+    try {
+        const response = await fetch('/api/teams', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description: desc, owner_email: currentVerifiedEmail, owner_device: getCurrentDeviceId() })
+        });
+        if ((await response.json()).id) {
+            showToast('Team created!', 'success');
+            closeCreateTeamModal();
+            loadMyTeams();
+        }
+    } catch (e) { showToast('Failed to create team', 'error'); }
+}
+
+async function openTeamDetails(teamId) {
+    currentTeamId = teamId;
+    try {
+        const response = await fetch(`/api/teams/${teamId}`);
+        const team = await response.json();
+        document.getElementById('team-details-name').textContent = team.name;
+        document.getElementById('team-details-description').textContent = team.description || '';
+        
+        const myMem = team.members?.find(m => m.email === currentVerifiedEmail);
+        currentUserRole = myMem?.role || 'member';
+        
+        document.getElementById('invite-member-btn').style.display = (currentUserRole === 'owner' || currentUserRole === 'admin') ? 'flex' : 'none';
+        renderTeamMembers(team.members || []);
+        
+        document.getElementById('team-actions').style.display = 'flex';
+        document.getElementById('leave-team-btn').style.display = currentUserRole === 'owner' ? 'none' : 'block';
+        document.getElementById('delete-team-btn').style.display = currentUserRole === 'owner' ? 'block' : 'none';
+        
+        document.getElementById('team-details-modal').classList.remove('hidden');
+    } catch (e) {}
+}
+
+function closeTeamDetailsModal() {
+    document.getElementById('team-details-modal').classList.add('hidden');
+    document.getElementById('invite-member-form').style.display = 'none';
+}
+
+function renderTeamMembers(members) {
+    const container = document.getElementById('team-members-list');
+    container.innerHTML = members.map(m => `
+        <div class="member-row ${m.email === currentVerifiedEmail ? 'is-me' : ''}">
+            <span>${escapeHtml(m.email)} (${m.role})</span>
+            ${(currentUserRole === 'owner' && m.email !== currentVerifiedEmail) ? `<button class="btn-icon-small btn-danger" onclick="removeMember('${m.email}')"><span class="material-symbols-outlined">close</span></button>` : ''}
+        </div>
+    `).join('');
+}
+
+function toggleInviteForm() {
+    const f = document.getElementById('invite-member-form');
+    f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+
+async function inviteMember() {
+    const email = document.getElementById('invite-email').value.trim();
+    if (!email) return;
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}/invite`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ inviter_email: currentVerifiedEmail, invitee_email: email, role: document.getElementById('invite-role').value })
+        });
+        if ((await response.json()).success) {
+            showToast(`Invited ${email}`, 'success');
+            toggleInviteForm();
+        }
+    } catch (e) {}
+}
+
+async function deleteTeam() {
+    if (!confirm("Delete this team forever?")) return;
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}`, { method: 'DELETE' });
+        if ((await response.json()).success) {
+            showToast('Team deleted', 'success');
+            closeTeamDetailsModal();
+            loadMyTeams();
+        }
+    } catch (e) {}
+}
+
+async function leaveTeam() {
+    if (!confirm("Leave this team?")) return;
+    try {
+        const response = await fetch(`/api/teams/${currentTeamId}/members/${encodeURIComponent(currentVerifiedEmail)}?remover_email=${encodeURIComponent(currentVerifiedEmail)}`, { method: 'DELETE' });
+        if ((await response.json()).success) {
+            showToast('Left team', 'success');
+            closeTeamDetailsModal();
+            loadMyTeams();
+        }
+    } catch (e) {}
+}
+
+// ============ Existing Agent Page Logic ============
+
+async function loadJobRoles() {
+    try {
+        const data = await api.getRalphRoles();
+        jobRoles = data.roles || {};
+        renderRoleGallery();
+    } catch (e) {}
+}
+
+async function loadProjects() {
+    try {
+        const projects = await api.getProjects();
+        const hireSelect = document.getElementById('hire-project-select');
+        hireSelect.innerHTML = projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+    } catch (e) {}
+}
+
+async function loadTeams() {
+    try {
+        allTeams = await api.getTeams();
+        const filter = document.getElementById('team-filter');
+        const currentVal = filter.value;
+        filter.innerHTML = '<option value="__ALL__">All Teams</option>' + 
+            allTeams.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+        filter.value = currentVal;
+    } catch (e) {}
+}
+
+async function loadTasks() {
+    try {
+        allTasks = await api.getTasks();
+        renderTaskBoard();
+    } catch (e) {}
+}
+
+function renderRoleGallery() {
+    const container = document.getElementById('role-gallery');
+    container.innerHTML = Object.entries(jobRoles).map(([id, desc]) => `
+        <div class="role-card" onclick="openHireModal('${id}')">
+            <span class="material-symbols-outlined role-icon">${ROLE_ICONS[id] || 'smart_toy'}</span>
+            <div class="role-name">${id.replace(/-/g, ' ')}</div>
+            <div class="role-desc">${desc}</div>
+            <button class="btn btn-small btn-secondary" style="margin-top: auto;">Hire Role</button>
+        </div>
+    `).join('');
+}
+
+function switchTab(tabId) {
+    document.querySelectorAll('#agents-tab-toggle .btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tabId));
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.toggle('hidden', content.id !== `tab-${tabId}`));
+    currentTab = tabId;
+}
+
+async function refreshAllStatus() {
+    await Promise.all([updateStaffRoster(), updateSwarmStatus(), updateMetrics(), pollActivity(), loadTasks()]);
+}
+
+async function updateMetrics() {
+    try {
+        const metrics = await api.getAgentMetrics();
+        document.getElementById('active-staff-count').textContent = metrics.active_agents || 0;
+        document.getElementById('tasks-completed-count').textContent = metrics.total_tasks_completed || 0;
+        const swarmData = await api.getRalphStatus('C:/shadow');
+        document.getElementById('active-swarms-count').textContent = swarmData.active > 0 ? 1 : 0;
+    } catch (e) {}
+}
+
+async function updateStaffRoster() {
+    try {
+        const agents = await api.getAgents();
+        allAgents = agents || [];
+        const container = document.getElementById('staff-roster');
+        const teamFilter = document.getElementById('team-filter').value;
+        let filtered = allAgents;
+        if (teamFilter !== '__ALL__') {
+            const team = allTeams.find(t => t.id === teamFilter);
+            const teamMemberIds = (team?.members || []).map(m => m.id);
+            filtered = allAgents.filter(a => teamMemberIds.includes(a.id));
+        }
+        if (filtered.length === 0) {
+            container.innerHTML = '<div class="empty-state">No individual staff members hired yet.</div>';
+            return;
+        }
+        container.innerHTML = filtered.map(a => `
+            <div class="agent-card ${a.status}">
+                <div class="agent-header">
+                    <div class="agent-avatar">${(a.name || '?').charAt(0)}</div>
+                    <div class="agent-info">
+                        <div class="agent-name">${escapeHtml(a.name)}</div>
+                        <span class="status-badge ${a.status}">${a.status}</span>
+                    </div>
+                    <button class="btn btn-icon-small btn-danger" onclick="killStaff('${a.id}')"><span class="material-symbols-outlined">close</span></button>
+                </div>
+                <div class="agent-specialty">${escapeHtml(a.role || 'Specialist')}</div>
+                ${a.current_task ? `<div class="agent-task"><span class="task-name">${escapeHtml(a.current_task)}</span></div>` : ''}
+            </div>
+        `).join('');
+        populateTaskAgentSelector();
+    } catch (e) {}
+}
+
+function renderTaskBoard() {
+    const pending = allTasks.filter(t => t.status === 'PENDING');
+    const inProgress = allTasks.filter(t => t.status === 'IN_PROGRESS');
+    const completed = allTasks.filter(t => t.status === 'COMPLETED');
+    document.getElementById('pending-count').textContent = pending.length;
+    document.getElementById('progress-count').textContent = inProgress.length;
+    document.getElementById('completed-count').textContent = completed.length;
+    document.getElementById('pending-tasks-list').innerHTML = pending.map(t => renderTaskCard(t)).join('') || '<div class="empty-state-small">No pending tasks</div>';
+    document.getElementById('progress-tasks-list').innerHTML = inProgress.map(t => renderTaskCard(t)).join('') || '<div class="empty-state-small">No tasks in progress</div>';
+    document.getElementById('completed-tasks-list').innerHTML = completed.map(t => renderTaskCard(t)).join('') || '<div class="empty-state-small">No completed tasks</div>';
+}
+
+function renderTaskCard(task) {
+    const pClass = (task.priority || 'medium').toLowerCase();
+    const agent = allAgents.find(a => a.id === task.assigned_agent_id);
+    return `<div class="task-card priority-${pClass}" onclick="editTask('${task.id}')">
+        <div class="task-title">${escapeHtml(task.title)}</div>
+        <div class="task-footer">
+            <span class="task-assignee"><span class="material-symbols-outlined" style="font-size: 14px;">person</span> ${agent ? escapeHtml(agent.name) : 'Unassigned'}</span>
+            <div class="task-actions">
+                ${task.status === 'PENDING' ? `<button class="btn-icon-small" onclick="event.stopPropagation(); updateTaskStatus('${task.id}', 'IN_PROGRESS')"><span class="material-symbols-outlined">play_arrow</span></button>` : ''}
+                ${task.status === 'IN_PROGRESS' ? `<button class="btn-icon-small" onclick="event.stopPropagation(); updateTaskStatus('${task.id}', 'COMPLETED')"><span class="material-symbols-outlined">check</span></button>` : ''}
+            </div>
+        </div>
+    </div>`;
+}
+
+async function updateTaskStatus(taskId, status) {
+    try { await api.updateTask(taskId, { status }); showToast('Task updated', 'success'); loadTasks(); } catch (e) {}
+}
+
+function showCreateTaskModal() { document.getElementById('create-task-modal').classList.remove('hidden'); populateTaskAgentSelector(); }
+function closeCreateTaskModal() { document.getElementById('create-task-modal').classList.add('hidden'); }
+
+function populateTaskAgentSelector() {
+    const s = document.getElementById('task-agent-select');
+    if (!s) return;
+    const cur = s.value;
+    s.innerHTML = '<option value="">Unassigned</option>' + allAgents.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+    s.value = cur;
+}
+
+async function confirmCreateTask() {
+    const title = document.getElementById('task-title').value;
+    const desc = document.getElementById('task-description').value;
+    if (!title) return showToast('Title required', 'warning');
+    try {
+        await api.createTask({ title, description: desc, priority: document.getElementById('task-priority').value, assigned_agent_id: document.getElementById('task-agent-select').value || null, status: 'PENDING' });
+        showToast('Task created', 'success'); closeCreateTaskModal(); loadTasks();
+    } catch (e) {}
+}
+
+let selectedRoleId = null;
+function openHireModal(roleId) {
+    selectedRoleId = roleId;
+    document.getElementById('hire-role-title').textContent = `Hire ${roleId.replace(/-/g, ' ')}`;
+    document.getElementById('role-preview').innerHTML = `<div class="role-card" style="border:none; background:transparent;"><span class="material-symbols-outlined role-icon">${ROLE_ICONS[roleId] || 'smart_toy'}</span><div class="role-name">${roleId}</div><div class="role-desc">${jobRoles[roleId]}</div></div>`;
+    document.getElementById('hire-role-modal').classList.remove('hidden');
+}
+function closeHireModal() { document.getElementById('hire-role-modal').classList.add('hidden'); }
+
+async function confirmHire() {
+    const roleName = selectedRoleId;
+    showToast(`Hiring ${roleName}...`, 'info');
+    try {
+        const res = await api.addAgent({ name: roleName, role: roleName, project_id: document.getElementById('hire-project-select').value, instructions: document.getElementById('hire-instructions').value, status: 'idle' });
+        if (res.success) { showToast("Specialist deployed!", "success"); closeHireModal(); refreshAllStatus(); }
+    } catch (e) {}
+}
+
+async function deploySwarm() {
+    const goal = document.getElementById('swarm-goal').value;
+    if (!goal) return showToast('Goal required', 'warning');
+    showToast('Deploying Ralph Swarm...', 'info');
+    try {
+        const res = await api.launchRalphSwarm({ project_dir: document.getElementById('swarm-project-dir').value, goal, max_iterations: 20, model: document.getElementById('swarm-model').value, count: parseInt(document.getElementById('swarm-agent-count').value) });
+        if (res.success) { showToast('Ralph Swarm deployed!', 'success'); refreshAllStatus(); }
+    } catch (e) { showToast('Launch failed', 'error'); }
+}
+
+async function launchBrainstormer() {
+    const obj = document.getElementById('brainstorm-objective').value;
+    if (!obj) return showToast('Objective required', 'warning');
+    try { if ((await api.launchBrainstormer(obj)).success) { showToast("Initialized!", "success"); switchTab('activity'); } } catch (e) {}
+}
+
+async function launchLooper() {
+    const t = document.getElementById('loop-task').value;
+    if (!t) return showToast('Task required', 'warning');
+    try { if ((await api.launchLooper(t)).success) { showToast("Engine active!", "success"); switchTab('activity'); } } catch (e) {}
+}
+
+function clearFeed() { const c = document.getElementById('activity-feed-container'); if (c) c.innerHTML = '<div class="empty-state">Feed cleared.</div>'; }
+
+async function updateUnifiedLogs() {
+    const target = document.getElementById('log-target-select').value;
+    const output = document.getElementById('unified-log-output');
+    if (!target) { output.textContent = 'Select a target...'; return; }
+    const [type, id] = target.split(':');
+    try {
+        let text = type === 'swarm' ? await api.getRalphLogs(id, 'out', 200, 'C:/shadow') : "Logs not yet streaming for staff.";
+        output.textContent = (typeof text === 'string' ? text : await text.text()) || "No logs.";
+        const container = document.querySelector('.log-container');
+        container.scrollTop = container.scrollHeight;
+    } catch (e) {}
+}
+
+async function killStaff(id) { if (!confirm("Terminate specialist?")) return; try { await api.deleteAgent(id); refreshAllStatus(); } catch (e) {} }
+async function globalKill() { if (!confirm("KILL ALL agents and swarms?")) return; try { await api.killRalphSwarm('C:/shadow'); await fetch('/api/agents/kill-all', { method: 'POST' }); refreshAllStatus(); } catch (e) {} }
+
+async function globalPause() {
+    showToast("Pausing all agents...", "info");
+    try {
+        await Promise.all([
+            fetch('/api/agents/pause', { method: 'POST' }),
+            fetch('/api/ralph/pause-all', { method: 'POST' })
+        ]);
+        showToast("All agents paused", "success");
+        refreshAllStatus();
+    } catch (e) {
+        showToast("Failed to pause agents", "error");
     }
 }
 
-// Update task durations every second
-setInterval(() => {
-    document.querySelectorAll('.task-item').forEach(item => {
-        const durationEl = item.querySelector('.task-duration');
-        if (durationEl) {
-            const startTime = parseInt(item.dataset.startTime) || Date.now();
-            durationEl.textContent = `Running for ${formatDuration(startTime)}`;
+function escapeHtml(text) { if (!text) return ""; const d = document.createElement('div'); d.textContent = text; return d.innerHTML; }
+
+// Dummy functions for API endpoints that might be missing or different
+async function pollActivity() {
+    // WebSocket handles this now, but we can poll for initial state if needed
+}
+
+function handleActivityEvent(data) {
+    const container = document.getElementById('activity-feed-container');
+    if (!container) return;
+    
+    // Remove loading or empty state
+    const loading = container.querySelector('.loading, .empty-state');
+    if (loading) container.innerHTML = '';
+    
+    const time = new Date(data.timestamp).toLocaleTimeString();
+    const eventEl = document.createElement('div');
+    eventEl.className = 'activity-item';
+    eventEl.style.padding = '4px 8px';
+    eventEl.style.borderBottom = '1px solid var(--border-subtle)';
+    eventEl.style.animation = 'fadeIn 0.3s ease-out';
+    
+    let icon = 'info';
+    if (data.event_type === 'create') icon = 'add_circle';
+    if (data.event_type === 'edit') icon = 'edit';
+    if (data.event_type === 'delete') icon = 'delete';
+    if (data.event_type === 'open') icon = 'folder_open';
+    
+    eventEl.innerHTML = `
+        <span style="color: var(--text-dim); margin-right: 8px;">[${time}]</span>
+        <span class="material-symbols-outlined" style="font-size: 14px; vertical-align: middle; margin-right: 4px;">${icon}</span>
+        <strong>${data.event_type.toUpperCase()}</strong> ${data.resource_type}: 
+        <span style="color: var(--accent);">${escapeHtml(data.resource_title)}</span>
+    `;
+    
+    container.insertBefore(eventEl, container.firstChild);
+    
+    // Limit to 50 items
+    if (container.children.length > 50) {
+        container.removeChild(container.lastChild);
+    }
+}
+
+// Alias for WebSocket global refresh
+window.loadAgents = updateStaffRoster;
+
+function updateLogSelectors() {
+    const select = document.getElementById('log-target-select');
+    if (!select) return;
+    const cur = select.value;
+    select.innerHTML = '<option value="">Select Target...</option>';
+    
+    // Add specialists
+    if (allAgents.length > 0) {
+        const group = document.createElement('optgroup');
+        group.label = 'Specialists';
+        allAgents.forEach(a => {
+            const opt = document.createElement('option');
+            opt.value = `agent:${a.id}`;
+            opt.textContent = a.name;
+            group.appendChild(opt);
+        });
+        select.appendChild(group);
+    }
+    
+    // Add swarms
+    if (swarmAgents.length > 0) {
+        const group = document.createElement('optgroup');
+        group.label = 'Swarms';
+        const opt = document.createElement('option');
+        opt.value = 'swarm:current';
+        opt.textContent = 'Active Ralph Swarm';
+        group.appendChild(opt);
+        select.appendChild(group);
+    }
+    
+    select.value = cur;
+}
+
+async function updateSwarmStatus() {
+    try {
+        const swarmData = await api.getRalphStatus('C:/shadow');
+        swarmAgents = swarmData.agents || [];
+        const container = document.getElementById('swarm-roster');
+        
+        updateLogSelectors(); // Update the log dropdown when swarm status changes
+        
+        if (swarmAgents.length === 0) {
+            container.innerHTML = '<div class="empty-state">No swarm active. Launch a mission to begin.</div>';
+            return;
         }
-    });
-}, 1000);
+        container.innerHTML = swarmAgents.map(a => `
+            <div class="agent-card running">
+                <div class="agent-header">
+                    <div class="agent-avatar">R</div>
+                    <div class="agent-info">
+                        <div class="agent-name">${escapeHtml(a.name)}</div>
+                        <span class="status-badge running">ACTIVE</span>
+                    </div>
+                </div>
+                <div class="agent-specialty">${escapeHtml(a.role || 'Ralph Agent')}</div>
+            </div>
+        `).join('');
+    } catch (e) {}
+}
 </script>
 {% endblock %}

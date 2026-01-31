@@ -323,6 +323,147 @@ if socketio is not None:
         if not success:
             emit("error", {"message": "Failed to send approval response"})
 
+    # =========================================================================
+    # Agent Orchestration Events (for AI Agent Management)
+    # =========================================================================
+
+    @socketio.on("spawn_agent")
+    def handle_spawn_agent(data):
+        """Spawn a new persistent AI agent."""
+        sid = request.sid if hasattr(request, "sid") else "unknown"
+
+        # Get device ID
+        device_id = request.headers.get("X-Device-ID")
+        if not device_id:
+            client = connected_clients.get(sid)
+            device_id = client.get("device_id") if client else None
+
+        if not device_id:
+            device_id = "web_dashboard"  # Allow web dashboard to spawn agents
+
+        # Extract parameters
+        name = data.get("name", "Agent")
+        specialty = data.get("specialty", "general")
+        cli_provider = data.get("provider", "claude")
+        model = data.get("model")
+        working_dir = data.get("working_directory")
+        auto_accept_edits = data.get("auto_accept_edits", True)
+
+        # Import agent orchestrator
+        try:
+            from ..services.agent_orchestrator import spawn_agent
+        except ImportError:
+            emit("error", {"message": "Agent orchestrator not available"})
+            return
+
+        # Spawn agent
+        try:
+            agent_info = spawn_agent(
+                device_id=device_id,
+                name=name,
+                specialty=specialty,
+                cli_provider=cli_provider,
+                model=model,
+                working_directory=working_dir,
+                auto_accept_edits=auto_accept_edits
+            )
+
+            emit("agent_spawned", agent_info)
+
+        except Exception as e:
+            emit("error", {"message": f"Failed to spawn agent: {str(e)}"})
+
+    @socketio.on("stop_agent")
+    def handle_stop_agent(data):
+        """Stop a running agent."""
+        agent_id = data.get("agent_id")
+        graceful = data.get("graceful", True)
+
+        if not agent_id:
+            emit("error", {"message": "Agent ID is required"})
+            return
+
+        # Import agent orchestrator
+        try:
+            from ..services.agent_orchestrator import stop_agent
+        except ImportError:
+            emit("error", {"message": "Agent orchestrator not available"})
+            return
+
+        # Stop agent
+        success = stop_agent(agent_id, graceful=graceful)
+
+        if success:
+            emit("agent_stopped", {"agent_id": agent_id})
+        else:
+            emit("error", {"message": "Failed to stop agent"})
+
+    @socketio.on("assign_task")
+    def handle_assign_task(data):
+        """Assign a task to an agent."""
+        agent_id = data.get("agent_id")
+        task = data.get("task")
+
+        if not agent_id or not task:
+            emit("error", {"message": "Agent ID and task are required"})
+            return
+
+        # Import agent orchestrator
+        try:
+            from ..services.agent_orchestrator import assign_task
+        except ImportError:
+            emit("error", {"message": "Agent orchestrator not available"})
+            return
+
+        # Assign task
+        success = assign_task(agent_id, task)
+
+        if success:
+            emit("task_assigned", {"agent_id": agent_id, "task": task})
+        else:
+            emit("error", {"message": "Failed to assign task"})
+
+    @socketio.on("get_agents")
+    def handle_get_agents(data):
+        """Get all active agents."""
+        device_id = data.get("device_id")  # Optional filter
+
+        # Import agent orchestrator
+        try:
+            from ..services.agent_orchestrator import get_all_agents
+        except ImportError:
+            emit("error", {"message": "Agent orchestrator not available"})
+            return
+
+        # Get agents
+        agents = get_all_agents(device_id=device_id)
+
+        emit("agents_list", {"agents": agents})
+
+    @socketio.on("get_agent_status")
+    def handle_get_agent_status(data):
+        """Get status of a specific agent."""
+        agent_id = data.get("agent_id")
+
+        if not agent_id:
+            emit("error", {"message": "Agent ID is required"})
+            return
+
+        # Import agent orchestrator
+        try:
+            from ..services.agent_orchestrator import get_agent_status
+        except ImportError:
+            emit("error", {"message": "Agent orchestrator not available"})
+            return
+
+        # Get status
+        status = get_agent_status(agent_id)
+
+        if status:
+            emit("agent_status", status)
+        else:
+            emit("error", {"message": "Agent not found"})
+
 
 def _update_user_presence(user_id: str, status: str):
     """Update user presence in tracking dict."""

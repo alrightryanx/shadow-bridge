@@ -1,0 +1,598 @@
+/**
+ * Agent Orchestration WebSocket Client
+ *
+ * Real-time monitoring and control of persistent AI agents.
+ * Connects to /ws/agents endpoint for live updates.
+ */
+
+class AgentOrchestrator {
+    constructor() {
+        this.socket = null;
+        this.agents = new Map();
+        this.callbacks = {
+            'agent_spawned': [],
+            'agent_stopped': [],
+            'agent_status_changed': [],
+            'agent_output_line': [],
+            'agent_task_completed': []
+        };
+
+        this.connected = false;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
+    }
+
+    /**
+     * Connect to WebSocket server
+     */
+    connect() {
+        if (this.socket && this.connected) {
+            console.log('Already connected to agent orchestrator');
+            return;
+        }
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/socket.io/`;
+
+        console.log('Connecting to agent orchestrator:', wsUrl);
+
+        // Use Socket.IO client (should be loaded in base template)
+        if (typeof io === 'undefined') {
+            console.error('Socket.IO client not loaded!');
+            return;
+        }
+
+        this.socket = io();
+
+        // Connection events
+        this.socket.on('connect', () => {
+            console.log('Connected to agent orchestrator');
+            this.connected = true;
+            this.reconnectAttempts = 0;
+
+            // Request current agents list
+            this.getAgents();
+        });
+
+        this.socket.on('disconnect', () => {
+            console.log('Disconnected from agent orchestrator');
+            this.connected = false;
+            this.attemptReconnect();
+        });
+
+        this.socket.on('connect_error', (error) => {
+            console.error('Connection error:', error);
+            this.attemptReconnect();
+        });
+
+        // Agent events
+        this.socket.on('agent_spawned', (data) => {
+            console.log('Agent spawned:', data);
+            this.agents.set(data.id, data);
+            this.trigger('agent_spawned', data);
+            this.updateAgentUI();
+        });
+
+        this.socket.on('agent_stopped', (data) => {
+            console.log('Agent stopped:', data);
+            this.agents.delete(data.id);
+            this.trigger('agent_stopped', data);
+            this.updateAgentUI();
+        });
+
+        this.socket.on('agent_status_changed', (data) => {
+            console.log('Agent status changed:', data);
+            const existing = this.agents.get(data.id);
+            if (existing) {
+                this.agents.set(data.id, {...existing, ...data});
+            }
+            this.trigger('agent_status_changed', data);
+            this.updateAgentCard(data);
+        });
+
+        this.socket.on('agent_output_line', (data) => {
+            console.log('Agent output:', data.line);
+            this.trigger('agent_output_line', data);
+            this.appendOutputLine(data.agent_id, data.line, data.stream);
+        });
+
+        this.socket.on('agent_task_completed', (data) => {
+            console.log('Agent task completed:', data);
+            this.trigger('agent_task_completed', data);
+        });
+
+        // Response events
+        this.socket.on('agents_list', (data) => {
+            console.log('Received agents list:', data);
+            this.agents.clear();
+            (data.agents || []).forEach(agent => {
+                this.agents.set(agent.id, agent);
+            });
+            this.updateAgentUI();
+        });
+
+        this.socket.on('agent_status', (data) => {
+            console.log('Received agent status:', data);
+            const existing = this.agents.get(data.id);
+            if (existing) {
+                this.agents.set(data.id, {...existing, ...data});
+            }
+            this.updateAgentCard(data);
+        });
+
+        this.socket.on('error', (data) => {
+            console.error('Agent orchestrator error:', data.message);
+            this.showToast(data.message, 'error');
+        });
+    }
+
+    /**
+     * Attempt to reconnect after disconnect
+     */
+    attemptReconnect() {
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.error('Max reconnect attempts reached');
+            this.showToast('Lost connection to agent orchestrator', 'error');
+            return;
+        }
+
+        this.reconnectAttempts++;
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+
+        console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+
+        setTimeout(() => {
+            if (!this.connected) {
+                this.connect();
+            }
+        }, delay);
+    }
+
+    /**
+     * Spawn a new agent
+     */
+    spawnAgent(config) {
+        if (!this.socket || !this.connected) {
+            this.showToast('Not connected to server', 'error');
+            return;
+        }
+
+        console.log('Spawning agent:', config);
+
+        this.socket.emit('spawn_agent', {
+            name: config.name,
+            specialty: config.specialty,
+            provider: config.provider || 'claude',
+            model: config.model || 'claude-sonnet-4-20250514',
+            working_directory: config.workingDirectory,
+            auto_accept_edits: config.autoAcceptEdits !== false
+        });
+
+        this.showToast(`Spawning ${config.name}...`, 'info');
+    }
+
+    /**
+     * Stop an agent
+     */
+    stopAgent(agentId, graceful = true) {
+        if (!this.socket || !this.connected) {
+            this.showToast('Not connected to server', 'error');
+            return;
+        }
+
+        console.log('Stopping agent:', agentId);
+
+        this.socket.emit('stop_agent', {
+            agent_id: agentId,
+            graceful: graceful
+        });
+
+        this.showToast('Stopping agent...', 'info');
+    }
+
+    /**
+     * Assign a task to an agent
+     */
+    assignTask(agentId, task) {
+        if (!this.socket || !this.connected) {
+            this.showToast('Not connected to server', 'error');
+            return;
+        }
+
+        console.log('Assigning task to agent:', agentId, task);
+
+        this.socket.emit('assign_task', {
+            agent_id: agentId,
+            task: task
+        });
+
+        this.showToast('Task assigned', 'success');
+    }
+
+    /**
+     * Get all agents
+     */
+    getAgents(deviceId = null) {
+        if (!this.socket || !this.connected) {
+            console.warn('Cannot get agents: not connected');
+            return;
+        }
+
+        this.socket.emit('get_agents', {
+            device_id: deviceId
+        });
+    }
+
+    /**
+     * Get status of a specific agent
+     */
+    getAgentStatus(agentId) {
+        if (!this.socket || !this.connected) {
+            console.warn('Cannot get agent status: not connected');
+            return;
+        }
+
+        this.socket.emit('get_agent_status', {
+            agent_id: agentId
+        });
+    }
+
+    /**
+     * Register event callback
+     */
+    on(event, callback) {
+        if (!this.callbacks[event]) {
+            this.callbacks[event] = [];
+        }
+        this.callbacks[event].push(callback);
+    }
+
+    /**
+     * Trigger event callbacks
+     */
+    trigger(event, data) {
+        const callbacks = this.callbacks[event] || [];
+        callbacks.forEach(callback => {
+            try {
+                callback(data);
+            } catch (e) {
+                console.error(`Error in ${event} callback:`, e);
+            }
+        });
+    }
+
+    /**
+     * Update agent UI (override this in your app)
+     */
+    updateAgentUI() {
+        console.log('Updating agent UI with', this.agents.size, 'agents');
+
+        // Update agent grid
+        const container = document.getElementById('live-agents-grid');
+        if (!container) return;
+
+        if (this.agents.size === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-dim);">smart_toy</span>
+                    <p>No persistent agents running</p>
+                    <button class="btn btn-primary" onclick="showSpawnAgentModal()">
+                        <span class="material-symbols-outlined">add</span> Spawn Agent
+                    </button>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = Array.from(this.agents.values()).map(agent => this.renderAgentCard(agent)).join('');
+    }
+
+    /**
+     * Render agent card HTML
+     */
+    renderAgentCard(agent) {
+        const statusClass = agent.status || 'idle';
+        const statusColors = {
+            'idle': 'var(--text-dim)',
+            'busy': 'var(--warning)',
+            'error': 'var(--error)',
+            'offline': 'var(--text-dim)'
+        };
+
+        const uptime = this.formatUptime(agent.uptime_seconds);
+
+        return `
+            <div class="agent-card live" id="agent-${agent.id}" data-agent-id="${agent.id}">
+                <div class="agent-card-header">
+                    <div class="agent-card-title">
+                        <span class="material-symbols-outlined agent-icon">smart_toy</span>
+                        <div>
+                            <h3>${this.escapeHtml(agent.name)}</h3>
+                            <span class="agent-specialty">${this.escapeHtml(agent.specialty)}</span>
+                        </div>
+                    </div>
+                    <span class="status-badge" style="background: ${statusColors[statusClass]}">
+                        ${statusClass.toUpperCase()}
+                    </span>
+                </div>
+
+                <div class="agent-card-metrics">
+                    <div class="metric">
+                        <span class="material-symbols-outlined">memory</span>
+                        <span>${agent.cpu_percent || 0}% CPU</span>
+                    </div>
+                    <div class="metric">
+                        <span class="material-symbols-outlined">storage</span>
+                        <span>${agent.memory_mb || 0} MB</span>
+                    </div>
+                    <div class="metric">
+                        <span class="material-symbols-outlined">schedule</span>
+                        <span>${uptime}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="material-symbols-outlined">task_alt</span>
+                        <span>${agent.tasks_completed || 0} tasks</span>
+                    </div>
+                </div>
+
+                ${agent.current_task ? `
+                    <div class="agent-current-task">
+                        <strong>Current Task:</strong>
+                        <div class="task-text">${this.escapeHtml(agent.current_task)}</div>
+                    </div>
+                ` : ''}
+
+                <div class="agent-output" id="agent-output-${agent.id}">
+                    ${(agent.output_lines || []).map(line =>
+                        `<div class="output-line">${this.escapeHtml(line.line)}</div>`
+                    ).join('')}
+                </div>
+
+                <div class="agent-card-actions">
+                    <button class="btn btn-small" onclick="showAssignTaskModal('${agent.id}')">
+                        <span class="material-symbols-outlined">assignment</span> Assign Task
+                    </button>
+                    <button class="btn btn-small btn-secondary" onclick="orchestrator.getAgentStatus('${agent.id}')">
+                        <span class="material-symbols-outlined">refresh</span>
+                    </button>
+                    <button class="btn btn-small btn-danger" onclick="confirmStopAgent('${agent.id}')">
+                        <span class="material-symbols-outlined">stop_circle</span> Stop
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Update a single agent card
+     */
+    updateAgentCard(agent) {
+        const card = document.getElementById(`agent-${agent.id}`);
+        if (!card) {
+            // Agent card doesn't exist, refresh full UI
+            this.updateAgentUI();
+            return;
+        }
+
+        // Update status badge
+        const statusBadge = card.querySelector('.status-badge');
+        if (statusBadge) {
+            const statusClass = agent.status || 'idle';
+            const statusColors = {
+                'idle': 'var(--text-dim)',
+                'busy': 'var(--warning)',
+                'error': 'var(--error)',
+                'offline': 'var(--text-dim)'
+            };
+            statusBadge.textContent = statusClass.toUpperCase();
+            statusBadge.style.background = statusColors[statusClass];
+        }
+
+        // Update metrics
+        if (agent.cpu_percent !== undefined) {
+            const cpuMetric = card.querySelector('.metric:nth-child(1) span:last-child');
+            if (cpuMetric) cpuMetric.textContent = `${agent.cpu_percent}% CPU`;
+        }
+
+        if (agent.memory_mb !== undefined) {
+            const memMetric = card.querySelector('.metric:nth-child(2) span:last-child');
+            if (memMetric) memMetric.textContent = `${agent.memory_mb} MB`;
+        }
+
+        if (agent.uptime_seconds !== undefined) {
+            const uptimeMetric = card.querySelector('.metric:nth-child(3) span:last-child');
+            if (uptimeMetric) uptimeMetric.textContent = this.formatUptime(agent.uptime_seconds);
+        }
+
+        if (agent.tasks_completed !== undefined) {
+            const tasksMetric = card.querySelector('.metric:nth-child(4) span:last-child');
+            if (tasksMetric) tasksMetric.textContent = `${agent.tasks_completed} tasks`;
+        }
+
+        // Update current task
+        const taskSection = card.querySelector('.agent-current-task');
+        if (agent.current_task) {
+            if (taskSection) {
+                taskSection.querySelector('.task-text').textContent = agent.current_task;
+            } else {
+                // Insert task section
+                const metricsSection = card.querySelector('.agent-card-metrics');
+                const newTaskSection = document.createElement('div');
+                newTaskSection.className = 'agent-current-task';
+                newTaskSection.innerHTML = `
+                    <strong>Current Task:</strong>
+                    <div class="task-text">${this.escapeHtml(agent.current_task)}</div>
+                `;
+                metricsSection.after(newTaskSection);
+            }
+        } else if (taskSection) {
+            taskSection.remove();
+        }
+    }
+
+    /**
+     * Append output line to agent card
+     */
+    appendOutputLine(agentId, line, stream = 'stdout') {
+        const outputContainer = document.getElementById(`agent-output-${agentId}`);
+        if (!outputContainer) return;
+
+        const lineEl = document.createElement('div');
+        lineEl.className = `output-line ${stream}`;
+        lineEl.textContent = line;
+
+        outputContainer.appendChild(lineEl);
+
+        // Auto-scroll to bottom
+        outputContainer.scrollTop = outputContainer.scrollHeight;
+
+        // Limit to 100 lines
+        while (outputContainer.children.length > 100) {
+            outputContainer.removeChild(outputContainer.firstChild);
+        }
+    }
+
+    /**
+     * Format uptime seconds to human-readable string
+     */
+    formatUptime(seconds) {
+        if (!seconds) return '0s';
+
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+
+        if (hours > 0) {
+            return `${hours}h ${minutes}m`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${secs}s`;
+        } else {
+            return `${secs}s`;
+        }
+    }
+
+    /**
+     * Escape HTML
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    /**
+     * Show toast notification
+     */
+    showToast(message, type = 'info') {
+        // Use global showToast if available, otherwise log
+        if (typeof window.showToast === 'function') {
+            window.showToast(message, type);
+        } else {
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+    }
+}
+
+// Global instance
+const orchestrator = new AgentOrchestrator();
+
+// Auto-connect on page load
+document.addEventListener('DOMContentLoaded', () => {
+    orchestrator.connect();
+
+    // Refresh agent status every 5 seconds
+    setInterval(() => {
+        if (orchestrator.connected) {
+            orchestrator.getAgents();
+        }
+    }, 5000);
+});
+
+// Global functions for UI interactions
+function showSpawnAgentModal() {
+    // Create modal HTML
+    const modal = document.getElementById('spawn-agent-modal');
+    if (!modal) {
+        console.error('Spawn agent modal not found');
+        return;
+    }
+
+    modal.classList.remove('hidden');
+}
+
+function closeSpawnAgentModal() {
+    const modal = document.getElementById('spawn-agent-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+}
+
+function confirmSpawnAgent() {
+    const name = document.getElementById('spawn-agent-name').value.trim();
+    const specialty = document.getElementById('spawn-agent-specialty').value;
+    const provider = document.getElementById('spawn-agent-provider').value;
+    const model = document.getElementById('spawn-agent-model').value;
+    const workingDir = document.getElementById('spawn-agent-workdir').value.trim();
+
+    if (!name) {
+        orchestrator.showToast('Agent name is required', 'warning');
+        return;
+    }
+
+    orchestrator.spawnAgent({
+        name: name,
+        specialty: specialty,
+        provider: provider,
+        model: model,
+        workingDirectory: workingDir || null,
+        autoAcceptEdits: document.getElementById('spawn-agent-auto-accept').checked
+    });
+
+    closeSpawnAgentModal();
+}
+
+function showAssignTaskModal(agentId) {
+    const modal = document.getElementById('assign-task-modal');
+    if (!modal) {
+        console.error('Assign task modal not found');
+        return;
+    }
+
+    // Store agent ID in modal
+    modal.dataset.agentId = agentId;
+
+    modal.classList.remove('hidden');
+}
+
+function closeAssignTaskModal() {
+    const modal = document.getElementById('assign-task-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        delete modal.dataset.agentId;
+    }
+}
+
+function confirmAssignTask() {
+    const modal = document.getElementById('assign-task-modal');
+    const agentId = modal?.dataset.agentId;
+    const task = document.getElementById('assign-task-input').value.trim();
+
+    if (!agentId || !task) {
+        orchestrator.showToast('Task description is required', 'warning');
+        return;
+    }
+
+    orchestrator.assignTask(agentId, task);
+    closeAssignTaskModal();
+
+    // Clear input
+    document.getElementById('assign-task-input').value = '';
+}
+
+function confirmStopAgent(agentId) {
+    if (!confirm('Stop this agent? Any running tasks will be interrupted.')) {
+        return;
+    }
+
+    orchestrator.stopAgent(agentId, true);
+}
