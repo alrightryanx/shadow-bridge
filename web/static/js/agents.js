@@ -14,7 +14,11 @@ class AgentOrchestrator {
             'agent_stopped': [],
             'agent_status_changed': [],
             'agent_output_line': [],
-            'agent_task_completed': []
+            'agent_task_completed': [],
+            'agent_task_blocked': [],
+            'agent_task_started': [],
+            'agent_task_progress': [],
+            'agent_task_result': []
         };
 
         this.connected = false;
@@ -104,6 +108,72 @@ class AgentOrchestrator {
             this.trigger('agent_task_completed', data);
         });
 
+        this.socket.on('agent_task_started', (data) => {
+            const existing = this.agents.get(data.agent_id);
+            if (existing) {
+                this.agents.set(data.agent_id, {
+                    ...existing,
+                    current_task_id: data.task_id || existing.current_task_id,
+                    current_thread_id: data.thread_id || existing.current_thread_id,
+                    task_progress_pct: 0,
+                    task_progress_msg: 'Started'
+                });
+                this.updateAgentCard({ id: data.agent_id, task_progress_pct: 0, task_progress_msg: 'Started' });
+            }
+            this.trigger('agent_task_started', data);
+        });
+
+        this.socket.on('agent_task_progress', (data) => {
+            const existing = this.agents.get(data.agent_id);
+            if (existing) {
+                this.agents.set(data.agent_id, {
+                    ...existing,
+                    task_progress_pct: data.pct,
+                    task_progress_msg: data.msg || existing.task_progress_msg
+                });
+                this.updateAgentCard({ id: data.agent_id, task_progress_pct: data.pct, task_progress_msg: data.msg });
+            }
+            this.trigger('agent_task_progress', data);
+        });
+
+        this.socket.on('agent_task_result', (data) => {
+            const existing = this.agents.get(data.agent_id);
+            if (existing) {
+                this.agents.set(data.agent_id, {
+                    ...existing,
+                    task_result: data.result
+                });
+                this.updateAgentCard({ id: data.agent_id, task_result: data.result });
+            }
+            this.trigger('agent_task_result', data);
+        });
+
+        this.socket.on('agent_task_blocked', (data) => {
+            console.warn('Agent task blocked:', data);
+            const existing = this.agents.get(data.agent_id);
+            if (existing) {
+                this.agents.set(data.agent_id, {
+                    ...existing,
+                    last_blocked_reason: data.reason,
+                    last_blocked_at: data.timestamp
+                });
+                this.updateAgentCard({ id: data.agent_id, last_blocked_reason: data.reason, last_blocked_at: data.timestamp });
+            }
+            this.trigger('agent_task_blocked', data);
+            this.showToast(`Task blocked: ${data.reason}`, 'warning');
+            this.fetchLocks();
+        });
+
+        this.socket.on('agent_locks_released', (data) => {
+            console.log('Locks released:', data);
+            this.fetchLocks();
+            if (data.agent_id) {
+                this.showToast(`Locks released for ${data.agent_id}`, 'success');
+            } else if (data.scope === 'all') {
+                this.showToast('All locks released', 'success');
+            }
+        });
+
         // Response events
         this.socket.on('agents_list', (data) => {
             console.log('Received agents list:', data);
@@ -121,6 +191,15 @@ class AgentOrchestrator {
                 this.agents.set(data.id, {...existing, ...data});
             }
             this.updateAgentCard(data);
+        });
+
+        // Android device agent sync events
+        this.socket.on('agents_updated', (data) => {
+            console.log('Agents updated from device:', data.device_id);
+            // Refresh the full agent list to include device-synced agents
+            this.getAgents(data.device_id);
+            // Also fetch from REST API for merged view (SQLite + JSON + orchestrator)
+            this.fetchMergedAgents();
         });
 
         this.socket.on('error', (data) => {
@@ -241,6 +320,99 @@ class AgentOrchestrator {
     }
 
     /**
+     * Fetch merged agent list from REST API (includes all sources: SQLite, JSON, orchestrator).
+     * Complements WebSocket-based updates for a complete picture.
+     */
+    async fetchMergedAgents() {
+        try {
+            const response = await fetch('/api/agents');
+            if (!response.ok) return;
+            const agents = await response.json();
+            if (Array.isArray(agents)) {
+                // Merge with existing orchestrator agents (live agents take precedence)
+                const liveIds = new Set(Array.from(this.agents.keys()));
+                agents.forEach(agent => {
+                    if (!liveIds.has(agent.id)) {
+                        this.agents.set(agent.id, agent);
+                    }
+                });
+                this.updateAgentUI();
+                this.updateOverviewStats();
+            }
+        } catch (e) {
+            console.debug('fetchMergedAgents failed:', e.message);
+        }
+    }
+
+    /**
+     * Update overview stats cards with current agent data.
+     */
+    updateOverviewStats() {
+        const agents = Array.from(this.agents.values());
+        const total = agents.length;
+        const active = agents.filter(a => a.status === 'busy').length;
+        const tasksCompleted = agents.reduce((sum, a) => sum + (a.tasks_completed || 0), 0);
+
+        const totalEl = document.getElementById('overview-total-agents');
+        const activeEl = document.getElementById('overview-active-agents');
+        const completedEl = document.getElementById('overview-completed-tasks');
+
+        if (totalEl) totalEl.textContent = total;
+        if (activeEl) activeEl.textContent = active;
+        if (completedEl) completedEl.textContent = tasksCompleted;
+    }
+
+    /**
+     * Fetch and render lock status
+     */
+    async fetchLocks() {
+        if (typeof api === 'undefined' || typeof api.getLocks !== 'function') return;
+        const snapshot = await api.getLocks();
+        this.renderLocks(snapshot || {});
+    }
+
+    renderLocks(snapshot) {
+        const container = document.getElementById('lock-list');
+        if (!container) return;
+
+        const locks = snapshot.locks || [];
+        const blocked = snapshot.blocked || [];
+
+        const lockItems = locks.length
+            ? locks.map(lock => {
+                const title = `${lock.lock_type.toUpperCase()} ${lock.repo || 'unknown'}`;
+                const path = lock.path ? ` | ${lock.path}` : '';
+                return `
+                    <div class="lock-item">
+                        <div class="lock-title">${this.escapeHtml(title)}${this.escapeHtml(path)}</div>
+                        <div class="lock-meta">Agent: ${this.escapeHtml(lock.agent_id || 'unknown')} • Task: ${this.escapeHtml(lock.task_id || 'n/a')}</div>
+                    </div>
+                `;
+            }).join('')
+            : '<div class="empty-state-small">No active locks</div>';
+
+        const blockedItems = blocked.length
+            ? blocked.slice(-5).reverse().map(entry => `
+                <div class="lock-item blocked">
+                    <div class="lock-title">Blocked: ${this.escapeHtml(entry.reason || 'unknown')}</div>
+                    <div class="lock-meta">Agent: ${this.escapeHtml(entry.agent_id || 'unknown')} • Task: ${this.escapeHtml(entry.task_id || 'n/a')}</div>
+                </div>
+            `).join('')
+            : '<div class="empty-state-small">No recent blocks</div>';
+
+        container.innerHTML = `
+            <div class="lock-group">
+                <div class="lock-group-title">Active Locks</div>
+                ${lockItems}
+            </div>
+            <div class="lock-group">
+                <div class="lock-group-title">Recent Blocks</div>
+                ${blockedItems}
+            </div>
+        `;
+    }
+
+    /**
      * Register event callback
      */
     on(event, callback) {
@@ -288,6 +460,7 @@ class AgentOrchestrator {
         }
 
         container.innerHTML = Array.from(this.agents.values()).map(agent => this.renderAgentCard(agent)).join('');
+        this.updateOverviewStats();
     }
 
     /**
@@ -345,6 +518,13 @@ class AgentOrchestrator {
                     </div>
                 ` : ''}
 
+                ${agent.last_blocked_reason ? `
+                    <div class="agent-blocked">
+                        <strong>Last Blocked:</strong>
+                        <div class="blocked-text">${this.escapeHtml(agent.last_blocked_reason)}</div>
+                    </div>
+                ` : ''}
+
                 <div class="agent-output" id="agent-output-${agent.id}">
                     ${(agent.output_lines || []).map(line =>
                         `<div class="output-line">${this.escapeHtml(line.line)}</div>`
@@ -354,6 +534,9 @@ class AgentOrchestrator {
                 <div class="agent-card-actions">
                     <button class="btn btn-small" onclick="showAssignTaskModal('${agent.id}')">
                         <span class="material-symbols-outlined">assignment</span> Assign Task
+                    </button>
+                    <button class="btn btn-small btn-secondary" onclick="releaseAgentLocks('${agent.id}')">
+                        <span class="material-symbols-outlined">lock_open</span> Release Locks
                     </button>
                     <button class="btn btn-small btn-secondary" onclick="orchestrator.getAgentStatus('${agent.id}')">
                         <span class="material-symbols-outlined">refresh</span>
@@ -431,6 +614,26 @@ class AgentOrchestrator {
         } else if (taskSection) {
             taskSection.remove();
         }
+
+        // Update blocked info
+        const blockedSection = card.querySelector('.agent-blocked');
+        if (agent.last_blocked_reason) {
+            if (blockedSection) {
+                const text = blockedSection.querySelector('.blocked-text');
+                if (text) text.textContent = agent.last_blocked_reason;
+            } else {
+                const insertAfter = card.querySelector('.agent-current-task') || card.querySelector('.agent-card-metrics');
+                const newBlockedSection = document.createElement('div');
+                newBlockedSection.className = 'agent-blocked';
+                newBlockedSection.innerHTML = `
+                    <strong>Last Blocked:</strong>
+                    <div class="blocked-text">${this.escapeHtml(agent.last_blocked_reason)}</div>
+                `;
+                insertAfter.after(newBlockedSection);
+            }
+        } else if (blockedSection) {
+            blockedSection.remove();
+        }
     }
 
     /**
@@ -502,13 +705,23 @@ const orchestrator = new AgentOrchestrator();
 // Auto-connect on page load
 document.addEventListener('DOMContentLoaded', () => {
     orchestrator.connect();
+    orchestrator.fetchLocks();
+    // Fetch merged agents (REST) on initial load for complete picture
+    orchestrator.fetchMergedAgents();
 
     // Refresh agent status every 5 seconds
     setInterval(() => {
         if (orchestrator.connected) {
             orchestrator.getAgents();
         }
+        // Also refresh merged agents periodically for device-synced agents
+        orchestrator.fetchMergedAgents();
     }, 5000);
+
+    // Refresh lock status every 10 seconds
+    setInterval(() => {
+        orchestrator.fetchLocks();
+    }, 10000);
 });
 
 // Global functions for UI interactions
@@ -692,4 +905,23 @@ function confirmStopAgent(agentId) {
     }
 
     orchestrator.stopAgent(agentId, true);
+}
+
+async function releaseAgentLocks(agentId) {
+    if (!confirm('Release all locks held by this agent? This will not stop running processes.')) {
+        return;
+    }
+
+    if (typeof api === 'undefined' || typeof api.releaseLocks !== 'function') {
+        orchestrator.showToast('API not available', 'error');
+        return;
+    }
+
+    const result = await api.releaseLocks({ agent_id: agentId });
+    if (result && result.success) {
+        orchestrator.showToast(`Released ${result.released || 0} locks`, 'success');
+        orchestrator.fetchLocks();
+    } else {
+        orchestrator.showToast(result.error || 'Failed to release locks', 'error');
+    }
 }

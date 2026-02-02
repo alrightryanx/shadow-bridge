@@ -1,8 +1,9 @@
-"""
+﻿"""
 Data Service - Read ~/.shadowai/ JSON files
 """
 
 import json
+import copy
 import os
 import base64
 import hashlib
@@ -10,7 +11,11 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+import logging
 from datetime import datetime
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 # Import notifier
 from .notifier_service import get_notifier
@@ -41,6 +46,12 @@ def _auto_index_document(source_type: str, source_id: str, title: str, content: 
 # SECURITY: Thread lock for file I/O operations to prevent race conditions
 _file_lock = threading.Lock()
 
+# PERFORMANCE: In-memory read-through cache
+# Cache structure: {str(filepath): data_dict}
+_memory_cache = {}
+# Timestamp structure: {str(filepath): mtime_float}
+_file_timestamps = {}
+
 # Shadow data directory
 SHADOWAI_DIR = Path.home() / ".shadowai"
 CARDS_FILE = SHADOWAI_DIR / "cards.json"
@@ -54,6 +65,8 @@ AGENTS_FILE = SHADOWAI_DIR / "agents.json"
 SYNC_KEYS_FILE = SHADOWAI_DIR / "sync_keys.json"
 ANALYTICS_FILE = SHADOWAI_DIR / "analytics.json"
 EMAILS_FILE = SHADOWAI_DIR / "verified_emails.json"
+MOBILE_SYNC_DIR = SHADOWAI_DIR / "mobile_sync"
+MOBILE_SYNC_FILE = SHADOWAI_DIR / "mobile_sync.json"
 
 # Note encryption constants (must match Android SyncEncryption.kt)
 SYNC_ENC_PREFIX = "SYNC_ENC:"
@@ -219,18 +232,38 @@ def set_sync_key_for_device(device_id: str, password: str) -> bool:
 
 
 def _read_json_file(filepath: Path) -> Optional[Dict]:
-    """Read and parse a JSON file with thread safety."""
+    """Read and parse a JSON file with thread safety and in-memory caching."""
+    global _memory_cache, _file_timestamps
+    
     if not filepath.exists():
         return None
+        
+    str_path = str(filepath)
+    
     try:
+        # Check file modification time (syscall is fast)
+        mtime = os.path.getmtime(filepath)
+        
         with _file_lock:
+            # Cache Hit: File hasn't changed since last read
+            cached_mtime = _file_timestamps.get(str_path, 0)
+            if mtime == cached_mtime and str_path in _memory_cache:
+                # Return deep copy to prevent caller mutation from affecting cache
+                return copy.deepcopy(_memory_cache[str_path])
+            
+            # Cache Miss: Read from disk
             with open(filepath, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            
+            # Update Cache
+            _memory_cache[str_path] = data
+            _file_timestamps[str_path] = mtime
+            
+            return copy.deepcopy(data)
+            
     except (json.JSONDecodeError, IOError) as e:
         print(f"Error reading {filepath}: {e}")
         return None
-
-
 def _format_timestamp(ts: int) -> str:
     """Format Unix timestamp to human-readable string."""
     if not ts:
@@ -1205,7 +1238,11 @@ def get_automations(device_id: Optional[str] = None) -> List[Dict]:
                     "description": auto.get("description", ""),
                     "enabled": auto.get("enabled", False),
                     "schedule": auto.get("schedule", ""),
+                    "schedule_expression": auto.get("schedule_expression", ""),
                     "trigger": auto.get("trigger", "manual"),
+                    "type": auto.get("type", "shell"),
+                    "shell_command": auto.get("shell_command", ""),
+                    "ai_command": auto.get("ai_command", ""),
                     "last_run": auto.get("last_run"),
                     "last_run_formatted": _time_ago(auto.get("last_run", 0))
                     if auto.get("last_run")
@@ -1454,31 +1491,91 @@ def get_full_automation(automation_id: str) -> Optional[Dict]:
 # ============ Agents ============
 
 
+# PERFORMANCE: Cache for agents list to prevent redundant DB/File operations
+_agents_cache = None
+_agents_cache_time = 0
+AGENTS_CACHE_TTL = 2.0  # 2 seconds
+
 def get_agents(device_id: Optional[str] = None) -> List[Dict]:
-    """Get all agents with their status."""
-    data = _read_json_file(AGENTS_FILE)
-    if not data:
-        return []
+    """Get all agents with their status, merging from SQLite and agents.json."""
+    global _agents_cache, _agents_cache_time
+    
+    # Return cached data if valid
+    now = time.time()
+    if _agents_cache is not None and (now - _agents_cache_time) < AGENTS_CACHE_TTL:
+        # Filter by device_id if requested, otherwise return full cache
+        if device_id:
+            return [a for a in _agents_cache if a.get("device_id") == device_id]
+        return copy.deepcopy(_agents_cache)
+    
+    # Get agents from SQLite DB first
+    sqlite_agents = []
+    try:
+        import sqlite3
+        SQLITE_DB_PATH = r"C:\shadow\backend\data\shadow_ai.db"
+        if os.path.exists(SQLITE_DB_PATH):
+            # Use a context manager for the connection
+            with sqlite3.connect(SQLITE_DB_PATH, timeout=5.0) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, name, status, role, current_goal_id as current_task FROM agents")
+                rows = cursor.fetchall()
+                for row in rows:
+                    sqlite_agents.append({
+                        "id": row['id'],
+                        "name": row['name'],
+                        "status": row['status'].lower() if row['status'] else "offline",
+                        "specialty": row['role'] if row['role'] else "General",
+                        "current_task": row['current_task'],
+                        "tasks_completed": 0, 
+                        "device_id": "autonomous-team",
+                    })
+    except Exception as e:
+        logger.error(f"Error reading agents from SQLite: {e}")
 
-    agents = []
-    for agent_device_id, device_agents in data.items():
-        if device_id and agent_device_id != device_id:
-            continue
+    # Get agents from agents.json
+    json_agents = []
+    try:
+        data = _read_json_file(AGENTS_FILE) or {}
+        for agent_device_id, device_agents_data in data.items():
+            for agent in device_agents_data.get("agents", []):
+                json_agents.append(
+                    {
+                        "id": agent.get("id", ""),
+                        "name": agent.get("name", "Unnamed"),
+                        "status": agent.get("status", "offline"),
+                        "specialty": agent.get("specialty", ""),
+                        "current_task": agent.get("current_task"),
+                        "tasks_completed": agent.get("tasks_completed", 0),
+                        "device_id": agent_device_id,
+                    }
+                )
+    except Exception as e:
+        logger.error(f"Error reading agents from agents.json: {e}")
 
-        for agent in device_agents.get("agents", []):
-            agents.append(
-                {
-                    "id": agent.get("id", ""),
-                    "name": agent.get("name", "Unnamed"),
-                    "status": agent.get("status", "offline"),
-                    "specialty": agent.get("specialty", ""),
-                    "current_task": agent.get("current_task"),
-                    "tasks_completed": agent.get("tasks_completed", 0),
-                    "device_id": agent_device_id,
-                }
-            )
+    # Merge: SQLite agents take precedence for the 'autonomous-team' device_id
+    merged_agents = {}
+    
+    # Add JSON agents first
+    for agent in json_agents:
+        if agent["device_id"] != "autonomous-team":
+            merged_agents[agent["id"]] = agent
 
-    return agents
+    # Add SQLite agents
+    for agent in sqlite_agents:
+        merged_agents[agent["id"]] = agent
+
+    result = list(merged_agents.values())
+    
+    # Update cache
+    _agents_cache = result
+    _agents_cache_time = now
+    
+    # Filter by device_id if requested for this specific call
+    if device_id:
+        return [a for a in result if a.get("device_id") == device_id]
+        
+    return copy.deepcopy(result)
 
 
 def get_agent(agent_id: str) -> Optional[Dict]:
@@ -1849,7 +1946,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.131",
+        "version": "1.153",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,
@@ -1881,14 +1978,24 @@ BRIEFINGS_FILE = SHADOWAI_DIR / "briefings.json"
 
 
 def _write_json_file(filepath: Path, data: Dict) -> bool:
-    """Write data to a JSON file atomically with thread safety.
+    """Write data to a JSON file atomically with thread safety and cache update.
 
     Uses atomic write (temp file + replace) to prevent corruption from
     concurrent writes or crashes mid-write.
     """
+    global _memory_cache, _file_timestamps
+    
+    str_path = str(filepath)
+    
     try:
         filepath.parent.mkdir(parents=True, exist_ok=True)
+        
         with _file_lock:
+            # Update Cache IMMEDIATELY (Optimistic Update)
+            # This ensures subsequent reads get the new data without hitting disk
+            # We store a copy to decouple from the caller's reference
+            _memory_cache[str_path] = copy.deepcopy(data)
+            
             # Write to temp file first, then atomically replace
             fd, tmp_path = tempfile.mkstemp(
                 suffix=".tmp", prefix=filepath.stem + "_", dir=filepath.parent
@@ -1896,21 +2003,28 @@ def _write_json_file(filepath: Path, data: Dict) -> bool:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
+                
                 # Atomic replace (works on Windows and POSIX)
                 os.replace(tmp_path, filepath)
+                
+                # Update timestamp to prevent immediate reload
+                _file_timestamps[str_path] = os.path.getmtime(filepath)
+                
             except Exception:
                 # Clean up temp file on error
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+                # Invalidate cache on write failure to force reload next time
+                if str_path in _memory_cache:
+                    del _memory_cache[str_path]
                 raise
+                
         return True
     except Exception as e:
-        print(f"Error writing {filepath}: {e}")
+        print(f'Error writing {filepath}: {e}')
         return False
-
-
 def _generate_id() -> str:
     """Generate a unique ID."""
     import uuid
@@ -2398,7 +2512,13 @@ def get_tasks(device_id: Optional[str] = None) -> List[Dict]:
     data = _read_json_file(TASKS_FILE)
     if not data:
         return []
-    tasks = data.get("tasks", [])
+
+    # Handle data being a list (current structure) or a dict (wrapper)
+    if isinstance(data, list):
+        tasks = data
+    else:
+        tasks = data.get("tasks", [])
+
     if device_id:
         tasks = [t for t in tasks if t.get("device_id") == device_id]
     return tasks
@@ -3193,6 +3313,7 @@ def get_pending_sync_items(device_id: str) -> Dict:
         "sessions": [],
         "cards": [],
         "collections": [],
+        "files": [],
     }
 
     # Check projects
@@ -3237,6 +3358,18 @@ def get_pending_sync_items(device_id: str) -> Dict:
         device_cards = cards_data.get("devices", {}).get(device_id, {}).get("cards", [])
         pending["cards"] = [c for c in device_cards if c.get("pending_sync")]
 
+    # Check files
+    if (MOBILE_SYNC_FILE.exists()):
+        sync_data = _read_json_file(MOBILE_SYNC_FILE) or {"devices": {}}
+        device_files = sync_data.get("devices", {}).get(device_id, {}).get("files", [])
+        pending["files"] = [f for f in device_files if f.get("pending_sync")]
+    
+    # Check files
+    if (MOBILE_SYNC_FILE.exists()):
+        sync_data = _read_json_file(MOBILE_SYNC_FILE) or {"devices": {}}
+        device_files = sync_data.get("devices", {}).get(device_id, {}).get("files", [])
+        pending["files"] = [f for f in device_files if f.get("pending_sync")]
+
     # Check collections
     collections_data = _read_json_file(COLLECTIONS_FILE)
     if collections_data:
@@ -3264,6 +3397,15 @@ def mark_items_synced(device_id: str, item_type: str, item_ids: List[str]) -> bo
                 p["pending_sync"] = False
                 p["synced_at"] = timestamp
         _write_json_file(PROJECTS_FILE, file_data)
+
+    elif item_type == "files":
+        file_data = _read_json_file(MOBILE_SYNC_FILE) or {"devices": {}}
+        files = file_data.get("devices", {}).get(device_id, {}).get("files", [])
+        for f in files:
+            if f.get("id") in item_ids:
+                f["pending_sync"] = False
+                f["synced_at"] = timestamp
+        _write_json_file(MOBILE_SYNC_FILE, file_data)
 
     elif item_type == "notes":
         file_data = _read_json_file(NOTES_FILE) or {"devices": {}}
@@ -4499,3 +4641,34 @@ def remove_device(device_id: str) -> Dict:
         "removed_device": device_name,
         "device_id": device_id,
     }
+
+
+def queue_file_for_sync(device_id: str, file_name: str, local_path: str, metadata: dict = None) -> dict:
+    """Queue a file for mobile sync."""
+    if not MOBILE_SYNC_DIR.exists():
+        MOBILE_SYNC_DIR.mkdir(parents=True, exist_ok=True)
+    file_id = f"file_{uuid.uuid4().hex[:8]}" if "uuid" in globals() else f"file_{os.urandom(4).hex()}"
+    timestamp = int(datetime.now().timestamp() * 1000)
+    # Copy file to sync dir
+    dest_path = MOBILE_SYNC_DIR / f"{file_id}_{file_name}"
+    import shutil
+    shutil.copy2(local_path, dest_path)
+    file_entry = {
+        "id": file_id,
+        "name": file_name,
+        "size": os.path.getsize(local_path),
+        "local_path": str(dest_path),
+        "timestamp": timestamp,
+        "metadata": metadata or {},
+        "pending_sync": True,
+        "synced_at": None
+    }
+    file_data = _read_json_file(MOBILE_SYNC_FILE) or {"devices": {}}
+    if device_id not in file_data:
+        file_data[device_id] = {"files": []}
+    if "files" not in file_data[device_id]:
+        file_data[device_id]["files"] = []
+    file_data[device_id]["files"].append(file_entry)
+    _write_json_file(MOBILE_SYNC_FILE, file_data)
+    return {"success": True, "file": file_entry}
+

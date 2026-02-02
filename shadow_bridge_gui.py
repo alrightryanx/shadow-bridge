@@ -61,7 +61,7 @@ from shadow_bridge.cli import (
     run_video_command,
     run_audio_command,
     run_assembly_command,
-    run_browser_command
+    run_browser_command,
 )
 
 # Import data service for bi-directional sync (web -> Android)
@@ -88,6 +88,7 @@ except ImportError:
 # Import effects for ping
 try:
     from shadow_bridge.utils.effects import ConfettiEffect, play_ping_sound
+
     HAS_EFFECTS = True
 except ImportError:
     HAS_EFFECTS = False
@@ -107,6 +108,7 @@ PING_MODE = "--ping" in sys.argv
 AUTO_INSTALL = "--auto-install" in sys.argv
 HEADLESS_MODE = "--headless" in sys.argv
 TRUST_ALL = "--trust-all" in sys.argv
+TEST_MODE = os.environ.get("SHADOWAI_TESTING") == "1" or "PYTEST_CURRENT_TEST" in os.environ
 if AGENT_MODE:
     AIDEV_MODE = True
 
@@ -135,6 +137,7 @@ SSH_KEY_PREFIX = f"# Shadow {ENVIRONMENT} device:"
 # CLI Dispatch Logic
 if IMAGE_MODE:
     from shadow_bridge.cli import run_image_command
+
     # Locate the image CLI executable
     install_path = os.path.dirname(os.path.abspath(__file__))
     image_cli_path = os.path.join(install_path, "shadow-image-cli.exe")
@@ -143,34 +146,27 @@ if IMAGE_MODE:
 
 if VIDEO_MODE:
     from shadow_bridge.cli import run_video_command
+
     run_video_command(sys.argv[1:])
     sys.exit(0)
 
 if AUDIO_MODE:
     from shadow_bridge.cli import run_audio_command
+
     run_audio_command(sys.argv[1:])
     sys.exit(0)
 
 if ASSEMBLY_MODE:
     from shadow_bridge.cli import run_assembly_command
+
     run_assembly_command(sys.argv[1:])
     sys.exit(0)
 
 if BROWSER_MODE:
     from shadow_bridge.cli import run_browser_command
+
     run_browser_command(sys.argv[1:])
     sys.exit(0)
-
-
-
-
-
-
-
-
-
-
-
 
 
 def is_admin():
@@ -222,6 +218,7 @@ if (
     and not is_admin()
     and not WEB_SERVER_MODE
     and not (IMAGE_MODE or VIDEO_MODE or AUDIO_MODE or ASSEMBLY_MODE or BROWSER_MODE)
+    and not TEST_MODE
 ):
     print("ShadowBridge requires administrator privileges for SSH key installation.")
     print("Requesting elevation...")
@@ -281,17 +278,21 @@ if IS_WINDOWS:
 
 # Configuration
 DISCOVERY_PORT = 19283
-if ENVIRONMENT == "DEBUG": DISCOVERY_PORT = 19293
-elif ENVIRONMENT == "AIDEV": DISCOVERY_PORT = 19303
+if ENVIRONMENT == "DEBUG":
+    DISCOVERY_PORT = 19293
+elif ENVIRONMENT == "AIDEV":
+    DISCOVERY_PORT = 19303
 
 DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 # DATA_PORT, WEB_PORT, COMPANION_PORT are set above based on environment
 NOTE_CONTENT_PORT = 19285
-if ENVIRONMENT == "DEBUG": NOTE_CONTENT_PORT = 19295
-elif ENVIRONMENT == "AIDEV": NOTE_CONTENT_PORT = 19305
+if ENVIRONMENT == "DEBUG":
+    NOTE_CONTENT_PORT = 19295
+elif ENVIRONMENT == "AIDEV":
+    NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.131"
+APP_VERSION = "1.153"
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
@@ -491,7 +492,8 @@ def get_all_ips():
     global _cached_all_ips, _last_ips_refresh
 
     now = time.time()
-    if _cached_all_ips and (now - _last_ips_refresh < 30):
+    # Reduced from 30s to 10s for more responsive IP changes on dynamic networks
+    if _cached_all_ips and (now - _last_ips_refresh < 10):
         return _cached_all_ips
 
     ips = {
@@ -526,13 +528,14 @@ def get_all_ips():
                 ips["local"].append(ip)
             else:
                 ips["other"].append(ip)
-    except Exception:
-        pass
+        log.debug(f"get_all_ips: Found {len(all_ips)} IPs via getaddrinfo")
+    except Exception as e:
+        log.warning(f"get_all_ips: getaddrinfo failed: {e}")
 
-    # Also try the socket method for primary IP
+    # Also try socket method for primary IP
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(1.0)
+        s.settimeout(0.2)  # Fast response timeout
         s.connect(("8.8.8.8", 80))
         primary_ip = s.getsockname()[0]
         s.close()
@@ -550,10 +553,12 @@ def get_all_ips():
                 or primary_ip.startswith("172.")
             ):
                 ips["local"].insert(0, primary_ip)
+                log.debug(f"get_all_ips: Primary LAN IP detected: {primary_ip}")
             else:
                 ips["other"].insert(0, primary_ip)
-    except Exception:
-        pass
+                log.debug(f"get_all_ips: Primary other IP detected: {primary_ip}")
+    except Exception as e:
+        log.warning(f"get_all_ips: UDP socket detection failed: {e}")
 
     _cached_all_ips = ips
     _last_ips_refresh = now
@@ -563,7 +568,7 @@ def get_all_ips():
 def get_local_ip(wait=False):
     """Get primary local IP address - non-blocking cached version unless wait=True."""
     global _cached_local_ip
-    
+
     if _cached_local_ip and _cached_local_ip != "Detecting...":
         return _cached_local_ip
 
@@ -574,17 +579,21 @@ def get_local_ip(wait=False):
         def detect():
             global _cached_local_ip
             candidate_ip = None
-            
+
             try:
                 # 1. Prefer IPv4 Route (Best for legacy SSH/QR codes)
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    s.settimeout(1.0)
+                    s.settimeout(0.2)  # Reduced from 1.0s for faster response
                     s.connect(("8.8.8.8", 80))
                     ip = s.getsockname()[0]
                     s.close()
                     # Prioritize LAN over Tailscale for the primary displayed IP
-                    if not ip.startswith("127.") and not ip.startswith("169.254.") and not ip.startswith("100."):
+                    if (
+                        not ip.startswith("127.")
+                        and not ip.startswith("169.254.")
+                        and not ip.startswith("100.")
+                    ):
                         candidate_ip = ip
                 except Exception:
                     pass
@@ -599,7 +608,7 @@ def get_local_ip(wait=False):
                 if not candidate_ip:
                     try:
                         s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-                        s.settimeout(1.0)
+                        s.settimeout(0.2)  # Reduced from 1.0s for faster response
                         s.connect(("2001:4860:4860::8888", 80))
                         ip = s.getsockname()[0]
                         s.close()
@@ -614,23 +623,27 @@ def get_local_ip(wait=False):
                     try:
                         hostname = socket.gethostname()
                         # AF_UNSPEC gets both v4 and v6
-                        all_ips = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-                        
+                        all_ips = socket.getaddrinfo(
+                            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+                        )
+
                         ipv4_candidates = []
                         ipv6_candidates = []
 
                         for item in all_ips:
                             ip = item[4][0]
                             # Skip loopback
-                            if ip.startswith("127.") or ip == "::1": continue
+                            if ip.startswith("127.") or ip == "::1":
+                                continue
                             # Skip APIPA
-                            if ip.startswith("169.254."): continue
-                            
-                            if ":" in ip: # IPv6
+                            if ip.startswith("169.254."):
+                                continue
+
+                            if ":" in ip:  # IPv6
                                 ipv6_candidates.append(ip)
-                            else: # IPv4
+                            else:  # IPv4
                                 ipv4_candidates.append(ip)
-                        
+
                         # Preference logic:
                         # 1. 192.168.x.x (Standard Home)
                         # 2. 10.x.x.x (Corporate/VPN)
@@ -638,30 +651,47 @@ def get_local_ip(wait=False):
                         # 4. Global IPv6
                         # 5. Tailscale (100.x.x.x)
                         # 6. Other IPv4
-                        
-                        prio_192 = [i for i in ipv4_candidates if i.startswith("192.168.")]
-                        prio_10 = [i for i in ipv4_candidates if i.startswith("10.") and not i.startswith("100.")]
+
+                        prio_192 = [
+                            i for i in ipv4_candidates if i.startswith("192.168.")
+                        ]
+                        prio_10 = [
+                            i
+                            for i in ipv4_candidates
+                            if i.startswith("10.") and not i.startswith("100.")
+                        ]
                         prio_172 = [i for i in ipv4_candidates if i.startswith("172.")]
                         prio_ts = [i for i in ipv4_candidates if i.startswith("100.")]
-                        
-                        if prio_192: candidate_ip = prio_192[0]
-                        elif prio_10: candidate_ip = prio_10[0]
-                        elif ipv6_candidates: 
-                            global_v6 = [i for i in ipv6_candidates if not i.startswith("fe80:")]
-                            candidate_ip = global_v6[0] if global_v6 else ipv6_candidates[0]
-                        elif prio_172: candidate_ip = prio_172[0]
-                        elif prio_ts: candidate_ip = prio_ts[0]
-                        elif ipv4_candidates: candidate_ip = ipv4_candidates[0]
-                        
+
+                        if prio_192:
+                            candidate_ip = prio_192[0]
+                        elif prio_10:
+                            candidate_ip = prio_10[0]
+                        elif ipv6_candidates:
+                            global_v6 = [
+                                i for i in ipv6_candidates if not i.startswith("fe80:")
+                            ]
+                            candidate_ip = (
+                                global_v6[0] if global_v6 else ipv6_candidates[0]
+                            )
+                        elif prio_172:
+                            candidate_ip = prio_172[0]
+                        elif prio_ts:
+                            candidate_ip = prio_ts[0]
+                        elif ipv4_candidates:
+                            candidate_ip = ipv4_candidates[0]
+
                     except Exception:
                         pass
 
                 # 5. Final Fallback
                 if not candidate_ip:
                     candidate_ip = "127.0.0.1"
-                
+
                 _cached_local_ip = candidate_ip
-                log.info(f"Detected primary Local IP (LAN prioritized): {_cached_local_ip}")
+                log.info(
+                    f"Detected primary Local IP (LAN prioritized): {_cached_local_ip}"
+                )
 
             except Exception as e:
                 log.error(f"IP detection failed: {e}")
@@ -675,7 +705,7 @@ def get_local_ip(wait=False):
             threading.Thread(target=detect, daemon=True).start()
 
     if wait and (not _cached_local_ip or _cached_local_ip == "Detecting..."):
-         pass
+        pass
 
     return _cached_local_ip
 
@@ -713,7 +743,7 @@ def get_tailscale_ip():
                     ["tailscale", "ip", "-4"],
                     capture_output=True,
                     text=True,
-                    timeout=2,  # Shorter timeout
+                    timeout=0.3,  # Reduced from 0.5s to 0.3s for faster response
                     creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
                 )
                 if result.returncode == 0:
@@ -727,8 +757,8 @@ def get_tailscale_ip():
 
             # If we get here, detection failed
             _cached_tailscale_ip = None
-            # Reset detecting flag after some time to allow retry
-            time.sleep(60)
+            # Reset detecting flag after some time to allow retry (increased from 60s to 120s)
+            time.sleep(120)
             delattr(get_tailscale_ip, "_detecting")
 
         threading.Thread(target=detect, daemon=True).start()
@@ -798,7 +828,9 @@ def find_ssh_port():
                 common_ports = [22, 2222, 2269, 22022, 8022]
                 for port in common_ports:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(0.1)  # Fast check
+                    sock.settimeout(
+                        0.02
+                    )  # Reduced from 0.05s to 0.02s for faster response
                     try:
                         if sock.connect_ex(("127.0.0.1", port)) == 0:
                             sock.close()
@@ -831,7 +863,9 @@ def find_ssh_port():
                                             sock = socket.socket(
                                                 socket.AF_INET, socket.SOCK_STREAM
                                             )
-                                            sock.settimeout(0.1)
+                                            sock.settimeout(
+                                                0.05
+                                            )  # Reduced from 0.1s to 0.05s for faster response
                                             if (
                                                 sock.connect_ex(("127.0.0.1", port))
                                                 == 0
@@ -856,7 +890,7 @@ def find_ssh_port():
                         ["netstat", "-an"],
                         capture_output=True,
                         text=True,
-                        timeout=5,
+                        timeout=2,  # Reduced from 5s to 2s for faster response
                         startupinfo=startupinfo,
                     )
                     if result.returncode == 0:
@@ -876,7 +910,9 @@ def find_ssh_port():
                                             sock = socket.socket(
                                                 socket.AF_INET, socket.SOCK_STREAM
                                             )
-                                            sock.settimeout(0.1)
+                                            sock.settimeout(
+                                                0.05
+                                            )  # Reduced from 0.1s to 0.05s for faster response
                                             if (
                                                 sock.connect_ex(("127.0.0.1", port))
                                                 == 0
@@ -895,8 +931,8 @@ def find_ssh_port():
             finally:
                 if _cached_ssh_port == "Detecting...":
                     _cached_ssh_port = None
-                # Allow retry after some time
-                time.sleep(60)
+                # Allow retry after some time (increased from 60s to 120s)
+                time.sleep(120)
                 delattr(find_ssh_port, "_detecting")
 
         threading.Thread(target=detect, daemon=True).start()
@@ -913,8 +949,8 @@ def check_ssh_running(port=22):
     global _cached_ssh_status, _last_ssh_check_time
 
     now = time.time()
-    # Return cached value if it's fresh (last 15 seconds)
-    if _cached_ssh_status is not None and (now - _last_ssh_check_time < 15):
+    # Return cached value if it's fresh (increased from 15s to 30s to reduce checks)
+    if _cached_ssh_status is not None and (now - _last_ssh_check_time < 30):
         return _cached_ssh_status
 
     # Start background detection if not already running
@@ -924,7 +960,7 @@ def check_ssh_running(port=22):
         def detect():
             global _cached_ssh_status, _last_ssh_check_time
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1.0)
+            sock.settimeout(0.1)  # Reduced from 0.3s to 0.1s for faster response
             try:
                 result = sock.connect_ex(("127.0.0.1", port))
                 _cached_ssh_status = result == 0
@@ -1001,7 +1037,7 @@ def check_npm_installed():
             ["npm", "--version"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=3,  # Reduced from 10s to 3s for faster response
             creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
         )
         return result.returncode == 0
@@ -1095,7 +1131,7 @@ def check_winget_installed():
             ["winget", "--version"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=3,  # Reduced from 10s to 3s for faster response
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return result.returncode == 0
@@ -1114,7 +1150,11 @@ def check_python_pip_installed():
     for cmd in candidates:
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=10, creationflags=flags
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3,
+                creationflags=flags,  # Reduced from 10s to 3s
             )
             if result.returncode == 0:
                 return True
@@ -1174,7 +1214,7 @@ def check_tool_installed(tool_name):
                 [cmd, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=3,  # Reduced from 10s to 3s for faster fallback checks
                 creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
             )
             if result.returncode == 0:
@@ -2236,7 +2276,9 @@ class DataReceiver(threading.Thread):
                             }
                             self._send_response(conn, response)
                         elif TRUST_ALL:
-                            log.info(f"TRUST_ALL enabled: auto-approving key from {device_name}")
+                            log.info(
+                                f"TRUST_ALL enabled: auto-approving key from {device_name}"
+                            )
                             result = self._install_ssh_key(public_key, device_name)
                             self._send_response(conn, result)
                         else:
@@ -2288,17 +2330,40 @@ class DataReceiver(threading.Thread):
                                 )
                         self._send_response(conn, response)
                     elif "agents" in payload:
-                        # Handle agents data
+                        # Handle agents data from Android device
                         self._save_agents(device_id, device_name, ip, payload["agents"])
-                        self._send_response(conn, {"success": True, "message": "Agents synced"})
+
+                        # Broadcast to WebSocket clients for real-time web dashboard updates
+                        try:
+                            from web.routes.websocket import broadcast_agents_updated
+                            broadcast_agents_updated(device_id)
+                        except Exception:
+                            pass
+
+                        # Build response with bridge-side agents for bidirectional sync
+                        response = {"success": True, "message": "Agents synced"}
+                        try:
+                            from web.services.agent_orchestrator import get_all_agents
+                            bridge_agents = get_all_agents()
+                            if bridge_agents:
+                                response["sync_to_device"] = {"agents": bridge_agents}
+                        except Exception:
+                            pass
+                        self._send_response(conn, response)
                     elif "tasks" in payload:
                         # Handle tasks data
                         self._save_tasks(device_id, device_name, ip, payload["tasks"])
-                        self._send_response(conn, {"success": True, "message": "Tasks synced"})
+                        self._send_response(
+                            conn, {"success": True, "message": "Tasks synced"}
+                        )
                     elif "automations" in payload:
                         # Handle automations data
-                        self._save_automations(device_id, device_name, ip, payload["automations"])
-                        self._send_response(conn, {"success": True, "message": "Automations synced"})
+                        self._save_automations(
+                            device_id, device_name, ip, payload["automations"]
+                        )
+                        self._send_response(
+                            conn, {"success": True, "message": "Automations synced"}
+                        )
                     elif "notes" in payload:
                         # Handle notes data (titles only, content fetched on-demand)
                         ip_candidates = payload.get("ip_candidates")
@@ -2867,18 +2932,21 @@ class DataReceiver(threading.Thread):
     def _save_agents(self, device_id, device_name, ip, agents):
         """Save per-device agents to local file."""
         try:
-            if not isinstance(agents, list): return
+            if not isinstance(agents, list):
+                return
             with self._storage_lock:
                 state = load_agents_state()
                 devices = state.get("devices", {})
                 device = devices.get(device_id, {})
-                device.update({
-                    "id": device_id,
-                    "name": device_name,
-                    "ip": ip,
-                    "last_seen": time.time(),
-                    "agents": agents
-                })
+                device.update(
+                    {
+                        "id": device_id,
+                        "name": device_name,
+                        "ip": ip,
+                        "last_seen": time.time(),
+                        "agents": agents,
+                    }
+                )
                 devices[device_id] = device
                 save_agents_state({"devices": devices})
                 log.info(f"Saved {len(agents)} agents for {device_name}")
@@ -2888,18 +2956,21 @@ class DataReceiver(threading.Thread):
     def _save_tasks(self, device_id, device_name, ip, tasks):
         """Save per-device tasks to local file."""
         try:
-            if not isinstance(tasks, list): return
+            if not isinstance(tasks, list):
+                return
             with self._storage_lock:
                 state = load_tasks_state()
                 devices = state.get("devices", {})
                 device = devices.get(device_id, {})
-                device.update({
-                    "id": device_id,
-                    "name": device_name,
-                    "ip": ip,
-                    "last_seen": time.time(),
-                    "tasks": tasks
-                })
+                device.update(
+                    {
+                        "id": device_id,
+                        "name": device_name,
+                        "ip": ip,
+                        "last_seen": time.time(),
+                        "tasks": tasks,
+                    }
+                )
                 devices[device_id] = device
                 save_tasks_state({"devices": devices})
                 log.info(f"Saved {len(tasks)} tasks for {device_name}")
@@ -2909,18 +2980,21 @@ class DataReceiver(threading.Thread):
     def _save_automations(self, device_id, device_name, ip, automations):
         """Save per-device automations to local file."""
         try:
-            if not isinstance(automations, list): return
+            if not isinstance(automations, list):
+                return
             with self._storage_lock:
                 state = load_automations_state()
                 devices = state.get("devices", {})
                 device = devices.get(device_id, {})
-                device.update({
-                    "id": device_id,
-                    "name": device_name,
-                    "ip": ip,
-                    "last_seen": time.time(),
-                    "automations": automations
-                })
+                device.update(
+                    {
+                        "id": device_id,
+                        "name": device_name,
+                        "ip": ip,
+                        "last_seen": time.time(),
+                        "automations": automations,
+                    }
+                )
                 devices[device_id] = device
                 save_automations_state({"devices": devices})
                 log.info(f"Saved {len(automations)} automations for {device_name}")
@@ -3075,6 +3149,7 @@ def save_notes_state(state):
     except Exception:
         pass
 
+
 def load_agents_state():
     """Load per-device agents state from local file."""
     try:
@@ -3083,17 +3158,25 @@ def load_agents_state():
                 data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("devices"), dict):
                     return data
-    except Exception: pass
+    except Exception:
+        pass
     return {"version": 1, "updated": 0.0, "devices": {}}
+
 
 def save_agents_state(state):
     """Persist per-device agents state to local file."""
     try:
         os.makedirs(os.path.dirname(AGENTS_FILE), exist_ok=True)
-        payload = {"version": 1, "updated": time.time(), "devices": state.get("devices", {})}
+        payload = {
+            "version": 1,
+            "updated": time.time(),
+            "devices": state.get("devices", {}),
+        }
         with open(AGENTS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception: pass
+    except Exception:
+        pass
+
 
 def load_tasks_state():
     """Load per-device tasks state from local file."""
@@ -3103,17 +3186,25 @@ def load_tasks_state():
                 data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("devices"), dict):
                     return data
-    except Exception: pass
+    except Exception:
+        pass
     return {"version": 1, "updated": 0.0, "devices": {}}
+
 
 def save_tasks_state(state):
     """Persist per-device tasks state to local file."""
     try:
         os.makedirs(os.path.dirname(TASKS_FILE), exist_ok=True)
-        payload = {"version": 1, "updated": time.time(), "devices": state.get("devices", {})}
+        payload = {
+            "version": 1,
+            "updated": time.time(),
+            "devices": state.get("devices", {}),
+        }
         with open(TASKS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception: pass
+    except Exception:
+        pass
+
 
 def load_automations_state():
     """Load per-device automations state from local file."""
@@ -3123,17 +3214,24 @@ def load_automations_state():
                 data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("devices"), dict):
                     return data
-    except Exception: pass
+    except Exception:
+        pass
     return {"version": 1, "updated": 0.0, "devices": {}}
+
 
 def save_automations_state(state):
     """Persist per-device automations state to local file."""
     try:
         os.makedirs(os.path.dirname(AUTOMATIONS_FILE), exist_ok=True)
-        payload = {"version": 1, "updated": time.time(), "devices": state.get("devices", {})}
+        payload = {
+            "version": 1,
+            "updated": time.time(),
+            "devices": state.get("devices", {}),
+        }
         with open(AUTOMATIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception: pass
+    except Exception:
+        pass
 
 
 def get_note_content_from_cache(note_id):
@@ -4295,13 +4393,58 @@ class DiscoveryServer(threading.Thread):
                 }
 
                 hostname = socket.gethostname()
-                # Wait for IP detection to ensure we register valid services
-                local_ip = get_local_ip(wait=True)
+                # Use non-blocking IP detection - returns cached value or starts background detection
+                # This prevents DiscoveryServer thread from blocking during startup
+                local_ip = get_local_ip(wait=False)
                 tailscale_ip = get_tailscale_ip()
                 ssh_port = self.connection_info.get("port", 22)
 
+                # If IPs are still detecting, schedule a delayed retry to register services later
+                if (
+                    not local_ip
+                    or local_ip == "Detecting..."
+                    or (
+                        tailscale_ip == "Detecting..."
+                        and local_ip not in ("Detecting...", "127.0.0.1", "0.0.0.0")
+                    )
+                ):
+                    # Defer service registration to background thread when IPs are detected
+                    def register_when_ready():
+                        time.sleep(2)  # Give IP detection time to complete
+                        local_ip = get_local_ip(wait=False)
+                        tailscale_ip = get_tailscale_ip()
+                        # Retry registration with updated IPs
+                        if self.zeroconf and self.running:
+                            try:
+                                if local_ip and local_ip not in (
+                                    "Detecting...",
+                                    "127.0.0.1",
+                                    "0.0.0.0",
+                                ):
+                                    info_local = ServiceInfo(
+                                        "_shadowai._tcp.local.",
+                                        f"{hostname} (Local)._shadowai._tcp.local.",
+                                        addresses=[socket.inet_aton(local_ip)],
+                                        port=ssh_port,
+                                        properties=desc,
+                                        server=f"{hostname}.local.",
+                                    )
+                                    self.zeroconf.register_service(info_local)
+                                    self.service_infos.append(info_local)
+                                    log.info(
+                                        f"[OK] mDNS service registered (Local): {local_ip}"
+                                    )
+                            except Exception as e:
+                                log.debug(f"Failed to register local mDNS: {e}")
+
+                    threading.Thread(target=register_when_ready, daemon=True).start()
+
                 # 1. Register Local IP
-                if local_ip and local_ip not in ("Detecting...", "127.0.0.1", "0.0.0.0"):
+                if local_ip and local_ip not in (
+                    "Detecting...",
+                    "127.0.0.1",
+                    "0.0.0.0",
+                ):
                     try:
                         info_local = ServiceInfo(
                             "_shadowai._tcp.local.",
@@ -4318,7 +4461,11 @@ class DiscoveryServer(threading.Thread):
                         log.debug(f"Failed to register local mDNS: {e}")
 
                 # Register Tailscale IP if available
-                if tailscale_ip and tailscale_ip not in ("Detecting...", "127.0.0.1", "0.0.0.0"):
+                if tailscale_ip and tailscale_ip not in (
+                    "Detecting...",
+                    "127.0.0.1",
+                    "0.0.0.0",
+                ):
                     try:
                         info_ts = ServiceInfo(
                             "_shadowai._tcp.local.",
@@ -4375,9 +4522,11 @@ class DiscoveryServer(threading.Thread):
                 try:
                     # Refresh info before broadcasting
                     info = self.connection_info
-                    if self.app_instance and hasattr(self.app_instance, "get_connection_info"):
+                    if self.app_instance and hasattr(
+                        self.app_instance, "get_connection_info"
+                    ):
                         info = self.app_instance.get_connection_info()
-                    
+
                     # Broadcast to LAN
                     msg = DISCOVERY_MAGIC + json.dumps(info).encode()
                     broadcast_sock.sendto(msg, ("255.255.255.255", DISCOVERY_PORT))
@@ -4395,17 +4544,19 @@ class DiscoveryServer(threading.Thread):
                     if data.startswith(DISCOVERY_MAGIC):
                         # Refresh info before responding to ensure IPs are current with LAN priority
                         fresh_info = self.connection_info
-                        if self.app_instance and hasattr(self.app_instance, "get_connection_info"):
+                        if self.app_instance and hasattr(
+                            self.app_instance, "get_connection_info"
+                        ):
                             fresh_info = self.app_instance.get_connection_info()
 
                         # Log discovery response with IP count for debugging
                         num_hosts = len(fresh_info.get("hosts", []))
                         primary = fresh_info.get("host", "N/A")
-                        log.debug(f"Discovery response to {addr[0]}: {num_hosts} IPs (primary: {primary})")
-
-                        response = (
-                            DISCOVERY_MAGIC + json.dumps(fresh_info).encode()
+                        log.debug(
+                            f"Discovery response to {addr[0]}: {num_hosts} IPs (primary: {primary})"
                         )
+
+                        response = DISCOVERY_MAGIC + json.dumps(fresh_info).encode()
                         self.sock.sendto(response, addr)
                 except socket.timeout:
                     continue
@@ -4698,7 +4849,7 @@ class ShadowBridgeApp:
             self.setup_styles()
             log.info("[OK] Styles setup completed successfully")
         except Exception as e:
-            log.error(f"✗ Failed to setup styles: {e}", exc_info=True)
+            log.error(f"âœ— Failed to setup styles: {e}", exc_info=True)
 
         # Initialize Threading Primitives
         self._web_dashboard_monitor_stop_event = threading.Event()
@@ -4713,7 +4864,7 @@ class ShadowBridgeApp:
             self.create_widgets()
             log.info("[OK] Widgets created successfully")
         except Exception as e:
-            log.critical(f"✗ FATAL: Failed to create widgets: {e}", exc_info=True)
+            log.critical(f"âœ— FATAL: Failed to create widgets: {e}", exc_info=True)
             raise
 
         # Set window size and position (load saved state or default to bottom right)
@@ -4748,7 +4899,7 @@ class ShadowBridgeApp:
         """Check for missing essential tools and auto-install them."""
         log.info("Checking for essential tools to auto-install...")
         essential_tools = ["claude", "gemini"]
-        
+
         for tool_id in essential_tools:
             if not check_tool_installed(tool_id):
                 log.info(f"Auto-installing missing essential tool: {tool_id}")
@@ -4885,7 +5036,7 @@ class ShadowBridgeApp:
             )
             log.info("[OK] Secondary button styles configured")
         except Exception as e:
-            log.error(f"✗ Failed to configure secondary button styles: {e}")
+            log.error(f"âœ— Failed to configure secondary button styles: {e}")
 
         # Scrollbar styling
         try:
@@ -4908,7 +5059,7 @@ class ShadowBridgeApp:
             )
             log.info("[OK] Scrollbar styles configured")
         except Exception as e:
-            log.error(f"✗ Failed to configure scrollbar styles: {e}")
+            log.error(f"âœ— Failed to configure scrollbar styles: {e}")
 
         log.info("[OK] setup_styles() completed")
 
@@ -4962,7 +5113,7 @@ class ShadowBridgeApp:
 
             log.info("[OK] Scrollable main container created")
         except Exception as e:
-            log.error(f"✗ Failed to create scrollable container: {e}", exc_info=True)
+            log.error(f"âœ— Failed to create scrollable container: {e}", exc_info=True)
             raise
 
         # Header with title
@@ -5069,7 +5220,7 @@ class ShadowBridgeApp:
 
         self.broadcast_status_label = tk.Label(
             status_stack,
-            text="● Broadcasting",
+            text="â— Broadcasting",
             bg=COLORS["bg_surface"],
             fg=COLORS["success"],
             font=("Segoe UI", 8, "bold"),
@@ -5614,29 +5765,66 @@ class ShadowBridgeApp:
     def update_status(self):
         """Update status indicators."""
         try:
+            # Early return optimization: skip if nothing changed since last update
+            # This reduces unnecessary UI updates and CPU usage
+            if hasattr(self, "_last_update_state"):
+                all_ips = get_all_ips()
+                local_ips = all_ips.get("local", [])
+                tailscale_ip = get_tailscale_ip()
+                ssh_ok = check_ssh_running(
+                    self.ssh_port if isinstance(self.ssh_port, int) else 22
+                )
+                now = time.time()
+                active_devices = [
+                    d
+                    for d in (self.devices or {}).values()
+                    if now - float(d.get("last_seen", 0) or 0) < 300
+                ]
+                ip_display = "\n".join([f"LAN: {local_ips[0]}"] if local_ips else [])
+                if tailscale_ip:
+                    ip_display += f"\nTailscale: {tailscale_ip}"
+                elif globals().get("_cached_tailscale_ip") == "Detecting...":
+                    ip_display += "\nTailscale: Detecting..."
+                else:
+                    ip_display = "Scanning..."
+
+                # Check if state matches last update
+                current_state = {
+                    "ssh_ok": ssh_ok,
+                    "ip_display": ip_display,
+                    "active_device_count": len(active_devices),
+                    "is_broadcasting": self.is_broadcasting,
+                }
+                if current_state == self._last_update_state:
+                    # Nothing changed, skip this update cycle
+                    self.root.after(10000, self.update_status)
+                    return
+
             # Handle port as string or integer safely
             try:
                 test_port = int(self.ssh_port) if str(self.ssh_port).isdigit() else 22
             except (ValueError, TypeError):
                 test_port = 22
-                
+
             ssh_ok = check_ssh_running(test_port)
 
             # Update IP label - show LAN and Tailscale IPs
             all_ips = get_all_ips()
             local_ips = all_ips.get("local", [])
             tailscale_ip = get_tailscale_ip()
-            
+
             display_parts = []
             if local_ips:
                 display_parts.append(f"LAN: {local_ips[0]}")
-            
+
             if tailscale_ip:
                 display_parts.append(f"Tailscale: {tailscale_ip}")
             elif globals().get("_cached_tailscale_ip") == "Detecting...":
                 display_parts.append("Tailscale: Detecting...")
-                
-            current_display = "\n".join(display_parts) if display_parts else "Scanning..."
+
+            current_display = (
+                "\n".join(display_parts) if display_parts else "Scanning..."
+            )
 
             if hasattr(self, "ip_label"):
                 ip_text = self.ip_label.cget("text")
@@ -5669,7 +5857,9 @@ class ShadowBridgeApp:
                             name = dev_id
                             status = info.get("status", {})
                             if status and isinstance(status, dict):
-                                name = status.get("device_name", status.get("name", dev_id))
+                                name = status.get(
+                                    "device_name", status.get("name", dev_id)
+                                )
 
                             current_dev.update(
                                 {
@@ -5694,23 +5884,42 @@ class ShadowBridgeApp:
             if hasattr(self, "broadcast_status_label"):
                 if active_devices:
                     self.broadcast_status_label.configure(
-                        text=f"● {len(active_devices)} Connected", fg=COLORS["success"]
+                        text=f"â— {len(active_devices)} Connected", fg=COLORS["success"]
                     )
                 elif self.is_broadcasting and ssh_ok:
                     self.broadcast_status_label.configure(
-                        text="● Broadcasting", fg=COLORS["success"]
+                        text="â— Broadcasting", fg=COLORS["success"]
                     )
                 elif ssh_ok:
                     self.broadcast_status_label.configure(
-                        text="● Ready", fg=COLORS["warning"]
+                        text="â— Ready", fg=COLORS["warning"]
                     )
                 else:
                     self.broadcast_status_label.configure(
-                        text="● No SSH", fg=COLORS["error"]
+                        text="â— No SSH", fg=COLORS["error"]
                     )
 
             # Update connected devices display - only refresh periodically to reduce CPU usage
             self.refresh_connected_devices_ui()
+
+            # Save state for early return optimization in next update cycle
+            all_ips = get_all_ips()
+            local_ips = all_ips.get("local", [])
+            tailscale_ip = get_tailscale_ip()
+            ip_display = "\n".join([f"LAN: {local_ips[0]}"] if local_ips else [])
+            if tailscale_ip:
+                ip_display += f"\nTailscale: {tailscale_ip}"
+            elif globals().get("_cached_tailscale_ip") == "Detecting...":
+                ip_display += "\nTailscale: Detecting..."
+            else:
+                ip_display = "Scanning..."
+
+            self._last_update_state = {
+                "ssh_ok": ssh_ok,
+                "ip_display": ip_display,
+                "active_device_count": len(active_devices),
+                "is_broadcasting": self.is_broadcasting,
+            }
         except Exception as e:
             log.error(f"Error in update_status loop: {e}", exc_info=True)
 
@@ -5910,7 +6119,13 @@ class ShadowBridgeApp:
         for ip in all_ips.get("local", []):
             if ip and not ip.startswith("127."):
                 hosts_to_try.append(
-                    {"host": ip, "type": "local", "stable": False, "label": "LAN", "priority": 1}
+                    {
+                        "host": ip,
+                        "type": "local",
+                        "stable": False,
+                        "label": "LAN",
+                        "priority": 1,
+                    }
                 )
 
         # Priority 2: Tailscale IPs (Cross-network VPN - works anywhere but slower)
@@ -5928,13 +6143,25 @@ class ShadowBridgeApp:
         # Priority 3: VPN IPs (OpenVPN, WireGuard, etc.)
         for ip in all_ips.get("vpn", []):
             hosts_to_try.append(
-                {"host": ip, "type": "vpn", "stable": False, "label": "VPN", "priority": 3}
+                {
+                    "host": ip,
+                    "type": "vpn",
+                    "stable": False,
+                    "label": "VPN",
+                    "priority": 3,
+                }
             )
 
         # Priority 4: Other IPs (Public or unknown)
         for ip in all_ips.get("other", []):
             hosts_to_try.append(
-                {"host": ip, "type": "other", "stable": False, "label": "Other", "priority": 4}
+                {
+                    "host": ip,
+                    "type": "other",
+                    "stable": False,
+                    "label": "Other",
+                    "priority": 4,
+                }
             )
 
         # Primary host (best available - PREFER LAN, Tailscale as fallback)
@@ -5943,8 +6170,12 @@ class ShadowBridgeApp:
 
         # Log multi-IP advertising for debugging
         if hosts_to_try:
-            ip_summary = ", ".join([f"{h['label']}:{h['host']}" for h in hosts_to_try[:4]])
-            log.debug(f"Advertising {len(hosts_to_try)} IPs (primary: {primary_host}): {ip_summary}")
+            ip_summary = ", ".join(
+                [f"{h['label']}:{h['host']}" for h in hosts_to_try[:4]]
+            )
+            log.debug(
+                f"Advertising {len(hosts_to_try)} IPs (primary: {primary_host}): {ip_summary}"
+            )
 
         return {
             "type": "shadowai_connect",
@@ -5952,7 +6183,7 @@ class ShadowBridgeApp:
             "mode": mode,
             "host": primary_host,  # Primary for QR display (LAN preferred)
             "port": self.ssh_port,
-            "data_port": DATA_PORT, # Port for key exchange and data sync
+            "data_port": DATA_PORT,  # Port for key exchange and data sync
             "username": get_username(),
             "hostname": socket.gethostname(),
             "hostname_local": hostname_local,
@@ -6336,7 +6567,9 @@ class ShadowBridgeApp:
                 # Ensure firewall rule exists for discovery (blocking subprocess)
                 setup_firewall_rule()
 
-                self.discovery_server = DiscoveryServer(self.get_connection_info(), app_instance=self)
+                self.discovery_server = DiscoveryServer(
+                    self.get_connection_info(), app_instance=self
+                )
                 self.discovery_server.start()
                 self.is_broadcasting = True
 
@@ -6344,7 +6577,7 @@ class ShadowBridgeApp:
                 self.root.after(
                     0,
                     lambda: self.broadcast_status_label.configure(
-                        text="● Broadcasting", fg=COLORS["success"]
+                        text="â— Broadcasting", fg=COLORS["success"]
                     )
                     if hasattr(self, "broadcast_status_label")
                     else None,
@@ -6368,7 +6601,7 @@ class ShadowBridgeApp:
                 self.root.after(
                     0,
                     lambda: self.broadcast_status_label.configure(
-                        text="● Broadcast Failed", fg=COLORS["error"]
+                        text="â— Broadcast Failed", fg=COLORS["error"]
                     )
                     if hasattr(self, "broadcast_status_label")
                     else None,
@@ -6391,12 +6624,14 @@ class ShadowBridgeApp:
         """Internal method to create new DiscoveryServer thread for watchdog restart."""
         try:
             setup_firewall_rule()
-            self.discovery_server = DiscoveryServer(self.get_connection_info(), app_instance=self)
+            self.discovery_server = DiscoveryServer(
+                self.get_connection_info(), app_instance=self
+            )
             self.discovery_server.start()
             self.is_broadcasting = True
             if hasattr(self, "broadcast_status_label"):
                 self.broadcast_status_label.configure(
-                    text="● Broadcasting", fg=COLORS["success"]
+                    text="â— Broadcasting", fg=COLORS["success"]
                 )
             log.info(f"DiscoveryServer restarted by watchdog")
             return self.discovery_server
@@ -6405,7 +6640,7 @@ class ShadowBridgeApp:
             self.is_broadcasting = False
             if hasattr(self, "broadcast_status_label"):
                 self.broadcast_status_label.configure(
-                    text="● Broadcast Failed", fg=COLORS["error"]
+                    text="â— Broadcast Failed", fg=COLORS["error"]
                 )
             return None
 
@@ -6418,7 +6653,7 @@ class ShadowBridgeApp:
         # Update status label
         if hasattr(self, "broadcast_status_label"):
             self.broadcast_status_label.configure(
-                text="● Stopped", fg=COLORS["text_muted"]
+                text="â— Stopped", fg=COLORS["text_muted"]
             )
 
     def install_tool(self, tool_id, name, spec):
@@ -7024,6 +7259,7 @@ Or run in PowerShell (Admin):
             # Also trigger celebration in web dashboard
             try:
                 from web.routes.websocket import broadcast_celebrate
+
                 broadcast_celebrate("Connected from ShadowAI!")
             except Exception as web_err:
                 log.debug(f"Web celebration not available: {web_err}")
@@ -7146,9 +7382,9 @@ Or run in PowerShell (Admin):
         device = active[0]
         name = device.get("name") or device.get("id") or "Unknown"
         if len(active) > 1:
-            new_text = f"● {name} +{len(active) - 1}"
+            new_text = f"â— {name} +{len(active) - 1}"
         else:
-            new_text = f"● {name}"
+            new_text = f"â— {name}"
 
         current_text = self.connected_device_label.cget("text")
         if current_text != new_text:
@@ -7361,6 +7597,7 @@ Or run in PowerShell (Admin):
                         winsound.Beep(1047, 200)  # C6 - triumphant finish
                     except Exception:
                         pass
+
                 threading.Thread(target=play_success_sound, daemon=True).start()
 
             # Create celebration overlay window
@@ -7385,10 +7622,10 @@ Or run in PowerShell (Admin):
             # Big checkmark
             checkmark_label = tk.Label(
                 celebration,
-                text="✓",
+                text="âœ“",
                 font=("Segoe UI", 72, "bold"),
                 fg="white",
-                bg="#10B981"
+                bg="#10B981",
             )
             checkmark_label.pack(expand=True)
 
@@ -7398,7 +7635,7 @@ Or run in PowerShell (Admin):
                 text=f"{device_name} Connected!",
                 font=("Segoe UI", 14, "bold"),
                 fg="white",
-                bg="#10B981"
+                bg="#10B981",
             )
             name_label.pack(pady=(0, 20))
 
@@ -7418,7 +7655,7 @@ Or run in PowerShell (Admin):
             log.error(f"Error showing success celebration: {e}")
             # Fallback to simple messagebox
             messagebox.showinfo(
-                "✓ Connected!",
+                "âœ“ Connected!",
                 f"SSH key installed for {device_name}",
                 parent=self.root,
             )
@@ -7908,7 +8145,7 @@ Or run in PowerShell (Admin):
         # Expand indicator
         expand_label = tk.Label(
             header,
-            text="▶",
+            text="â–¶",
             bg=COLORS["bg_input"],
             fg=COLORS["text_dim"],
             font=("Segoe UI", 8),
@@ -8072,12 +8309,12 @@ Or run in PowerShell (Admin):
             if card._is_expanded:
                 # Collapse
                 content_frame.pack_forget()
-                expand_label.configure(text="▶")
+                expand_label.configure(text="â–¶")
                 card._is_expanded = False
             else:
                 # Expand
                 content_frame.pack(fill=tk.X, pady=(6, 0))
-                expand_label.configure(text="▼")
+                expand_label.configure(text="â–¼")
                 card._is_expanded = True
 
                 # Load content if not already loaded
@@ -8471,9 +8708,11 @@ def run_web_dashboard_server(open_browser: bool):
     """Run the web dashboard server (used by the --web-server mode)."""
     # Single-instance check using dynamic lock port
     web_lock_port = 6766
-    if ENVIRONMENT == "DEBUG": web_lock_port = 6776
-    elif ENVIRONMENT == "AIDEV": web_lock_port = 6786
-    
+    if ENVIRONMENT == "DEBUG":
+        web_lock_port = 6776
+    elif ENVIRONMENT == "AIDEV":
+        web_lock_port = 6786
+
     lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         lock_socket.bind(("127.0.0.1", web_lock_port))
@@ -8495,11 +8734,18 @@ def run_web_dashboard_server(open_browser: bool):
         def is_port_in_use(port):
             """Check if a port is already bound by another process."""
             import socket
+
             test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)  # Don't reuse
-            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)  # Windows: exclusive bind
+            test_sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_REUSEADDR, 0
+            )  # Don't reuse
+            test_sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1
+            )  # Windows: exclusive bind
             try:
-                test_sock.bind(("0.0.0.0", port))  # Use 0.0.0.0 to match main GUI's bind
+                test_sock.bind(
+                    ("0.0.0.0", port)
+                )  # Use 0.0.0.0 to match main GUI's bind
                 test_sock.close()
                 return False  # Port is free
             except OSError:
@@ -8515,11 +8761,15 @@ def run_web_dashboard_server(open_browser: bool):
         data_receiver_ref = [None]
 
         if is_port_in_use(DATA_PORT):
-            log.info(f"Port {DATA_PORT} already in use - main GUI is handling key exchanges")
+            log.info(
+                f"Port {DATA_PORT} already in use - main GUI is handling key exchanges"
+            )
             log.info("Skipping DataReceiver in web-server mode to avoid conflicts")
         else:
             # CRITICAL FIX: Start DataReceiver and Discovery server for SSH key exchange
-            log.info("Starting DataReceiver for key exchange in web-server mode (headless)...")
+            log.info(
+                "Starting DataReceiver for key exchange in web-server mode (headless)..."
+            )
 
             def headless_key_approval(device_id, device_name, ip):
                 """Auto-approve SSH keys in headless mode (web-server only)."""
@@ -8662,6 +8912,12 @@ def run_web_dashboard_server(open_browser: bool):
             thread.start()
 
         app = create_app()
+        try:
+            from web.services.scheduler_service import get_scheduler
+
+            get_scheduler().start()
+        except Exception as e:
+            log.error(f"Failed to start scheduler: {e}")
 
         # Use socketio.run if available, otherwise fall back to Flask's app.run
         if getattr(app, "socketio_enabled", False) and socketio is not None:
@@ -8696,10 +8952,10 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    
+
     error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     log.critical(f"Unhandled exception:\n{error_msg}")
-    
+
     # Save to desktop for easy retrieval
     try:
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -8707,29 +8963,36 @@ def handle_exception(exc_type, exc_value, exc_traceback):
             f.write(f"\n--- {datetime.now()} ---\n{error_msg}\n")
     except Exception:
         pass
-    
+
     # Also show a non-blocking messagebox if possible
     try:
         import tkinter.messagebox as messagebox
+
         # Try to use the existing root if available
         parent = None
-        if "_app_instance" in globals() and _app_instance and hasattr(_app_instance, "root"):
+        if (
+            "_app_instance" in globals()
+            and _app_instance
+            and hasattr(_app_instance, "root")
+        ):
             parent = _app_instance.root
-            
+
         messagebox.showerror(
-            "ShadowBridge Error", 
+            "ShadowBridge Error",
             f"An unhandled error occurred:\n\n{exc_value}\n\nSee shadow_error.log on your desktop.",
-            parent=parent
+            parent=parent,
         )
     except Exception:
         pass
 
+
 sys.excepthook = handle_exception
+
 
 def main():
     """Main entry point."""
     global DEBUG_BUILD, AIDEV_MODE, AGENT_MODE, _single_instance
-    
+
     # Refresh flags from current argv (in case they were modified or for clarity)
     DEBUG_BUILD = "--debug" in sys.argv
     AIDEV_MODE = "--aidev" in sys.argv
@@ -8740,9 +9003,11 @@ def main():
         if HAS_SINGLETON:
             lock_name = f"ShadowBridge{ENVIRONMENT}"
             instance_port = 19287
-            if ENVIRONMENT == "DEBUG": instance_port = 19297
-            elif ENVIRONMENT == "AIDEV": instance_port = 19307
-            
+            if ENVIRONMENT == "DEBUG":
+                instance_port = 19297
+            elif ENVIRONMENT == "AIDEV":
+                instance_port = 19307
+
             inst = SingleInstance(lock_name, port=instance_port)
             if not inst.acquire():
                 log.info("Sending ping to existing instance")
@@ -8779,22 +9044,22 @@ def main():
 
     if AGENT_MODE:
         log.info("Running in ShadowAgent mode (Headless)")
-        # Headless mode for AIDEV agents. 
+        # Headless mode for AIDEV agents.
         # Starts web server without browser and without tray GUI.
-        
+
         # Check for existing instance
         if HAS_SINGLETON:
             _single_instance = SingleInstance("ShadowBridgeAgent", port=19288)
             if not _single_instance.acquire():
                 log.info("Another ShadowAgent instance is already running.")
                 sys.exit(0)
-        
+
         # Register install path
         try:
             register_install_path()
         except Exception:
             pass
-            
+
         # Start web server (blocking)
         run_web_dashboard_server(open_browser=False)
         return
@@ -8806,21 +9071,27 @@ def main():
         # Use different lock names and ports for side-by-side instances
         lock_name = f"ShadowBridge{ENVIRONMENT}"
         instance_port = 19287
-        if ENVIRONMENT == "DEBUG": instance_port = 19297
-        elif ENVIRONMENT == "AIDEV": instance_port = 19307
-        
+        if ENVIRONMENT == "DEBUG":
+            instance_port = 19297
+        elif ENVIRONMENT == "AIDEV":
+            instance_port = 19307
+
         _single_instance = SingleInstance(lock_name, port=instance_port)
         if not _single_instance.acquire():
             # Another instance is already running
-            log.info(f"Another {ENVIRONMENT} instance is already running, requesting activation")
+            log.info(
+                f"Another {ENVIRONMENT} instance is already running, requesting activation"
+            )
             _single_instance.send_activate()
             sys.exit(0)
     else:
         # Fallback to simple socket check
         lock_port = 19287
-        if ENVIRONMENT == "DEBUG": lock_port = 19297
-        elif ENVIRONMENT == "AIDEV": lock_port = 19307
-        
+        if ENVIRONMENT == "DEBUG":
+            lock_port = 19297
+        elif ENVIRONMENT == "AIDEV":
+            lock_port = 19307
+
         lock_socket = check_single_instance(port=lock_port)
         if lock_socket is None:
             # Another instance is already running - try to show it
@@ -8853,6 +9124,7 @@ def main():
     log.info(f"ShadowBridge {ENVIRONMENT} initialized")
 
     if HAS_SINGLETON:
+
         def on_activate():
             """Called when another instance requests activation."""
             log.info(f"Received activation request for {ENVIRONMENT}")
