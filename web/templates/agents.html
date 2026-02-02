@@ -10,17 +10,6 @@
         <h2 class="overview-title">Overview</h2>
         <div class="autonomous-controls" id="autonomous-controls">
             <span class="autonomous-status-badge" id="auto-status-badge">STOPPED</span>
-            <select id="auto-provider" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;">
-                <option value="gemini">Gemini CLI</option>
-                <option value="claude">Claude CLI</option>
-                <option value="codex">Codex CLI</option>
-            </select>
-            <input id="auto-agent-count" type="number" min="1" max="200" value="5" style="width:50px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;text-align:center;" title="Agent count">
-            <select id="auto-focus" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;">
-                <option value="backend-polish">Backend Polish</option>
-                <option value="android-focus">Android Focus</option>
-                <option value="bridge-focus">Bridge Focus</option>
-            </select>
             <button class="btn btn-small btn-primary" id="auto-start-btn" onclick="autonomousStart()">
                 <span class="material-symbols-outlined">play_arrow</span>
                 Start
@@ -689,6 +678,25 @@
 .category-badge.error_handling { background: #ef4444; color: white; }
 .category-badge.performance { background: #06b6d4; color: #1a1a1a; }
 .category-badge.test_gap { background: #8b5cf6; color: white; }
+
+.scope-badge {
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 0.65rem;
+    font-weight: 500;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.task-file-path {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 .overview-cards {
     display: grid;
@@ -2719,9 +2727,10 @@ async function autonomousStart() {
     btn.disabled = true;
     btn.innerHTML = '<span class="material-symbols-outlined" style="animation:spin 1s linear infinite">autorenew</span> Starting...';
 
-    const provider = document.getElementById('auto-provider').value;
-    const count = parseInt(document.getElementById('auto-agent-count').value) || 5;
-    const focus = document.getElementById('auto-focus').value;
+    // Use sensible defaults - no UI config needed
+    const provider = 'gemini';
+    const count = 5;
+    const focus = 'backend-polish';
     const model = providerModels[provider] || 'gemini-3-flash-preview';
 
     try {
@@ -2732,7 +2741,7 @@ async function autonomousStart() {
         });
         const data = await resp.json();
         if (data.success) {
-            addActivityItem(`Autonomous loop started: ${count} ${provider} agents (${focus}), model=${model}`, 'success');
+            addActivityItem(`Autonomous loop started: ${count} agents`, 'success');
             updateAutonomousUI(data.status);
         } else {
             addActivityItem('Failed to start: ' + (data.error || 'Unknown error'), 'error');
@@ -2933,8 +2942,18 @@ function normalizeTaskStatus(task) {
     return 'pending';
 }
 
-function getTaskRepo(task) {
-    return (task.repo || task.project || task.project_id || task.repo_name || 'misc').toString();
+function getTaskCategory(task) {
+    const cat = (task.category || 'general').toString().toLowerCase();
+    const labels = {
+        'todo': 'TODOs & Improvements',
+        'error_handling': 'Error Handling',
+        'smell': 'Code Quality',
+        'code_smell': 'Code Quality',
+        'test_gap': 'Test Coverage',
+        'performance': 'Performance',
+        'general': 'General'
+    };
+    return labels[cat] || cat.charAt(0).toUpperCase() + cat.slice(1);
 }
 
 function getTaskPriority(task) {
@@ -2961,20 +2980,20 @@ function renderAutonomousTasks(tasks) {
 
     const grouped = {};
     filteredTasks.forEach(task => {
-        const repo = getTaskRepo(task);
-        if (!grouped[repo]) grouped[repo] = [];
-        grouped[repo].push(task);
+        const category = getTaskCategory(task);
+        if (!grouped[category]) grouped[category] = [];
+        grouped[category].push(task);
     });
 
-    const repos = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+    const categories = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
     let pendingCount = 0, progressCount = 0, completedCount = 0;
 
-    const sections = repos.map(repo => {
+    const sections = categories.map(cat => {
         const pending = [];
         const progress = [];
         const completed = [];
 
-        grouped[repo].forEach(task => {
+        grouped[cat].forEach(task => {
             const status = normalizeTaskStatus(task);
             const card = renderTaskCard(task);
             if (status === 'in_progress') {
@@ -2998,8 +3017,7 @@ function renderAutonomousTasks(tasks) {
             <div class="task-project">
                 <div class="task-project-header">
                     <div class="task-project-title">
-                        <h4>${escapeHtml(repo)}</h4>
-                        <div class="task-project-meta">${pending.length} pending | ${progress.length} in progress | ${completed.length} completed</div>
+                        <h4>${escapeHtml(cat)}</h4>
                     </div>
                 </div>
                 <div class="task-board task-board-compact">
@@ -3043,9 +3061,11 @@ function renderTaskCard(task) {
     const priorityClass = priority <= 2 ? 'priority-urgent' : (priority <= 3 ? 'priority-high' : '');
     const taskId = task.id || task.task_id || '';
     const category = task.category || 'todo';
-    const repo = getTaskRepo(task);
+    const scope = task.scope || 'small';
+    const filePath = task.file_path || '';
     const status = normalizeTaskStatus(task);
-    const build = buildSummaryByRepo[repo];
+    const repoKey = (task.repo || task.project || 'misc').toString();
+    const build = buildSummaryByRepo[repoKey];
     const buildSummary = build && status === 'completed'
         ? `
             <div class="task-build-summary ${build.success ? 'success' : 'failed'}">
@@ -3054,6 +3074,7 @@ function renderTaskCard(task) {
             </div>
         `
         : '';
+    const fileLabel = filePath ? `<span class="task-file-path" title="${escapeHtml(filePath)}">${escapeHtml(filePath.split('/').pop())}</span>` : '';
     return `
         <div class="task-card ${priorityClass}" id="task-${taskId}">
             <div class="task-card-header-row">
@@ -3064,7 +3085,8 @@ function renderTaskCard(task) {
             </div>
             <div class="task-card-footer">
                 <span class="category-badge ${category}">${category}</span>
-                <span>${escapeHtml(repo)}</span>
+                <span class="scope-badge">${scope}</span>
+                ${fileLabel}
             </div>
             ${buildSummary}
         </div>
