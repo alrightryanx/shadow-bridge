@@ -10,6 +10,17 @@
         <h2 class="overview-title">Overview</h2>
         <div class="autonomous-controls" id="autonomous-controls">
             <span class="autonomous-status-badge" id="auto-status-badge">STOPPED</span>
+            <select id="auto-provider" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;">
+                <option value="gemini">Gemini CLI</option>
+                <option value="claude">Claude CLI</option>
+                <option value="codex">Codex CLI</option>
+            </select>
+            <input id="auto-agent-count" type="number" min="1" max="200" value="5" style="width:50px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;text-align:center;" title="Agent count">
+            <select id="auto-focus" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;">
+                <option value="backend-polish">Backend Polish</option>
+                <option value="android-focus">Android Focus</option>
+                <option value="bridge-focus">Bridge Focus</option>
+            </select>
             <button class="btn btn-small btn-primary" id="auto-start-btn" onclick="autonomousStart()">
                 <span class="material-symbols-outlined">play_arrow</span>
                 Start
@@ -81,6 +92,17 @@
     </div>
 </section>
 
+<!-- Now Running Strip -->
+<section class="now-running">
+    <div class="now-running-header">
+        <h3>Now Running</h3>
+        <span class="now-running-meta" id="now-running-meta">0 active</span>
+    </div>
+    <div class="now-running-list" id="now-running-list">
+        <div class="empty-state-small">No active agents</div>
+    </div>
+</section>
+
 <!-- Main Tabs (Android App Style) -->
 <div class="main-tabs">
     <button class="tab-button active" data-tab="agents" onclick="switchMainTab('agents')">
@@ -90,26 +112,40 @@
     <button class="tab-button" data-tab="tasks" onclick="switchMainTab('tasks')">
         <span class="material-symbols-outlined">assignment</span>
         <span>Tasks</span>
+        <span class="tab-count" id="tab-count-tasks">0</span>
     </button>
     <button class="tab-button" data-tab="monitor" onclick="switchMainTab('monitor')">
         <span class="material-symbols-outlined">monitor_heart</span>
         <span>Monitor</span>
+        <span class="tab-count" id="tab-count-monitor">0</span>
     </button>
 </div>
 
 <!-- Agents Tab -->
 <div id="tab-agents" class="main-tab-content active">
     <div class="tab-header">
-        <h3>Active Agents</h3>
-        <div class="connection-status" id="ws-connection-status">
-            <span class="status-dot" id="ws-status-dot"></span>
-            <span class="status-text" id="ws-status-text">Connecting...</span>
+        <div class="tab-title-group">
+            <h3>Active Agents</h3>
+            <div class="connection-status" id="ws-connection-status">
+                <span class="status-dot" id="ws-status-dot"></span>
+                <span class="status-text" id="ws-status-text">Connecting...</span>
+            </div>
+        </div>
+        <div class="tab-actions">
+            <div class="search-field">
+                <span class="material-symbols-outlined">search</span>
+                <input type="search" id="agent-search" placeholder="Search agents...">
+            </div>
+            <button class="btn btn-secondary" onclick="openManageAgentsModal()">
+                <span class="material-symbols-outlined">tune</span>
+                Manage
+            </button>
         </div>
     </div>
 
-    <div class="agents-grid" id="agents-grid">
-        <!-- Inline Add Agent Card (Always First) -->
-        <div class="agent-card add-agent-card">
+    <div class="agents-list-vertical" id="agents-list">
+        <!-- Add Agent Card (Always First) -->
+        <div class="agent-card add-agent-card horizontal">
             <div class="agent-card-header">
                 <div class="agent-card-title">
                     <div class="agent-card-icon add-icon">
@@ -123,26 +159,33 @@
             </div>
 
             <div class="add-agent-form">
-                <div class="form-group-compact">
-                    <label class="form-label-compact">Agent Name</label>
-                    <input type="text" id="inline-agent-name" class="form-input-compact" placeholder="e.g., Code Reviewer" required>
-                    <div class="form-error" id="name-error"></div>
-                </div>
-                <div class="form-group-compact">
-                    <label class="form-label-compact">Specialty</label>
-                    <select id="inline-agent-specialty" class="form-select-compact">
-                        <option value="general">General Assistant</option>
-                        <option value="code_review">Code Review</option>
-                        <option value="testing">Testing</option>
-                        <option value="documentation">Documentation</option>
-                        <option value="refactoring">Refactoring</option>
-                        <option value="debugging">Debugging</option>
-                        <option value="performance">Performance Optimization</option>
-                        <option value="security">Security Analysis</option>
-                    </select>
+                <div class="form-row-compact">
+                    <div class="form-group-compact" style="flex: 1.5;">
+                        <label class="form-label-compact">Agent Name</label>
+                        <input type="text" id="inline-agent-name" class="form-input-compact" placeholder="e.g., Code Reviewer" required>
+                        <div class="form-error" id="name-error"></div>
+                    </div>
+                    <div class="form-group-compact" style="flex: 1;">
+                        <label class="form-label-compact">Specialty</label>
+                        <select id="inline-agent-specialty" class="form-select-compact">
+                            <option value="general">General Assistant</option>
+                            <option value="code_review">Code Review</option>
+                            <option value="testing">Testing</option>
+                            <option value="documentation">Documentation</option>
+                            <option value="refactoring">Refactoring</option>
+                            <option value="debugging">Debugging</option>
+                        </select>
+                    </div>
+                    <div class="form-group-compact" style="flex: 1.5;">
+                        <label class="form-label-compact">Project</label>
+                        <select id="inline-agent-project" class="form-select-compact" required>
+                            <option value="">Select project...</option>
+                        </select>
+                        <div class="form-error" id="project-error"></div>
+                    </div>
                 </div>
                 <div class="form-row-compact">
-                    <div class="form-group-compact">
+                    <div class="form-group-compact" style="flex: 1;">
                         <label class="form-label-compact">Provider</label>
                         <select id="inline-agent-provider" class="form-select-compact">
                             <option value="claude">Claude Code</option>
@@ -150,26 +193,18 @@
                             <option value="codex">Codex</option>
                         </select>
                     </div>
-                    <div class="form-group-compact">
+                    <div class="form-group-compact" style="flex: 1.5;">
                         <label class="form-label-compact">Model</label>
-                        <input type="text" id="inline-agent-model" class="form-input-compact" value="claude-sonnet-4-20250514" placeholder="Model name">
+                        <input type="text" id="inline-agent-model" class="form-input-compact" value="claude-sonnet-4-20250514">
+                    </div>
+                    <div class="form-group-compact" style="flex: 0 0 160px; justify-content: flex-end;">
+                        <button class="btn btn-primary btn-block" id="spawn-agent-btn" onclick="confirmSpawnAgent()" style="margin-bottom: 0;">
+                            <span class="material-symbols-outlined">rocket_launch</span>
+                            <span id="spawn-btn-text">Spawn</span>
+                        </button>
                     </div>
                 </div>
-                <div class="form-group-compact">
-                    <label class="form-label-compact">Project</label>
-                    <select id="inline-agent-project" class="form-select-compact" required>
-                        <option value="">Select project...</option>
-                    </select>
-                    <div class="form-error" id="project-error"></div>
-                </div>
                 <div class="form-status" id="spawn-status"></div>
-            </div>
-
-            <div class="agent-card-actions">
-                <button class="btn btn-primary btn-block" id="spawn-agent-btn" onclick="confirmSpawnAgent()">
-                    <span class="material-symbols-outlined">rocket_launch</span>
-                    <span id="spawn-btn-text">Spawn Agent</span>
-                </button>
             </div>
         </div>
     </div>
@@ -178,35 +213,43 @@
 <!-- Tasks Tab -->
 <div id="tab-tasks" class="main-tab-content">
     <div class="tab-header">
-        <h3>Tasks</h3>
-        <button class="btn btn-primary" onclick="showCreateTaskModal()">
-            <span class="material-symbols-outlined">add</span>
-            New Task
-        </button>
+        <div class="tab-title-group">
+            <h3>Tasks</h3>
+            <div class="tab-subtitle">Grouped by project</div>
+        </div>
+        <div class="tab-actions">
+            <div class="search-field">
+                <span class="material-symbols-outlined">search</span>
+                <input type="search" id="task-search" placeholder="Search tasks...">
+            </div>
+            <button class="btn btn-secondary" id="generate-tasks-btn" onclick="generateProjectTasks()">
+                <span class="material-symbols-outlined">auto_awesome</span>
+                Generate Tasks
+            </button>
+            <button class="btn btn-primary" onclick="showCreateTaskModal()">
+                <span class="material-symbols-outlined">add</span>
+                New Task
+            </button>
+        </div>
     </div>
 
-    <div class="task-board">
-        <div class="task-column">
-            <div class="task-column-header">
-                <h4>Pending</h4>
-                <span class="task-count" id="pending-count">0</span>
-            </div>
-            <div class="task-list" id="pending-tasks"></div>
+    <div class="task-summary-row">
+        <div class="task-summary-item">
+            <span class="task-summary-label">Pending</span>
+            <span class="task-count" id="pending-count">0</span>
         </div>
-        <div class="task-column">
-            <div class="task-column-header">
-                <h4>In Progress</h4>
-                <span class="task-count" id="progress-count">0</span>
-            </div>
-            <div class="task-list" id="progress-tasks"></div>
+        <div class="task-summary-item">
+            <span class="task-summary-label">In Progress</span>
+            <span class="task-count" id="progress-count">0</span>
         </div>
-        <div class="task-column">
-            <div class="task-column-header">
-                <h4>Completed</h4>
-                <span class="task-count" id="completed-count">0</span>
-            </div>
-            <div class="task-list" id="completed-tasks"></div>
+        <div class="task-summary-item">
+            <span class="task-summary-label">Completed</span>
+            <span class="task-count" id="completed-count">0</span>
         </div>
+    </div>
+
+    <div class="project-task-board" id="project-task-board">
+        <div class="empty-column">No tasks yet</div>
     </div>
 </div>
 
@@ -215,6 +258,10 @@
     <div class="tab-header">
         <h3>Activity Monitor</h3>
         <div class="monitor-controls">
+            <div class="search-field search-field-compact">
+                <span class="material-symbols-outlined">search</span>
+                <input type="search" id="monitor-search" placeholder="Search activity...">
+            </div>
             <span class="live-indicator">
                 <span class="pulse"></span>
                 LIVE
@@ -229,8 +276,61 @@
     <div class="monitor-grid">
         <div class="monitor-section">
             <h4>Activity Feed</h4>
+            <div class="activity-filters">
+                <div class="filter-group">
+                    <span class="filter-label">Severity</span>
+                    <div class="filter-chips" id="filter-severity">
+                        <button class="chip active" data-filter="all">All</button>
+                        <button class="chip" data-filter="info">Info</button>
+                        <button class="chip" data-filter="success">Success</button>
+                        <button class="chip" data-filter="warning">Warning</button>
+                        <button class="chip" data-filter="error">Error</button>
+                    </div>
+                </div>
+                <div class="filter-group">
+                    <span class="filter-label">Status</span>
+                    <div class="filter-chips" id="filter-status">
+                        <button class="chip active" data-filter="all">All</button>
+                        <button class="chip" data-filter="assigned">Assigned</button>
+                        <button class="chip" data-filter="completed">Completed</button>
+                        <button class="chip" data-filter="failed">Failed</button>
+                        <button class="chip" data-filter="build">Build</button>
+                        <button class="chip" data-filter="deploy">Deploy</button>
+                    </div>
+                </div>
+                <div class="filter-group">
+                    <span class="filter-label">Agent</span>
+                    <select id="filter-agent" class="filter-select">
+                        <option value="all">All agents</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <span class="filter-label">Repo</span>
+                    <select id="filter-repo" class="filter-select">
+                        <option value="all">All repos</option>
+                    </select>
+                </div>
+            </div>
             <div class="activity-feed" id="activity-feed">
                 <div class="empty-state-small">Waiting for agent activity...</div>
+            </div>
+        </div>
+        <div class="monitor-section">
+            <h4>Lock Status</h4>
+            <div class="lock-list" id="lock-list">
+                <div class="empty-state-small">Loading locks...</div>
+            </div>
+            <div class="lock-actions">
+                <button class="btn btn-small btn-danger" onclick="releaseAllLocks()">
+                    <span class="material-symbols-outlined">lock_open</span>
+                    Release All Locks
+                </button>
+            </div>
+        </div>
+        <div class="monitor-section">
+            <h4>Active Errors</h4>
+            <div class="error-list" id="active-errors-list">
+                <div class="empty-state-small">No active errors</div>
             </div>
         </div>
         <div class="monitor-section">
@@ -354,8 +454,91 @@
     </div>
 </div>
 
+<!-- Manage Agents Modal -->
+<div id="manage-agents-modal" class="modal hidden">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h2>
+                <span class="material-symbols-outlined">tune</span>
+                Manage Agents
+            </h2>
+            <button class="modal-close" onclick="closeManageAgentsModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="manage-toolbar">
+                <label class="manage-select-all">
+                    <input type="checkbox" id="manage-select-all">
+                    Select all
+                </label>
+                <div class="search-field search-field-compact">
+                    <span class="material-symbols-outlined">search</span>
+                    <input type="search" id="manage-agent-search" placeholder="Filter agents...">
+                </div>
+            </div>
+            <div class="manage-agent-list" id="manage-agent-list"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeManageAgentsModal()">Close</button>
+            <button class="btn btn-secondary" onclick="manageRefreshSelected()">Refresh</button>
+            <button class="btn btn-secondary" onclick="managePauseSelected()">Pause</button>
+            <button class="btn btn-danger" onclick="manageStopSelected()">Stop</button>
+            <button class="btn btn-danger" onclick="manageReleaseLocksSelected()">Release Locks</button>
+        </div>
+    </div>
+</div>
+
+<!-- Agent Detail Drawer -->
+<div id="agent-detail-drawer" class="agent-drawer hidden">
+    <div class="agent-drawer-overlay" onclick="closeAgentDrawer()"></div>
+    <div class="agent-drawer-panel">
+        <div class="agent-drawer-header">
+            <div class="agent-drawer-title">
+                <h3 id="agent-drawer-name">Agent</h3>
+                <div class="agent-drawer-subtitle" id="agent-drawer-subtitle">Idle</div>
+            </div>
+            <button class="drawer-close" onclick="closeAgentDrawer()">&times;</button>
+        </div>
+        <div class="agent-drawer-body">
+            <div class="agent-drawer-section">
+                <h4>Summary</h4>
+                <div class="agent-drawer-stats" id="agent-drawer-stats"></div>
+            </div>
+            <div class="agent-drawer-section">
+                <h4>Timeline</h4>
+                <div class="agent-drawer-timeline" id="agent-drawer-timeline">
+                    <div class="empty-state-small">No recent activity</div>
+                </div>
+            </div>
+            <div class="agent-drawer-section">
+                <h4>Outputs</h4>
+                <div class="agent-drawer-outputs" id="agent-drawer-outputs">
+                    <div class="empty-state-small">No output captured</div>
+                </div>
+            </div>
+            <div class="agent-drawer-section">
+                <h4>Files Touched</h4>
+                <div class="agent-drawer-files" id="agent-drawer-files">
+                    <div class="empty-state-small">No files reported yet</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <style>
-/* Overview Section */
+/* Dashboard Theme Compatibility */
+:root {
+    --bg: var(--md-sys-color-surface);
+    --bg-hover: var(--md-sys-color-surface-variant);
+    --border: var(--md-sys-color-outline-variant);
+    --text: var(--md-sys-color-on-surface);
+    --text-dim: var(--md-sys-color-on-surface-variant);
+    --warning: var(--md-sys-color-tertiary);
+    --error: var(--md-sys-color-error);
+    --success: #4caf50;
+    --accent: var(--md-sys-color-primary);
+}
+
 .overview-section {
     margin-bottom: var(--spacing-xl);
 }
@@ -633,50 +816,494 @@
     color: var(--text);
 }
 
-/* Agents Grid (Card Style) */
-.agents-grid {
+.tab-count {
+    margin-left: 6px;
+    background: var(--accent-container);
+    color: var(--accent);
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 999px;
+    font-weight: 700;
+}
+
+.tab-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tab-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+
+.tab-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.search-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-dim);
+}
+
+.search-field input {
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    width: 180px;
+}
+
+.search-field-compact input {
+    width: 140px;
+}
+
+.search-field .material-symbols-outlined {
+    font-size: 18px;
+}
+
+/* Now Running */
+.now-running {
+    margin: var(--spacing-lg) 0;
+    padding: var(--spacing-md);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+}
+
+.now-running-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+}
+
+.now-running-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.now-running-meta {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+
+.now-running-list {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-    gap: var(--spacing-lg);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--spacing-md);
+}
+
+.now-running-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm);
+    background: var(--bg-hover);
+}
+
+.now-running-card h4 {
+    margin: 0 0 4px 0;
+    font-size: 0.95rem;
+}
+
+.now-running-task {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+}
+
+.now-running-progress {
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.now-running-progress span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+}
+
+/* Agent list */
+.agent-section-label {
+    margin: var(--spacing-md) 0 var(--spacing-sm);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+}
+
+.agent-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-pin-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-dim);
+    padding: 4px;
+    border-radius: 6px;
+}
+
+.agent-pin-btn.pinned {
+    color: var(--accent);
+}
+
+.agent-progress {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.agent-progress-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.agent-progress-bar span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+}
+
+.agent-progress-text {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+.agent-card-actions .btn-icon-small {
+    padding: 4px;
+}
+
+.agent-card.pinned {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Activity filters */
+.activity-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.filter-label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.filter-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.chip {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-dim);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.chip.active {
+    background: var(--accent-container);
+    color: var(--accent);
+    border-color: transparent;
+}
+
+.filter-select {
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    background: var(--bg-card);
+    color: var(--text);
+    font-size: 0.75rem;
+}
+
+.activity-stack {
+    margin-left: 8px;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.activity-stack-details {
+    margin-top: 6px;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+.activity-stack-details.hidden {
+    display: none;
+}
+
+/* Error panel */
+.error-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.85rem;
+}
+
+.error-item {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--error);
+    border-radius: var(--radius-md);
+    padding: 8px 10px;
+}
+
+.error-item-header {
+    display: flex;
+    justify-content: space-between;
+    font-weight: 600;
+}
+
+.error-item-meta {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+/* Task build summary */
+.task-build-summary {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    font-size: 0.7rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+}
+
+.task-build-summary.success {
+    border-left: 3px solid var(--success);
+}
+
+.task-build-summary.failed {
+    border-left: 3px solid var(--error);
+}
+
+/* Manage agents modal */
+.manage-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.manage-agent-list {
+    max-height: 320px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.manage-agent-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-hover);
+}
+
+.manage-agent-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.manage-agent-meta {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+/* Agent drawer */
+.agent-drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+}
+
+.agent-drawer.hidden {
+    display: none;
+}
+
+.agent-drawer-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+}
+
+.agent-drawer-panel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    height: 100%;
+    width: min(420px, 95vw);
+    background: var(--bg);
+    border-left: 1px solid var(--border);
+    padding: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    overflow-y: auto;
+}
+
+.agent-drawer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.agent-drawer-title h3 {
+    margin: 0;
+}
+
+.agent-drawer-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+
+.drawer-close {
+    background: transparent;
+    border: none;
+    font-size: 1.4rem;
+    cursor: pointer;
+    color: var(--text-dim);
+}
+
+.agent-drawer-section h4 {
+    margin: 0 0 var(--spacing-sm) 0;
+    font-size: 0.95rem;
+}
+
+.agent-drawer-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    font-size: 0.8rem;
+}
+
+.agent-drawer-stat {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-hover);
+}
+
+.agent-drawer-timeline,
+.agent-drawer-outputs,
+.agent-drawer-files {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.8rem;
+}
+
+.agent-drawer-entry {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-hover);
+}
+
+.agent-drawer-entry small {
+    color: var(--text-dim);
+}
+
+.modal-content.modal-large {
+    max-width: 640px;
+}
+
+/* Agents Vertical (Card Style) */
+.agents-list-vertical {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    padding-bottom: var(--spacing-lg);
+    width: 100%;
 }
 
 .agent-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: var(--spacing-lg);
+    padding: var(--spacing-md) var(--spacing-lg);
     display: flex;
-    flex-direction: column;
-    gap: var(--spacing-md);
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-lg);
     transition: all 0.2s ease;
+    min-height: 80px;
 }
 
 .agent-card:hover {
     border-color: var(--accent);
-    transform: translateY(-2px);
+    background: var(--bg-hover);
 }
 
 .agent-card-header {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex: 0 0 320px;
 }
 
 .agent-card-title {
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
-    flex: 1;
 }
 
 .agent-card-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
     background: var(--accent-container);
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
 }
 
 .agent-card-icon span {
@@ -686,39 +1313,120 @@
 
 .agent-card-title h4 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     font-weight: 600;
     color: var(--text);
 }
 
 .agent-card-subtitle {
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     color: var(--text-dim);
     margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
 }
 
-.status-badge {
-    padding: 4px 12px;
-    border-radius: 12px;
+.agent-badges {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.agent-metrics {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-lg);
+    flex: 1;
+    justify-content: center;
+}
+
+.agent-metric {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.agent-metric span.material-symbols-outlined {
+    font-size: 18px;
+    color: var(--accent);
+}
+
+.agent-card-right {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex: 0 0 auto;
+}
+
+.agent-card-actions {
+    display: flex;
+    gap: var(--spacing-xs);
+}
+
+.agent-current-task {
+    flex: 1;
+    max-width: 400px;
+    padding: 6px 12px;
+    background: var(--bg-hover);
+    border-left: 3px solid var(--warning);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    margin: 0 var(--spacing-md);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.agent-current-task strong {
     font-size: 0.75rem;
-    font-weight: 600;
+    color: var(--text-dim);
+    margin-right: 4px;
     text-transform: uppercase;
 }
 
-.status-badge.idle {
-    background: var(--text-dim);
-    color: var(--bg);
+/* Mobile responsive adjustments */
+@media (max-width: 1024px) {
+    .agent-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--spacing-sm);
+        padding: var(--spacing-md);
+    }
+    
+    .agent-card-header, .agent-metrics, .agent-card-right {
+        flex: none;
+        width: 100%;
+        justify-content: space-between;
+    }
+    
+    .agent-current-task {
+        max-width: 100%;
+        margin: var(--spacing-xs) 0;
+    }
 }
 
-.status-badge.busy {
-    background: var(--warning);
-    color: var(--bg);
+.status-badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
 }
 
-.status-badge.error {
-    background: var(--error);
-    color: white;
-}
+.status-badge.idle { background: rgba(158, 158, 158, 0.1); color: var(--text-dim); }
+.status-badge.busy { background: rgba(255, 152, 0, 0.1); color: #ff9800; }
+.status-badge.active { background: rgba(76, 175, 80, 0.1); color: #4caf50; }
+.status-badge.running { background: rgba(33, 150, 243, 0.1); color: #2196f3; }
+.status-badge.failed { background: rgba(244, 67, 54, 0.1); color: #f44336; }
+.status-badge.offline { background: rgba(0, 0, 0, 0.2); color: var(--text-dim); }
+
 
 .agent-metrics {
     display: grid;
@@ -755,42 +1463,35 @@
     margin-bottom: 4px;
 }
 
-.agent-output {
-    background: #0d0d0d;
-    color: #4af626;
-    font-family: monospace;
-    font-size: 0.75rem;
-    padding: var(--spacing-sm);
-    border-radius: var(--radius-md);
-    max-height: 150px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-}
-
-.output-line {
-    padding: 2px 0;
-    word-break: break-all;
-}
-
-.output-line.stderr {
-    color: #ff6b6b;
-}
-
 .agent-card-actions {
     display: flex;
-    gap: var(--spacing-sm);
-    margin-top: auto;
+    gap: var(--spacing-xs);
+}
+
+.status-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
 }
 
 /* Add Agent Card (Inline) */
 .add-agent-card {
-    border: 2px dashed var(--border);
+    border: 1px dashed var(--border);
     background: var(--bg-hover);
+    padding: var(--spacing-md) var(--spacing-lg);
 }
 
 .add-agent-card:hover {
     border-color: var(--accent);
-    border-style: dashed;
+    background: var(--bg-card);
+}
+
+.add-agent-card .agent-card-header {
+    flex: 0 0 240px;
 }
 
 .add-agent-card .agent-card-icon.add-icon {
@@ -805,7 +1506,14 @@
 .add-agent-form {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-sm);
+    gap: 8px;
+    flex: 1;
+}
+
+.form-row-compact {
+    display: flex;
+    gap: var(--spacing-md);
+    width: 100%;
 }
 
 .form-group-compact {
@@ -968,10 +1676,77 @@
 }
 
 /* Task Board */
+.task-summary-row {
+    display: flex;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+    margin-bottom: var(--spacing-md);
+}
+
+.task-summary-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.task-summary-label {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.project-task-board {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
+}
+
+.task-project {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md);
+}
+
+.task-project-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+}
+
+.task-project-title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.task-project-title h4 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.task-project-meta {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+
 .task-board {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: var(--spacing-lg);
+}
+
+.task-board-compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-md);
 }
 
 @media (max-width: 1024px) {
@@ -987,6 +1762,14 @@
     display: flex;
     flex-direction: column;
     min-height: 400px;
+}
+
+.task-board-compact .task-column {
+    min-height: 260px;
+}
+
+.task-board-compact .task-column-header {
+    padding: var(--spacing-sm);
 }
 
 .task-column-header {
@@ -1046,9 +1829,44 @@
     border-left-color: #ff1744;
 }
 
+.task-card-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.task-delete-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    opacity: 0;
+}
+
+.task-card:hover .task-delete-btn {
+    opacity: 1;
+}
+
+.task-delete-btn:hover {
+    color: var(--error);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.task-delete-btn .material-symbols-outlined {
+    font-size: 18px;
+}
+
 .task-card-title {
     font-weight: 600;
     margin-bottom: 8px;
+    flex: 1;
 }
 
 .task-card-footer {
@@ -1089,13 +1907,52 @@
 .activity-feed {
     max-height: 500px;
     overflow-y: auto;
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .activity-item {
-    padding: 8px;
-    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+    border-left: 4px solid var(--text-dim);
+    background: var(--bg-card);
+    margin-bottom: 4px;
+    border-radius: 4px;
+    animation: slide-in 0.3s ease-out;
+}
+
+.activity-item.info { border-left-color: var(--accent); }
+.activity-item.success { border-left-color: var(--success); }
+.activity-item.warning { border-left-color: var(--warning); }
+.activity-item.error { border-left-color: var(--error); }
+.activity-item.debug { border-left-color: var(--text-dim); opacity: 0.8; }
+
+.activity-time {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+}
+
+.activity-text {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.activity-details {
+    margin-top: 6px;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+@keyframes slide-in {
+    from { transform: translateX(-10px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
 }
 
 .metrics-cards {
@@ -1215,8 +2072,8 @@
         grid-template-columns: repeat(2, 1fr);
     }
 
-    .agents-grid {
-        grid-template-columns: 1fr;
+    .agents-list-vertical {
+        gap: var(--spacing-sm);
     }
 
     .form-row {
@@ -1277,6 +2134,32 @@ async function loadProjects() {
     }
 }
 
+// Override updateAgentUI to keep add-agent-card first and use the correct grid
+if (typeof orchestrator !== 'undefined') {
+    orchestrator.updateAgentUI = function() {
+        renderAgentList();
+        updateOverview(Array.from(this.agents.values()));
+        if (typeof loadProjects === 'function') loadProjects();
+    };
+
+    orchestrator.updateAgentCard = function(agent) {
+        // For custom layout, rerender list to keep pinned order and search filters.
+        renderAgentList();
+        updateOverview(Array.from(this.agents.values()));
+    };
+}
+
+// Override appendOutputLine to be silent or log to console as containers are removed in this layout
+if (typeof orchestrator !== 'undefined') {
+    orchestrator.appendOutputLine = function(agentId, line, stream) {
+        const entries = agentOutputs.get(agentId) || [];
+        entries.push({ line, stream, time: new Date().toLocaleTimeString() });
+        if (entries.length > 200) entries.shift();
+        agentOutputs.set(agentId, entries);
+        if (stream === 'stderr') console.warn(`[Agent ${agentId}] ${line}`);
+    };
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     // Load projects for the inline form
@@ -1285,150 +2168,507 @@ document.addEventListener('DOMContentLoaded', () => {
     // Connect to agent orchestrator
     if (typeof orchestrator !== 'undefined') {
         orchestrator.connect();
-
-        // Store reference to add-agent-card HTML
-        const getAddAgentCardHtml = () => {
-            const card = document.querySelector('.add-agent-card');
-            return card ? card.outerHTML : '';
-        };
-
-        // Override updateAgentUI to keep add-agent-card first
-        orchestrator.updateAgentUI = function() {
-            const container = document.getElementById('agents-grid');
-            if (!container) return;
-
-            const addAgentCardHtml = getAddAgentCardHtml();
-
-            if (this.agents.size === 0) {
-                container.innerHTML = addAgentCardHtml;
-            } else {
-                const agentCardsHtml = Array.from(this.agents.values())
-                    .map(agent => renderAgentCard(agent))
-                    .join('');
-                container.innerHTML = addAgentCardHtml + agentCardsHtml;
-            }
-
-            updateOverview();
-
-            // Reload projects in case they changed
-            loadProjects();
-        };
-
-        // Update overview metrics every 5 seconds
-        setInterval(updateOverview, 5000);
     }
+
+    const agentSearch = document.getElementById('agent-search');
+    if (agentSearch) {
+        agentSearch.addEventListener('input', () => {
+            agentSearchQuery = agentSearch.value.trim().toLowerCase();
+            renderAgentList();
+        });
+    }
+
+    const taskSearch = document.getElementById('task-search');
+    if (taskSearch) {
+        taskSearch.addEventListener('input', () => {
+            taskSearchQuery = taskSearch.value.trim().toLowerCase();
+            renderAutonomousTasks(lastTasksSnapshot);
+        });
+    }
+
+    const monitorSearch = document.getElementById('monitor-search');
+    if (monitorSearch) {
+        monitorSearch.addEventListener('input', () => {
+            activityFilters.search = monitorSearch.value.trim().toLowerCase();
+            applyActivityFilters();
+        });
+    }
+
+    setupActivityFilterControls();
+
+    const manageSearch = document.getElementById('manage-agent-search');
+    if (manageSearch) {
+        manageSearch.addEventListener('input', () => renderManageAgentList());
+    }
+
+    const manageSelectAll = document.getElementById('manage-select-all');
+    if (manageSelectAll) {
+        manageSelectAll.addEventListener('change', (e) => toggleManageSelectAll(e.target.checked));
+    }
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== '/' || event.target.matches('input, textarea')) return;
+        event.preventDefault();
+        const activeTab = document.querySelector('.tab-button.active')?.dataset?.tab;
+        if (activeTab === 'agents') agentSearch?.focus();
+        if (activeTab === 'tasks') taskSearch?.focus();
+        if (activeTab === 'monitor') monitorSearch?.focus();
+    });
 });
 
-// Render agent card (Android style)
+let pinnedAgents = new Set(JSON.parse(localStorage.getItem('shadowai_pinned_agents') || '[]'));
+let agentSearchQuery = '';
+let taskSearchQuery = '';
+let lastTasksSnapshot = [];
+let buildSummaryByRepo = {};
+
+const activityFilters = {
+    severity: 'all',
+    status: 'all',
+    agent: 'all',
+    repo: 'all',
+    search: ''
+};
+
+const activityOptionSets = {
+    agent: new Set(),
+    repo: new Set()
+};
+
+const activityErrorBuckets = {};
+const agentTimelines = new Map();
+const agentOutputs = new Map();
+const agentFilesTouched = new Map();
+
+if (typeof orchestrator !== 'undefined') {
+    orchestrator.on('agent_task_started', (data) => {
+        recordAgentTimeline(data.agent_id, `Task started: ${data.task_id || ''}`, new Date().toLocaleTimeString(), 'info');
+    });
+    orchestrator.on('agent_task_progress', (data) => {
+        recordAgentTimeline(data.agent_id, `Progress ${data.pct || 0}%: ${data.msg || ''}`, new Date().toLocaleTimeString(), 'info');
+    });
+    orchestrator.on('agent_task_completed', (data) => {
+        const files = data.result?.files_changed || data.result?.files || [];
+        if (Array.isArray(files) && files.length > 0) {
+            agentFilesTouched.set(data.agent_id, files.slice(0, 50));
+        }
+        recordAgentTimeline(data.agent_id, `Task completed: ${data.task_id || ''}`, new Date().toLocaleTimeString(), 'success');
+    });
+    orchestrator.on('agent_task_result', (data) => {
+        const files = data.result?.files_changed || data.result?.files || [];
+        if (Array.isArray(files) && files.length > 0) {
+            agentFilesTouched.set(data.agent_id, files.slice(0, 50));
+        }
+    });
+}
+
+function isAgentPinned(agentId) {
+    return pinnedAgents.has(agentId);
+}
+
+function togglePinAgent(agentId, event) {
+    if (event) event.stopPropagation();
+    if (pinnedAgents.has(agentId)) {
+        pinnedAgents.delete(agentId);
+    } else {
+        pinnedAgents.add(agentId);
+    }
+    localStorage.setItem('shadowai_pinned_agents', JSON.stringify(Array.from(pinnedAgents)));
+    renderAgentList();
+}
+
+function filterAgentsByQuery(agents, query) {
+    if (!query) return agents;
+    return agents.filter(agent => {
+        const haystack = [
+            agent.name,
+            agent.specialty,
+            agent.role,
+            agent.status,
+            agent.provider,
+            agent.model
+        ].filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(query);
+    });
+}
+
+function renderAgentList() {
+    const container = document.getElementById('agents-list');
+    if (!container || typeof orchestrator === 'undefined') return;
+
+    const addCard = document.querySelector('.add-agent-card');
+    const addAgentCardHtml = addCard ? addCard.outerHTML : '';
+    const agents = Array.from(orchestrator.agents.values());
+    const filtered = filterAgentsByQuery(agents, agentSearchQuery);
+    const pinned = filtered.filter(agent => pinnedAgents.has(agent.id));
+    const unpinned = filtered.filter(agent => !pinnedAgents.has(agent.id));
+
+    let html = addAgentCardHtml;
+    if (pinned.length > 0) {
+        html += `<div class="agent-section-label">Pinned</div>`;
+        html += pinned.map(agent => renderAgentCard(agent)).join('');
+    }
+    if (unpinned.length > 0) {
+        if (pinned.length > 0) {
+            html += `<div class="agent-section-label">All Agents</div>`;
+        }
+        html += unpinned.map(agent => renderAgentCard(agent)).join('');
+    }
+
+    container.innerHTML = html;
+    updateNowRunning(agents);
+    updateAgentFilterOptions(agents);
+
+    const drawer = document.getElementById('agent-detail-drawer');
+    if (drawer && !drawer.classList.contains('hidden')) {
+        const agentId = drawer.dataset.agentId;
+        const agent = orchestrator.agents.get(agentId);
+        if (agent) renderAgentDrawer(agent);
+    }
+}
+
+function updateNowRunning(agents) {
+    const list = document.getElementById('now-running-list');
+    const meta = document.getElementById('now-running-meta');
+    if (!list) return;
+
+    const activeStatuses = ['busy', 'active', 'running', 'working', 'in_progress'];
+    const active = agents.filter(agent => activeStatuses.includes((agent.status || '').toLowerCase()) && agent.current_task);
+    if (meta) meta.textContent = `${active.length} active`;
+
+    const top = active.slice(0, 3);
+    if (top.length === 0) {
+        list.innerHTML = '<div class="empty-state-small">No active agents</div>';
+        return;
+    }
+
+    list.innerHTML = top.map(agent => {
+        const raw = agent.task_progress_pct ?? agent.progress_pct;
+        const progressPct = Number.isFinite(Number(raw)) ? Number(raw) : 0;
+        return `
+            <div class="now-running-card">
+                <h4>${escapeHtml(agent.name)}</h4>
+                <div class="now-running-task">${escapeHtml(agent.current_task || 'Working...')}</div>
+                <div class="now-running-progress"><span style="width:${Math.max(0, Math.min(progressPct, 100))}%"></span></div>
+            </div>
+        `;
+    }).join('');
+}
+
+function pauseAgent(agentId, event) {
+    if (event) event.stopPropagation();
+    if (!confirm('Pause this agent? It will stop after finishing current work.')) return;
+    if (typeof orchestrator !== 'undefined') {
+        orchestrator.stopAgent(agentId, true);
+    }
+}
+
+function forceStopAgent(agentId, event) {
+    if (event) event.stopPropagation();
+    if (!confirm('Force stop this agent immediately?')) return;
+    if (typeof orchestrator !== 'undefined') {
+        orchestrator.stopAgent(agentId, false);
+    }
+}
+
+function openAgentDrawer(agentId) {
+    const drawer = document.getElementById('agent-detail-drawer');
+    if (!drawer || typeof orchestrator === 'undefined') return;
+    const agent = orchestrator.agents.get(agentId);
+    if (!agent) return;
+    orchestrator.getAgentStatus(agentId);
+    drawer.classList.remove('hidden');
+    drawer.dataset.agentId = agentId;
+    renderAgentDrawer(agent);
+}
+
+function closeAgentDrawer() {
+    const drawer = document.getElementById('agent-detail-drawer');
+    if (!drawer) return;
+    drawer.classList.add('hidden');
+    delete drawer.dataset.agentId;
+}
+
+function renderAgentDrawer(agent) {
+    const nameEl = document.getElementById('agent-drawer-name');
+    const subtitleEl = document.getElementById('agent-drawer-subtitle');
+    const statsEl = document.getElementById('agent-drawer-stats');
+    const timelineEl = document.getElementById('agent-drawer-timeline');
+    const outputsEl = document.getElementById('agent-drawer-outputs');
+    const filesEl = document.getElementById('agent-drawer-files');
+
+    if (nameEl) nameEl.textContent = agent.name || 'Agent';
+    if (subtitleEl) subtitleEl.textContent = `${(agent.status || 'idle').toUpperCase()} · ${agent.current_task || 'Idle'}`;
+
+    if (statsEl) {
+        const progressPct = agent.task_progress_pct ?? agent.progress_pct;
+        const stats = [
+            { label: 'CPU', value: `${agent.cpu_percent || 0}%` },
+            { label: 'Memory', value: `${agent.memory_mb || 0}MB` },
+            { label: 'Tasks', value: `${agent.tasks_completed || 0}` },
+            { label: 'Uptime', value: formatUptime(agent.uptime_seconds) },
+            { label: 'Progress', value: progressPct !== undefined && progressPct !== null ? `${progressPct}%` : '—' }
+        ];
+        statsEl.innerHTML = stats.map(stat => `
+            <div class="agent-drawer-stat">
+                <strong>${escapeHtml(stat.label)}:</strong> ${escapeHtml(stat.value)}
+            </div>
+        `).join('');
+    }
+
+    const timeline = agentTimelines.get(agent.id) || [];
+    if (timelineEl) {
+        timelineEl.innerHTML = timeline.length
+            ? timeline.slice(0, 20).map(entry => `
+                <div class="agent-drawer-entry">
+                    <div>${escapeHtml(entry.message)}</div>
+                    <small>${escapeHtml(entry.time)}</small>
+                </div>
+            `).join('')
+            : '<div class="empty-state-small">No recent activity</div>';
+    }
+
+    const outputs = agentOutputs.get(agent.id) || (agent.output_lines || []).map(line => ({
+        line: line.line || line,
+        time: line.timestamp || ''
+    }));
+    if (outputsEl) {
+        outputsEl.innerHTML = outputs.length
+            ? outputs.slice(-20).map(line => `
+                <div class="agent-drawer-entry">
+                    <div>${escapeHtml(line.line)}</div>
+                    <small>${escapeHtml(line.time)}</small>
+                </div>
+            `).join('')
+            : '<div class="empty-state-small">No output captured</div>';
+    }
+
+    const files = agentFilesTouched.get(agent.id) || agent.task_result?.files_changed || agent.task_result?.files || [];
+    if (filesEl) {
+        filesEl.innerHTML = files.length
+            ? files.map(file => `<div class="agent-drawer-entry">${escapeHtml(file)}</div>`).join('')
+            : '<div class="empty-state-small">No files reported yet</div>';
+    }
+}
+
+function openManageAgentsModal() {
+    const modal = document.getElementById('manage-agents-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    renderManageAgentList();
+}
+
+function closeManageAgentsModal() {
+    const modal = document.getElementById('manage-agents-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+}
+
+function renderManageAgentList() {
+    const list = document.getElementById('manage-agent-list');
+    if (!list || typeof orchestrator === 'undefined') return;
+    const query = (document.getElementById('manage-agent-search')?.value || '').toLowerCase();
+    const agents = Array.from(orchestrator.agents.values());
+    const filtered = query ? agents.filter(a => (a.name || '').toLowerCase().includes(query)) : agents;
+    list.innerHTML = filtered.map(agent => `
+        <label class="manage-agent-item">
+            <input type="checkbox" class="manage-agent-checkbox" value="${agent.id}">
+            <div class="manage-agent-info">
+                <strong>${escapeHtml(agent.name)}</strong>
+                <div class="manage-agent-meta">${escapeHtml(agent.specialty || agent.role || 'General')} · ${(agent.status || 'idle').toUpperCase()}</div>
+            </div>
+        </label>
+    `).join('') || '<div class="empty-state-small">No agents available</div>';
+}
+
+function toggleManageSelectAll(checked) {
+    document.querySelectorAll('.manage-agent-checkbox').forEach(cb => cb.checked = checked);
+}
+
+function getManageSelectedIds() {
+    return Array.from(document.querySelectorAll('.manage-agent-checkbox:checked')).map(cb => cb.value);
+}
+
+function manageRefreshSelected() {
+    const ids = getManageSelectedIds();
+    ids.forEach(id => orchestrator.getAgentStatus(id));
+}
+
+function managePauseSelected() {
+    const ids = getManageSelectedIds();
+    if (!ids.length || !confirm('Pause selected agents?')) return;
+    ids.forEach(id => orchestrator.stopAgent(id, true));
+}
+
+function manageStopSelected() {
+    const ids = getManageSelectedIds();
+    if (!ids.length || !confirm('Force stop selected agents?')) return;
+    ids.forEach(id => orchestrator.stopAgent(id, false));
+}
+
+async function manageReleaseLocksSelected() {
+    const ids = getManageSelectedIds();
+    if (!ids.length || !confirm('Release locks for selected agents?')) return;
+    if (typeof api === 'undefined' || typeof api.releaseLocks !== 'function') {
+        addActivityItem('Failed to release locks: API not available', 'error');
+        return;
+    }
+    for (const id of ids) {
+        await api.releaseLocks({ agent_id: id });
+    }
+    addActivityItem(`Released locks for ${ids.length} agents`, 'success');
+    orchestrator.fetchLocks();
+}
+
+// Render agent card (Horizontal List Style)
 function renderAgentCard(agent) {
-    const statusClass = agent.status || 'idle';
+    const statusClass = (agent.status || 'idle').toLowerCase();
+    const pinned = isAgentPinned(agent.id);
+    const progressPct = agent.task_progress_pct ?? agent.progress_pct;
+    const safeProgress = Number.isFinite(Number(progressPct)) ? Number(progressPct) : null;
+    const progressMsg = agent.task_progress_msg || '';
     return `
-        <div class="agent-card" id="agent-${agent.id}">
+        <div class="agent-card horizontal ${pinned ? 'pinned' : ''}" id="agent-${agent.id}" onclick="openAgentDrawer('${agent.id}')">
             <div class="agent-card-header">
-                <div class="agent-card-title">
-                    <div class="agent-card-icon">
-                        <span class="material-symbols-outlined">smart_toy</span>
-                    </div>
-                    <div>
+                <div class="agent-card-icon">
+                    <span class="material-symbols-outlined">smart_toy</span>
+                </div>
+                <div class="agent-card-title-info">
+                    <div class="agent-title-row">
                         <h4>${escapeHtml(agent.name)}</h4>
-                        <div class="agent-card-subtitle">${escapeHtml(agent.specialty)}</div>
+                        <button class="agent-pin-btn ${pinned ? 'pinned' : ''}" onclick="togglePinAgent('${agent.id}', event)" title="Pin agent">
+                            <span class="material-symbols-outlined">${pinned ? 'star' : 'star_outline'}</span>
+                        </button>
+                    </div>
+                    <div class="agent-card-subtitle">${escapeHtml(agent.specialty || agent.role || 'General Assistant')}</div>
+                    <div class="agent-badges">
+                        ${agent.provider ? `<span class="badge provider-badge">${escapeHtml(agent.provider)}</span>` : ''}
+                        ${agent.model ? `<span class="badge model-badge">${escapeHtml(agent.model)}</span>` : ''}
                     </div>
                 </div>
-                <span class="status-badge ${statusClass}">${statusClass.toUpperCase()}</span>
             </div>
 
             <div class="agent-metrics">
-                <div class="agent-metric">
+                <div class="agent-metric" title="CPU Usage">
                     <span class="material-symbols-outlined">memory</span>
-                    <span>${agent.cpu_percent || 0}% CPU</span>
+                    <span>${agent.cpu_percent || 0}%</span>
                 </div>
-                <div class="agent-metric">
+                <div class="agent-metric" title="Memory Usage">
                     <span class="material-symbols-outlined">storage</span>
-                    <span>${agent.memory_mb || 0} MB</span>
+                    <span>${agent.memory_mb || 0}MB</span>
                 </div>
-                <div class="agent-metric">
+                <div class="agent-metric" title="Tasks Completed">
+                    <span class="material-symbols-outlined">task_alt</span>
+                    <span>${agent.tasks_completed || 0}</span>
+                </div>
+                <div class="agent-metric" title="Uptime">
                     <span class="material-symbols-outlined">schedule</span>
                     <span>${formatUptime(agent.uptime_seconds)}</span>
-                </div>
-                <div class="agent-metric">
-                    <span class="material-symbols-outlined">task_alt</span>
-                    <span>${agent.tasks_completed || 0} tasks</span>
                 </div>
             </div>
 
             ${agent.current_task ? `
-                <div class="agent-current-task">
-                    <strong>Current Task:</strong>
+                <div class="agent-current-task" title="${escapeHtml(agent.current_task)}">
+                    <strong>Current:</strong>
                     ${escapeHtml(agent.current_task)}
+                </div>
+            ` : '<div class="agent-current-task" style="border-left:none; background:transparent; color:var(--text-dim)"><em>No active task</em></div>'}
+
+            ${safeProgress !== null ? `
+                <div class="agent-progress">
+                    <div class="agent-progress-bar">
+                        <span style="width: ${Math.max(0, Math.min(safeProgress, 100))}%"></span>
+                    </div>
+                    <div class="agent-progress-text">${escapeHtml(progressMsg || `${safeProgress}% complete`)}</div>
                 </div>
             ` : ''}
 
-            <div class="agent-output" id="agent-output-${agent.id}">
-                ${(agent.output_lines || []).map(line =>
-                    `<div class="output-line">${escapeHtml(line.line)}</div>`
-                ).join('')}
-            </div>
-
-            <div class="agent-card-actions">
-                <button class="btn btn-small" onclick="showAssignTaskModal('${agent.id}')">
-                    <span class="material-symbols-outlined">assignment</span>
-                    Assign
-                </button>
-                <button class="btn btn-small btn-secondary" onclick="orchestrator.getAgentStatus('${agent.id}')">
-                    <span class="material-symbols-outlined">refresh</span>
-                </button>
-                <button class="btn btn-small btn-danger" onclick="confirmStopAgent('${agent.id}')">
-                    <span class="material-symbols-outlined">stop_circle</span>
-                    Stop
-                </button>
+            <div class="agent-card-right">
+                <span class="status-badge ${statusClass}">${statusClass.toUpperCase()}</span>
+                <div class="agent-card-actions">
+                    <button class="btn btn-icon-small" onclick="showAssignTaskModal('${agent.id}'); event.stopPropagation();" title="Assign Task">
+                        <span class="material-symbols-outlined">assignment</span>
+                    </button>
+                    <button class="btn btn-icon-small btn-secondary" onclick="pauseAgent('${agent.id}', event)" title="Pause (graceful stop)">
+                        <span class="material-symbols-outlined">pause_circle</span>
+                    </button>
+                    <button class="btn btn-icon-small btn-secondary" onclick="openAgentDrawer('${agent.id}'); event.stopPropagation();" title="View Logs">
+                        <span class="material-symbols-outlined">receipt_long</span>
+                    </button>
+                    <button class="btn btn-icon-small btn-secondary" onclick="orchestrator.getAgentStatus('${agent.id}'); event.stopPropagation();" title="Refresh">
+                        <span class="material-symbols-outlined">refresh</span>
+                    </button>
+                    <button class="btn btn-icon-small btn-danger" onclick="forceStopAgent('${agent.id}', event)" title="Stop Agent">
+                        <span class="material-symbols-outlined">stop_circle</span>
+                    </button>
+                </div>
             </div>
         </div>
     `;
 }
 
 // Update overview metrics
-function updateOverview() {
+function updateOverview(mergedAgentsList = null) {
     if (typeof orchestrator === 'undefined') return;
 
-    const totalAgents = orchestrator.agents.size;
-    const activeAgents = Array.from(orchestrator.agents.values())
-        .filter(a => a.status === 'busy').length;
+    const agentsList = mergedAgentsList || Array.from(orchestrator.agents.values());
+    const totalAgents = agentsList.length;
+    
+    // Count active statuses as busy for metrics
+    const activeStatuses = ['busy', 'active', 'running', 'in_progress'];
+    const activeAgents = agentsList.filter(a => 
+        activeStatuses.includes((a.status || '').toLowerCase())
+    ).length;
 
-    document.getElementById('overview-total-agents').textContent = totalAgents;
-    document.getElementById('overview-active-agents').textContent = activeAgents;
+    const totalEl = document.getElementById('overview-total-agents');
+    if (totalEl) totalEl.textContent = totalAgents;
+    
+    const activeEl = document.getElementById('overview-active-agents');
+    if (activeEl) activeEl.textContent = activeAgents;
 
     // Calculate total tasks and completed
     let totalTasks = 0;
     let completedTasks = 0;
-    orchestrator.agents.forEach(agent => {
+    agentsList.forEach(agent => {
         completedTasks += agent.tasks_completed || 0;
         if (agent.current_task) totalTasks++;
     });
     totalTasks += completedTasks;
 
-    document.getElementById('overview-total-tasks').textContent = totalTasks;
-    document.getElementById('overview-completed-tasks').textContent = completedTasks;
+    const tasksEl = document.getElementById('overview-total-tasks');
+    if (tasksEl) tasksEl.textContent = totalTasks;
+    
+    const compEl = document.getElementById('overview-completed-tasks');
+    if (compEl) compEl.textContent = completedTasks;
 
     // Update system metrics
     let totalCpu = 0;
     let totalMemory = 0;
-    orchestrator.agents.forEach(agent => {
+    agentsList.forEach(agent => {
         totalCpu += agent.cpu_percent || 0;
         totalMemory += agent.memory_mb || 0;
     });
 
-    document.getElementById('metric-cpu').textContent = `${totalCpu.toFixed(1)}%`;
-    document.getElementById('metric-cpu-bar').style.width = `${Math.min(totalCpu, 100)}%`;
-    document.getElementById('metric-memory').textContent = `${totalMemory.toFixed(0)} MB`;
-    document.getElementById('metric-memory-bar').style.width = `${Math.min(totalMemory / 10, 100)}%`;
-    document.getElementById('metric-processes').textContent = totalAgents;
+    const cpuEl = document.getElementById('metric-cpu');
+    if (cpuEl) cpuEl.textContent = `${totalCpu.toFixed(1)}%`;
+    const cpuBar = document.getElementById('metric-cpu-bar');
+    if (cpuBar) cpuBar.style.width = `${Math.min(totalCpu, 100)}%`;
+    
+    const memEl = document.getElementById('metric-memory');
+    if (memEl) memEl.textContent = `${totalMemory.toFixed(0)} MB`;
+    const memBar = document.getElementById('metric-memory-bar');
+    if (memBar) memBar.style.width = `${Math.min(totalMemory / 10, 100)}%`;
+    
+    const procEl = document.getElementById('metric-processes');
+    if (procEl) procEl.textContent = totalAgents;
 
     // Calculate max uptime
     let maxUptime = 0;
-    orchestrator.agents.forEach(agent => {
+    agentsList.forEach(agent => {
         if (agent.uptime_seconds > maxUptime) maxUptime = agent.uptime_seconds;
     });
-    document.getElementById('metric-uptime').textContent = formatUptime(maxUptime);
+    const uptimeEl = document.getElementById('metric-uptime');
+    if (uptimeEl) uptimeEl.textContent = formatUptime(maxUptime);
 }
 
 // Format uptime
@@ -1443,16 +2683,11 @@ function formatUptime(seconds) {
     return `${secs}s`;
 }
 
-// Activity feed
 function clearActivityFeed() {
-    document.getElementById('activity-feed').innerHTML = '<div class="empty-state-small">Feed cleared</div>';
-}
-
-// Escape HTML
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    const feed = document.getElementById('activity-feed');
+    if (feed) feed.innerHTML = '<div class="empty-state-small">Feed cleared</div>';
+    Object.keys(activityErrorBuckets).forEach(key => delete activityErrorBuckets[key]);
+    renderErrorPanel();
 }
 
 // Task management (placeholder)
@@ -1472,25 +2707,32 @@ function confirmCreateTask() {
 
 let autonomousState = { running: false, paused: false };
 
+// Default models per provider
+const providerModels = {
+    'gemini': 'gemini-3-flash-preview',
+    'claude': 'claude-sonnet-4-20250514',
+    'codex': 'o4-mini'
+};
+
 async function autonomousStart() {
     const btn = document.getElementById('auto-start-btn');
     btn.disabled = true;
     btn.innerHTML = '<span class="material-symbols-outlined" style="animation:spin 1s linear infinite">autorenew</span> Starting...';
 
+    const provider = document.getElementById('auto-provider').value;
+    const count = parseInt(document.getElementById('auto-agent-count').value) || 5;
+    const focus = document.getElementById('auto-focus').value;
+    const model = providerModels[provider] || 'gemini-3-flash-preview';
+
     try {
         const resp = await fetch('/api/autonomous/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                count: 5,
-                focus: 'backend-polish',
-                provider: 'claude',
-                model: 'claude-sonnet-4-20250514'
-            })
+            body: JSON.stringify({ count, focus, provider, model })
         });
         const data = await resp.json();
         if (data.success) {
-            addActivityItem('Autonomous loop started with ' + Object.keys(data.status.agents || {}).length + ' agents', 'success');
+            addActivityItem(`Autonomous loop started: ${count} ${provider} agents (${focus}), model=${model}`, 'success');
             updateAutonomousUI(data.status);
         } else {
             addActivityItem('Failed to start: ' + (data.error || 'Unknown error'), 'error');
@@ -1569,14 +2811,70 @@ async function autonomousScan() {
     btn.innerHTML = '<span class="material-symbols-outlined">search</span> Scan';
 }
 
+async function generateProjectTasks() {
+    const btn = document.getElementById('generate-tasks-btn');
+    if (!btn) return;
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined" style="animation:spin 1s linear infinite">auto_awesome</span> Generating...';
+
+    try {
+        const resp = await fetch('/api/autonomous/generate_tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            const projects = data.generated || [];
+            const total = data.total_tasks || 0;
+            addActivityItem(`AI generated ${total} tasks across ${projects.length} projects`, 'success');
+
+            const flat = projects.flatMap(p => p.tasks || []);
+            if (flat.length > 0) {
+                renderAutonomousTasks(flat);
+            }
+            pollAutonomousStatus();
+        } else {
+            addActivityItem('Task generation failed: ' + (data.error || 'unknown error'), 'error');
+        }
+    } catch (e) {
+        addActivityItem('Task generation error: ' + e.message, 'error');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = original;
+}
+
 function updateAutonomousUI(status) {
     autonomousState.running = status.running;
     autonomousState.paused = status.paused;
     updateAutonomousControls();
 
+    // Sync swarm agents to orchestrator
+    if (status.agents && typeof orchestrator !== 'undefined') {
+        Object.entries(status.agents).forEach(([id, agent]) => {
+            // Keep existing metrics if present
+            const existing = orchestrator.agents.get(id);
+            orchestrator.agents.set(id, {
+                ...existing,
+                ...agent,
+                id: id
+            });
+        });
+    }
+
     // Update cycle count
     const cyclesEl = document.getElementById('overview-cycles');
     if (cyclesEl) cyclesEl.textContent = status.cycle_count || 0;
+
+    // Update success rate
+    const comp = status.tasks_completed || 0;
+    const fail = status.tasks_failed || 0;
+    const total = comp + fail;
+    const rate = total > 0 ? Math.round((comp / total) * 100) : 100;
+    const rateEl = document.getElementById('overview-success-rate');
+    if (rateEl) rateEl.textContent = rate + '%';
 
     // Update task counts from autonomous data
     if (status.tasks_completed !== undefined) {
@@ -1586,6 +2884,16 @@ function updateAutonomousUI(status) {
     if (status.task_queue !== undefined) {
         document.getElementById('overview-total-tasks').textContent =
             (status.task_queue || 0) + (status.tasks_completed || 0);
+    }
+
+    // Render tasks if available in status
+    if (status.tasks) {
+        renderAutonomousTasks(status.tasks);
+    }
+
+    // Trigger agent UI update to show swarm agents
+    if (orchestrator && typeof orchestrator.updateAgentUI === 'function') {
+        orchestrator.updateAgentUI();
     }
 
     // Update build history
@@ -1618,52 +2926,176 @@ function updateAutonomousControls() {
     }
 }
 
+function normalizeTaskStatus(task) {
+    const raw = (task.status || '').toString().toLowerCase();
+    if (['in_progress', 'inprogress', 'active', 'working'].includes(raw)) return 'in_progress';
+    if (['completed', 'done', 'success'].includes(raw)) return 'completed';
+    return 'pending';
+}
+
+function getTaskRepo(task) {
+    return (task.repo || task.project || task.project_id || task.repo_name || 'misc').toString();
+}
+
+function getTaskPriority(task) {
+    const raw = parseInt(task.priority, 10);
+    if (Number.isFinite(raw)) return raw;
+    return 4;
+}
+
 function renderAutonomousTasks(tasks) {
-    const pendingEl = document.getElementById('pending-tasks');
-    const progressEl = document.getElementById('progress-tasks');
-    const completedEl = document.getElementById('completed-tasks');
+    const container = document.getElementById('project-task-board');
+    if (!container) return;
 
-    if (!pendingEl) return;
-
-    let pendingCount = 0, progressCount = 0, completedCount = 0;
-
-    const pendingHtml = [];
-    const progressHtml = [];
-
-    tasks.forEach(task => {
-        const card = renderTaskCard(task);
-        if (task.status === 'in_progress') {
-            progressHtml.push(card);
-            progressCount++;
-        } else {
-            pendingHtml.push(card);
-            pendingCount++;
-        }
+    lastTasksSnapshot = Array.isArray(tasks) ? tasks : [];
+    const filteredTasks = lastTasksSnapshot.filter(task => {
+        if (!taskSearchQuery) return true;
+        const haystack = [
+            task.title,
+            task.description,
+            task.repo,
+            task.category
+        ].filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(taskSearchQuery);
     });
 
-    if (pendingHtml.length > 0) pendingEl.innerHTML = pendingHtml.join('');
-    if (progressHtml.length > 0) progressEl.innerHTML = progressHtml.join('');
+    const grouped = {};
+    filteredTasks.forEach(task => {
+        const repo = getTaskRepo(task);
+        if (!grouped[repo]) grouped[repo] = [];
+        grouped[repo].push(task);
+    });
+
+    const repos = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+    let pendingCount = 0, progressCount = 0, completedCount = 0;
+
+    const sections = repos.map(repo => {
+        const pending = [];
+        const progress = [];
+        const completed = [];
+
+        grouped[repo].forEach(task => {
+            const status = normalizeTaskStatus(task);
+            const card = renderTaskCard(task);
+            if (status === 'in_progress') {
+                progress.push(card);
+            } else if (status === 'completed') {
+                completed.push(card);
+            } else {
+                pending.push(card);
+            }
+        });
+
+        pendingCount += pending.length;
+        progressCount += progress.length;
+        completedCount += completed.length;
+
+        const pendingHtml = pending.length > 0 ? pending.join('') : '<div class="empty-column">No pending tasks</div>';
+        const progressHtml = progress.length > 0 ? progress.join('') : '<div class="empty-column">No tasks in progress</div>';
+        const completedHtml = completed.length > 0 ? completed.join('') : '<div class="empty-column">No completed tasks</div>';
+
+        return `
+            <div class="task-project">
+                <div class="task-project-header">
+                    <div class="task-project-title">
+                        <h4>${escapeHtml(repo)}</h4>
+                        <div class="task-project-meta">${pending.length} pending | ${progress.length} in progress | ${completed.length} completed</div>
+                    </div>
+                </div>
+                <div class="task-board task-board-compact">
+                    <div class="task-column">
+                        <div class="task-column-header">
+                            <h4>Pending</h4>
+                            <span class="task-count">${pending.length}</span>
+                        </div>
+                        <div class="task-list">${pendingHtml}</div>
+                    </div>
+                    <div class="task-column">
+                        <div class="task-column-header">
+                            <h4>In Progress</h4>
+                            <span class="task-count">${progress.length}</span>
+                        </div>
+                        <div class="task-list">${progressHtml}</div>
+                    </div>
+                    <div class="task-column">
+                        <div class="task-column-header">
+                            <h4>Completed</h4>
+                            <span class="task-count">${completed.length}</span>
+                        </div>
+                        <div class="task-list">${completedHtml}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = sections.length > 0 ? sections.join('') : '<div class="empty-column">No tasks found</div>';
 
     document.getElementById('pending-count').textContent = pendingCount;
     document.getElementById('progress-count').textContent = progressCount;
+    document.getElementById('completed-count').textContent = completedCount;
+
+    setTabCount('tasks', pendingCount + progressCount);
 }
 
 function renderTaskCard(task) {
-    const priorityClass = task.priority <= 2 ? 'priority-urgent' : (task.priority <= 3 ? 'priority-high' : '');
-    return `
-        <div class="task-card ${priorityClass}">
-            <div class="task-card-title">${escapeHtml(task.title)}</div>
-            <div class="task-card-footer">
-                <span class="category-badge ${task.category}">${task.category}</span>
-                <span>${task.repo}</span>
+    const priority = getTaskPriority(task);
+    const priorityClass = priority <= 2 ? 'priority-urgent' : (priority <= 3 ? 'priority-high' : '');
+    const taskId = task.id || task.task_id || '';
+    const category = task.category || 'todo';
+    const repo = getTaskRepo(task);
+    const status = normalizeTaskStatus(task);
+    const build = buildSummaryByRepo[repo];
+    const buildSummary = build && status === 'completed'
+        ? `
+            <div class="task-build-summary ${build.success ? 'success' : 'failed'}">
+                <span>${build.success ? 'Build OK' : 'Build Failed'}</span>
+                <span>${build.steps ? build.steps.length : 0} steps</span>
             </div>
+        `
+        : '';
+    return `
+        <div class="task-card ${priorityClass}" id="task-${taskId}">
+            <div class="task-card-header-row">
+                <div class="task-card-title">${escapeHtml(task.title || 'Untitled task')}</div>
+                <button class="task-delete-btn" onclick="deleteTask('${taskId}', event)" title="Remove Task">
+                    <span class="material-symbols-outlined">delete</span>
+                </button>
+            </div>
+            <div class="task-card-footer">
+                <span class="category-badge ${category}">${category}</span>
+                <span>${escapeHtml(repo)}</span>
+            </div>
+            ${buildSummary}
         </div>
     `;
+}
+
+async function deleteTask(taskId, event) {
+    if (event) event.stopPropagation();
+    if (!confirm('Are you sure you want to remove this task?')) return;
+
+    try {
+        const resp = await fetch(`/api/autonomous/tasks/${taskId}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (data.success) {
+            addActivityItem(`Task ${taskId} removed`, 'info');
+            // Optimistic UI update or refresh
+            pollAutonomousStatus();
+        } else {
+            alert('Failed to delete task: ' + (data.error || 'Unknown error'));
+        }
+    } catch (e) {
+        console.error('Delete error:', e);
+        alert('Error deleting task: ' + e.message);
+    }
 }
 
 function renderBuildHistory(builds) {
     const container = document.getElementById('build-history');
     if (!container || !builds || builds.length === 0) return;
+
+    updateBuildSummary(builds);
 
     container.innerHTML = builds.map(b => `
         <div class="build-item">
@@ -1671,14 +3103,189 @@ function renderBuildHistory(builds) {
                 <span class="material-symbols-outlined">${b.success ? 'check_circle' : 'error'}</span>
             </div>
             <div class="build-info">
-                <div class="build-info-title">${escapeHtml(b.build_type || 'unknown')}</div>
+                <div class="build-info-title">${escapeHtml(b.repo ? `${b.repo} build gate` : (b.build_type || 'unknown'))}</div>
                 <div class="build-info-meta">${b.duration_seconds ? b.duration_seconds.toFixed(0) + 's' : ''} ${b.timestamp || ''}</div>
             </div>
         </div>
     `).join('');
 }
 
-function addActivityItem(message, type) {
+function updateBuildSummary(builds) {
+    if (!Array.isArray(builds)) return;
+    builds.forEach(build => {
+        if (!build.repo) return;
+        const existing = buildSummaryByRepo[build.repo];
+        if (!existing || (build.timestamp && build.timestamp > existing.timestamp)) {
+            buildSummaryByRepo[build.repo] = build;
+        }
+    });
+}
+
+function setTabCount(tab, count) {
+    const el = document.getElementById(`tab-count-${tab}`);
+    if (el) el.textContent = count || 0;
+}
+
+function setupActivityFilterControls() {
+    const severityGroup = document.getElementById('filter-severity');
+    const statusGroup = document.getElementById('filter-status');
+    const agentSelect = document.getElementById('filter-agent');
+    const repoSelect = document.getElementById('filter-repo');
+
+    if (severityGroup) {
+        severityGroup.addEventListener('click', (event) => {
+            const btn = event.target.closest('.chip');
+            if (!btn) return;
+            severityGroup.querySelectorAll('.chip').forEach(chip => chip.classList.remove('active'));
+            btn.classList.add('active');
+            activityFilters.severity = btn.dataset.filter || 'all';
+            applyActivityFilters();
+        });
+    }
+
+    if (statusGroup) {
+        statusGroup.addEventListener('click', (event) => {
+            const btn = event.target.closest('.chip');
+            if (!btn) return;
+            statusGroup.querySelectorAll('.chip').forEach(chip => chip.classList.remove('active'));
+            btn.classList.add('active');
+            activityFilters.status = btn.dataset.filter || 'all';
+            applyActivityFilters();
+        });
+    }
+
+    if (agentSelect) {
+        agentSelect.addEventListener('change', () => {
+            activityFilters.agent = agentSelect.value;
+            applyActivityFilters();
+        });
+    }
+
+    if (repoSelect) {
+        repoSelect.addEventListener('change', () => {
+            activityFilters.repo = repoSelect.value;
+            applyActivityFilters();
+        });
+    }
+}
+
+function updateActivityFilterOptions(agentId, repo) {
+    const agentSelect = document.getElementById('filter-agent');
+    const repoSelect = document.getElementById('filter-repo');
+
+    if (agentId) activityOptionSets.agent.add(agentId);
+    if (repo) activityOptionSets.repo.add(repo);
+
+    if (agentSelect) {
+        const current = agentSelect.value || 'all';
+        agentSelect.innerHTML = '<option value="all">All agents</option>' +
+            Array.from(activityOptionSets.agent.values()).map(id => {
+                const label = (typeof orchestrator !== 'undefined' && orchestrator.agents?.get(id)?.name) || id;
+                return `<option value="${id}">${escapeHtml(label)}</option>`;
+            }).join('');
+        agentSelect.value = current;
+    }
+
+    if (repoSelect) {
+        const current = repoSelect.value || 'all';
+        repoSelect.innerHTML = '<option value="all">All repos</option>' +
+            Array.from(activityOptionSets.repo.values()).map(name => `<option value="${name}">${name}</option>`).join('');
+        repoSelect.value = current;
+    }
+}
+
+function updateAgentFilterOptions(agents) {
+    agents.forEach(agent => {
+        if (agent?.id) activityOptionSets.agent.add(agent.id);
+    });
+    updateActivityFilterOptions();
+}
+
+function inferActivityStatus(message, severity) {
+    const msg = message.toLowerCase();
+    if (msg.includes('task assigned')) return 'assigned';
+    if (msg.includes('task completed')) return 'completed';
+    if (msg.includes('task failed')) return 'failed';
+    if (msg.includes('build')) return 'build';
+    if (severity === 'error') return 'failed';
+    return 'info';
+}
+
+function applyActivityFilters() {
+    const feed = document.getElementById('activity-feed');
+    if (!feed) return;
+    const items = feed.querySelectorAll('.activity-item');
+    let visibleErrors = 0;
+    items.forEach(item => {
+        const severity = item.dataset.severity || 'info';
+        const status = item.dataset.status || 'info';
+        const agentId = item.dataset.agent || '';
+        const repo = item.dataset.repo || '';
+        const text = (item.dataset.searchText || '').toLowerCase();
+
+        const matchesSeverity = activityFilters.severity === 'all' || severity === activityFilters.severity;
+        const matchesStatus = activityFilters.status === 'all' || status === activityFilters.status;
+        const matchesAgent = activityFilters.agent === 'all' || agentId === activityFilters.agent;
+        const matchesRepo = activityFilters.repo === 'all' || repo === activityFilters.repo;
+        const matchesSearch = !activityFilters.search || text.includes(activityFilters.search);
+
+        const visible = matchesSeverity && matchesStatus && matchesAgent && matchesRepo && matchesSearch;
+        item.style.display = visible ? '' : 'none';
+        if (visible && severity === 'error') visibleErrors += 1;
+    });
+    setTabCount('monitor', visibleErrors);
+}
+
+function recordAgentTimeline(agentId, message, time, type) {
+    if (!agentId) return;
+    const timeline = agentTimelines.get(agentId) || [];
+    timeline.unshift({ message, time, type });
+    if (timeline.length > 50) timeline.pop();
+    agentTimelines.set(agentId, timeline);
+}
+
+function categorizeError(message) {
+    const msg = message.toLowerCase();
+    if (msg.includes('build')) return 'Build failures';
+    if (msg.includes('task failed')) return 'Task failures';
+    if (msg.includes('task blocked')) return 'Blocked tasks';
+    if (msg.includes('lock')) return 'Lock conflicts';
+    return 'Other errors';
+}
+
+function updateErrorBuckets(message, repo) {
+    const key = categorizeError(message);
+    const entry = activityErrorBuckets[key] || { count: 0, lastRepo: repo || 'n/a', lastMessage: message };
+    entry.count += 1;
+    entry.lastRepo = repo || entry.lastRepo;
+    entry.lastMessage = message;
+    activityErrorBuckets[key] = entry;
+    renderErrorPanel();
+}
+
+function renderErrorPanel() {
+    const container = document.getElementById('active-errors-list');
+    if (!container) return;
+    const entries = Object.entries(activityErrorBuckets);
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="empty-state-small">No active errors</div>';
+        setTabCount('monitor', 0);
+        return;
+    }
+    const errorCount = entries.reduce((acc, [, data]) => acc + (data.count || 0), 0);
+    setTabCount('monitor', errorCount);
+    container.innerHTML = entries.map(([label, data]) => `
+        <div class="error-item">
+            <div class="error-item-header">
+                <span>${escapeHtml(label)}</span>
+                <span>${data.count}</span>
+            </div>
+            <div class="error-item-meta">${escapeHtml(data.lastMessage || '')}</div>
+        </div>
+    `).join('');
+}
+
+function addActivityItem(message, type, details = null) {
     const feed = document.getElementById('activity-feed');
     if (!feed) return;
 
@@ -1686,15 +3293,86 @@ function addActivityItem(message, type) {
     const empty = feed.querySelector('.empty-state-small');
     if (empty) empty.remove();
 
-    const time = new Date().toLocaleTimeString();
-    const colors = { success: 'var(--success)', error: 'var(--error)', info: 'var(--accent)' };
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const meta = arguments.length >= 4 && typeof arguments[3] === 'object' ? arguments[3] : {};
+    const severity = meta.severity || type || 'info';
+    const status = meta.status || inferActivityStatus(message, severity);
+    const agentId = meta.agent_id || meta.agentId || '';
+    const repo = meta.repo || '';
+    const key = `${severity}|${status}|${message}`;
+
+    const first = feed.firstElementChild;
+    if (first && first.dataset && first.dataset.key === key) {
+        const count = parseInt(first.dataset.count || '1', 10) + 1;
+        first.dataset.count = count;
+        const times = JSON.parse(first.dataset.times || '[]');
+        times.unshift(time);
+        first.dataset.times = JSON.stringify(times.slice(0, 5));
+        const badge = first.querySelector('.activity-stack');
+        if (badge) badge.textContent = `×${count}`;
+        const stackDetails = first.querySelector('.activity-stack-details');
+        if (stackDetails) {
+            stackDetails.innerHTML = times.map(t => `<div>${t}</div>`).join('');
+        }
+        applyActivityFilters();
+        return;
+    }
+
     const item = document.createElement('div');
-    item.className = 'activity-item';
-    item.innerHTML = `<span style="color:var(--text-dim)">[${time}]</span> <span style="color:${colors[type] || 'var(--text)'}">${escapeHtml(message)}</span>`;
+    item.className = `activity-item ${severity}`;
+    item.dataset.key = key;
+    item.dataset.count = '1';
+    item.dataset.severity = severity;
+    item.dataset.status = status;
+    item.dataset.agent = agentId;
+    item.dataset.repo = repo;
+    const detailsText = Array.isArray(details) ? details.join(' ') : (details || '');
+    item.dataset.searchText = `${message} ${detailsText} ${repo} ${agentId}`;
+
+    updateActivityFilterOptions(agentId, repo);
+    recordAgentTimeline(agentId, message, time, severity);
+    if (severity === 'error' || severity === 'warning') updateErrorBuckets(message, repo);
+
+    const detailsHtml = Array.isArray(details) && details.length
+        ? `<div class="activity-details">${details.map(line => `<div>${escapeHtml(line)}</div>`).join('')}</div>`
+        : '';
+    item.innerHTML = `
+        <div class="activity-time">${time}</div>
+        <div class="activity-text">${escapeHtml(message)} <span class="activity-stack">×1</span></div>
+        ${detailsHtml}
+        <div class="activity-stack-details hidden"></div>
+    `;
+    const stackBadge = item.querySelector('.activity-stack');
+    if (stackBadge) {
+        stackBadge.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const detailsEl = item.querySelector('.activity-stack-details');
+            if (detailsEl) detailsEl.classList.toggle('hidden');
+        });
+    }
     feed.prepend(item);
 
     // Keep max 100 items
     while (feed.children.length > 100) feed.removeChild(feed.lastChild);
+
+    applyActivityFilters();
+}
+
+async function releaseAllLocks() {
+    if (!confirm('Release ALL locks? This can allow overlapping work.')) return;
+    if (typeof api === 'undefined' || typeof api.releaseLocks !== 'function') {
+        addActivityItem('Failed to release locks: API not available', 'error');
+        return;
+    }
+    const result = await api.releaseLocks({ all: true });
+    if (result && result.success) {
+        addActivityItem(`Released ${result.released || 0} locks`, 'success');
+        if (typeof orchestrator !== 'undefined') {
+            orchestrator.fetchLocks();
+        }
+    } else {
+        addActivityItem(`Failed to release locks: ${result.error || 'Unknown error'}`, 'error');
+    }
 }
 
 // Poll autonomous status every 10s
@@ -1706,17 +3384,13 @@ async function pollAutonomousStatus() {
         const data = await resp.json();
         updateAutonomousUI(data);
 
-        // Also update tasks if running
-        if (data.running) {
-            const tasksResp = await fetch('/api/autonomous/tasks');
-            const tasksData = await tasksResp.json();
-            if (tasksData.tasks) {
-                renderAutonomousTasks(tasksData.tasks);
-            }
-            if (tasksData.completed) {
-                document.getElementById('completed-count').textContent = tasksData.completed.length;
-            }
-        }
+        // Always update tasks
+        const tasksResp = await fetch('/api/autonomous/tasks');
+        const tasksData = await tasksResp.json();
+        
+        // Merge pending/progress and completed for the renderer
+        const allTasks = [...(tasksData.tasks || []), ...(tasksData.completed || [])];
+        renderAutonomousTasks(allTasks);
     } catch (e) {
         // Silently fail - bridge might be restarting
     }
@@ -1733,32 +3407,161 @@ function setupAutonomousWebSocket() {
         updateAutonomousUI(data);
     });
 
+    socket.on('autonomous_activity', (data) => {
+        addActivityItem(data.message, data.type || 'info', null, {
+            agent_id: data.agent_id,
+            severity: data.type || 'info'
+        });
+    });
+
     socket.on('autonomous_task_assigned', (data) => {
-        addActivityItem(`Task assigned: ${data.task_title} -> ${data.agent_name}`, 'info');
+        addActivityItem(`Task assigned: ${data.task_title} -> ${data.agent_name}`, 'info', null, {
+            agent_id: data.agent_id,
+            status: 'assigned',
+            repo: data.repo
+        });
     });
 
     socket.on('autonomous_task_completed', (data) => {
-        addActivityItem(`Task completed: ${data.task_title}`, 'success');
+        addActivityItem(`Task completed: ${data.task_title}`, 'success', null, {
+            agent_id: data.agent_id,
+            status: 'completed',
+            repo: data.repo
+        });
     });
 
     socket.on('autonomous_task_failed', (data) => {
-        addActivityItem(`Task failed: ${data.task_title}`, 'error');
+        addActivityItem(`Task failed: ${data.task_title}`, 'error', null, {
+            agent_id: data.agent_id,
+            status: 'failed',
+            repo: data.repo,
+            severity: 'error'
+        });
     });
 
     socket.on('autonomous_build_started', (data) => {
-        addActivityItem(`Build started: ${data.repo}`, 'info');
+        const workspace = data.workspace ? ` (${data.workspace})` : '';
+        addActivityItem(`Build started: ${data.repo}${workspace}`, 'info', null, {
+            status: 'build',
+            repo: data.repo
+        });
     });
 
     socket.on('autonomous_build_success', (data) => {
-        addActivityItem(`Build succeeded: ${data.build_type} (${data.duration?.toFixed(0)}s)`, 'success');
+        const duration = typeof data.duration === 'number' ? `${data.duration.toFixed(0)}s` : '';
+        const steps = (data.steps || []).map(step => {
+            const stepDuration = typeof step.duration_seconds === 'number' ? `${step.duration_seconds.toFixed(0)}s` : '';
+            const meta = stepDuration ? ` (${stepDuration})` : '';
+            return `${step.name}: ${step.success ? 'ok' : 'fail'}${meta}`;
+        });
+        updateBuildSummary([{ ...data, success: true }]);
+        addActivityItem(`Build succeeded: ${data.repo}${duration ? ' (' + duration + ')' : ''}`, 'success', steps, {
+            status: 'build',
+            repo: data.repo,
+            severity: 'success'
+        });
     });
 
     socket.on('autonomous_build_failed', (data) => {
-        addActivityItem(`Build failed: ${data.error || 'Unknown'}`, 'error');
+        const duration = typeof data.duration === 'number' ? `${data.duration.toFixed(0)}s` : '';
+        const steps = (data.steps || []).map(step => {
+            const stepDuration = typeof step.duration_seconds === 'number' ? `${step.duration_seconds.toFixed(0)}s` : '';
+            const meta = stepDuration ? ` (${stepDuration})` : '';
+            const error = step.error ? ` - ${step.error}` : '';
+            return `${step.name}: ${step.success ? 'ok' : 'fail'}${meta}${error}`;
+        });
+        updateBuildSummary([{ ...data, success: false }]);
+        addActivityItem(`Build failed: ${data.repo}${duration ? ' (' + duration + ')' : ''} - ${data.error || 'Unknown'}`, 'error', steps, {
+            status: 'build',
+            repo: data.repo,
+            severity: 'error'
+        });
+    });
+
+    socket.on('autonomous_build_skipped', (data) => {
+        const remaining = data.cooldown_remaining ? ` (${data.cooldown_remaining}s cooldown)` : '';
+        addActivityItem(`Build skipped: ${data.reason || 'cooldown'}${remaining}`, 'warning', null, {
+            status: 'build',
+            severity: 'warning'
+        });
+    });
+
+    socket.on('autonomous_deploy_started', (data) => {
+        const workspace = data.workspace ? ` (${data.workspace})` : '';
+        addActivityItem(`Deploy started: ${data.repo}${workspace}`, 'info', null, {
+            status: 'deploy',
+            repo: data.repo
+        });
+    });
+
+    socket.on('autonomous_deploy_success', (data) => {
+        const details = (data.devices || []).map(device => {
+            const status = device.success ? 'ok' : 'fail';
+            const error = device.error ? ` - ${device.error}` : '';
+            return `${device.device_id}: ${status}${error}`;
+        });
+        addActivityItem(`Deploy succeeded: ${data.repo}`, 'success', details, {
+            status: 'deploy',
+            repo: data.repo,
+            severity: 'success'
+        });
+    });
+
+    socket.on('autonomous_deploy_failed', (data) => {
+        const details = (data.devices || []).map(device => {
+            const status = device.success ? 'ok' : 'fail';
+            const error = device.error ? ` - ${device.error}` : '';
+            return `${device.device_id}: ${status}${error}`;
+        });
+        addActivityItem(`Deploy failed: ${data.repo} - ${data.error || 'Unknown'}`, 'error', details, {
+            status: 'deploy',
+            repo: data.repo,
+            severity: 'error'
+        });
+    });
+
+    socket.on('autonomous_deploy_skipped', (data) => {
+        const remaining = data.cooldown_remaining ? ` (${data.cooldown_remaining}s cooldown)` : '';
+        addActivityItem(`Deploy skipped: ${data.repo} - ${data.reason || 'cooldown'}${remaining}`, 'warning', null, {
+            status: 'deploy',
+            repo: data.repo,
+            severity: 'warning'
+        });
+    });
+
+    socket.on('autonomous_backoff_started', (data) => {
+        const duration = data.backoff_seconds ? ` (${data.backoff_seconds}s)` : '';
+        addActivityItem(`Backoff started: ${data.reason || 'failure'}${duration}`, 'warning', null, {
+            status: 'system',
+            severity: 'warning'
+        });
+    });
+
+    socket.on('autonomous_halted', (data) => {
+        addActivityItem(`Autonomy halted: ${data.reason || 'failure'} (streak ${data.failure_streak || 0})`, 'error', null, {
+            status: 'system',
+            severity: 'error'
+        });
+    });
+
+    socket.on('autonomous_deploy_rollback', (data) => {
+        const details = (data.devices || []).map(device => {
+            const status = device.success ? 'ok' : 'fail';
+            const error = device.error ? ` - ${device.error}` : '';
+            return `${device.device_id}: ${status}${error}`;
+        });
+        addActivityItem(`Rollback attempted: ${data.repo}`, 'warning', details, {
+            status: 'deploy',
+            repo: data.repo,
+            severity: 'warning'
+        });
     });
 
     socket.on('autonomous_scan_complete', (data) => {
-        addActivityItem(`Scan found ${data.tasks_found} tasks (queue: ${data.queue_size})`, 'info');
+        addActivityItem(`Scan found ${data.tasks_found} tasks (queue: ${data.queue_size})`, 'info', null, {
+            status: 'scan',
+            repo: data.repo
+        });
     });
 }
 
@@ -1768,7 +3571,7 @@ document.addEventListener('DOMContentLoaded', () => {
     pollAutonomousStatus();
 
     // Start polling
-    autoStatusInterval = setInterval(pollAutonomousStatus, 10000);
+    autoStatusInterval = setInterval(pollAutonomousStatus, 5000);
 
     // Setup WebSocket listeners
     setupAutonomousWebSocket();

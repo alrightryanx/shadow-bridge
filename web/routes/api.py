@@ -10,6 +10,7 @@ import json
 import os
 import time
 import logging
+import asyncio
 import urllib.request
 from functools import lru_cache, wraps
 from threading import Lock
@@ -48,6 +49,8 @@ from ..services.data_service import (
     create_team,
     update_team,
     delete_team,
+    queue_file_for_sync,
+    MOBILE_SYNC_DIR,
     get_team_metrics,
     get_tasks,
     get_task,
@@ -101,6 +104,13 @@ from ..services.data_service import (
 )
 from ..services.task_service import get_task_service
 from ..services.adb_service import get_adb_service
+from ..services.lock_manager import get_lock_manager
+from ..services.agent_orchestrator import (
+    get_task_blocks,
+    broadcast_agent_event,
+    stop_all_agents,
+    stop_agent
+)
 
 api_bp = Blueprint("api", __name__)
 
@@ -397,7 +407,7 @@ def api_projects():
         return jsonify(get_projects(device_id))
     except Exception as e:
         logger.error(f"Error fetching projects: {e}")
-        return jsonify([]) # Return empty list on error to prevent frontend crash
+        return jsonify([])  # Return empty list on error to prevent frontend crash
 
 
 @api_bp.route("/projects", methods=["POST"])
@@ -520,7 +530,9 @@ def api_create_note():
                     result["pushed_to_device"] = True
                 else:
                     result["pushed_to_device"] = False
-                    result["device_message"] = response.get("message", "Device rejected")
+                    result["device_message"] = response.get(
+                        "message", "Device rejected"
+                    )
             else:
                 result["pushed_to_device"] = False
                 result["device_message"] = "Device IP not available"
@@ -994,13 +1006,9 @@ def api_session_message(session_id):
         session = result.get("session") if isinstance(result, dict) else None
         message_payload = result.get("message") if isinstance(result, dict) else None
         if message_payload:
-            broadcast_session_message(
-                session_id, message_payload, is_update=is_update
-            )
+            broadcast_session_message(session_id, message_payload, is_update=is_update)
         device_id = (
-            (session or {}).get("device_id")
-            or (session or {}).get("deviceId")
-            or "web"
+            (session or {}).get("device_id") or (session or {}).get("deviceId") or "web"
         )
         broadcast_sessions_updated(device_id)
     except Exception:
@@ -1024,6 +1032,7 @@ def api_session_message_shortcut():
         return jsonify({"error": "session_id is required"}), 400
     return api_session_message(session_id)
 
+
 @api_bp.route("/sessions/<session_id>/agent-message", methods=["POST"])
 def api_append_agent_message(session_id):
     """Append an agent output message to a session."""
@@ -1045,7 +1054,7 @@ def api_append_agent_message(session_id):
         "agent_id": agent_id,
         "agent_name": agent_name,
         "message_type": message_type,
-        "id": f"agent_{agent_id}_{int(time.time() * 1000)}"
+        "id": f"agent_{agent_id}_{int(time.time() * 1000)}",
     }
 
     result = append_session_message(
@@ -1053,12 +1062,13 @@ def api_append_agent_message(session_id):
         message=message,
         delta=None,
         is_final=True,
-        session_meta=None
+        session_meta=None,
     )
 
     # Broadcast to WebSocket clients
     try:
         from .websocket import broadcast_session_message, broadcast_sessions_updated
+
         message_payload = result.get("message") if isinstance(result, dict) else None
         if message_payload:
             broadcast_session_message(session_id, message_payload, is_update=False)
@@ -1067,10 +1077,12 @@ def api_append_agent_message(session_id):
     except Exception as e:
         print(f"Failed to broadcast agent message: {e}")
 
-    return jsonify({
-        "success": True,
-        "message": result.get("message") if isinstance(result, dict) else None
-    })
+    return jsonify(
+        {
+            "success": True,
+            "message": result.get("message") if isinstance(result, dict) else None,
+        }
+    )
 
 
 @api_bp.route("/sessions/sync", methods=["POST"])
@@ -1128,6 +1140,7 @@ def api_collections_sync():
         return jsonify({"success": True, "message": "Collections sync broadcasted"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ============ Automations ============
 
@@ -1206,14 +1219,16 @@ def api_automation_logs(automation_id):
     return jsonify(logs)
 
 
-def send_command_to_device(command_type: str, payload: dict, device_id: str = None) -> bool:
+def send_command_to_device(
+    command_type: str, payload: dict, device_id: str = None
+) -> bool:
     """Send a command to Android device via Companion Relay."""
     try:
         message = {
             "type": command_type,
             "timestamp": int(time.time() * 1000),
             "deviceId": device_id,
-            **payload
+            **payload,
         }
 
         # Connect to ShadowBridge Companion Relay (localhost:19286)
@@ -1245,9 +1260,7 @@ def api_run_automation(automation_id):
 
     device_id = auto.get("device_id")
     success = send_command_to_device(
-        "automation_trigger", 
-        {"automationId": automation_id}, 
-        device_id
+        "automation_trigger", {"automationId": automation_id}, device_id
     )
 
     if success:
@@ -1331,9 +1344,9 @@ def api_agent_activity():
 def api_pause_agents():
     """Pause all agent execution."""
     _add_activity("system", "All agents paused", "pause")
-    
+
     send_command_to_device("agent_command", {"action": "pause_all"})
-    
+
     return jsonify({"success": True, "message": "Pause command sent"})
 
 
@@ -1341,9 +1354,9 @@ def api_pause_agents():
 def api_resume_agents():
     """Resume all agent execution."""
     _add_activity("system", "All agents resumed", "play")
-    
+
     send_command_to_device("agent_command", {"action": "resume_all"})
-    
+
     return jsonify({"success": True, "message": "Resume command sent"})
 
 
@@ -1351,10 +1364,15 @@ def api_resume_agents():
 def api_kill_all_agents():
     """Emergency kill switch for all agents."""
     _add_activity("kill", "KILL ALL command executed", "cancel")
-    
+
+    stopped = stop_all_agents(graceful=False)
     send_command_to_device("agent_command", {"action": "kill_all"})
-    
-    return jsonify({"success": True, "message": "Kill all command sent"})
+
+    return jsonify({
+        "success": True,
+        "message": "Kill all command sent",
+        "local_stopped": stopped
+    })
 
 
 @api_bp.route("/agents/<agent_id>/kill", methods=["POST"])
@@ -1364,6 +1382,7 @@ def api_kill_agent(agent_id):
     agent_name = agent.get("name", agent_id) if agent else agent_id
     _add_activity("kill", f"Agent {agent_name} terminated", "cancel")
 
+    stop_agent(agent_id, graceful=False)
     send_command_to_device("agent_command", {"action": "kill", "agentId": agent_id})
 
     return jsonify({"success": True, "message": f"Kill command sent for {agent_name}"})
@@ -1374,6 +1393,7 @@ def api_get_review_queue():
     """Get review queue items."""
     device_id = request.args.get("device_id")
     from ..services.data_service import get_review_queue
+
     return jsonify(get_review_queue(device_id))
 
 
@@ -1383,6 +1403,7 @@ def api_add_review_item():
     data = request.get_json() or {}
     device_id = data.get("device_id", "web")
     from ..services.data_service import add_to_review_queue
+
     item = add_to_review_queue(device_id, data)
     return jsonify(item)
 
@@ -1392,6 +1413,7 @@ def api_update_review_item(item_id):
     """Update review queue item (approve/reject/etc)."""
     data = request.get_json() or {}
     from ..services.data_service import update_review_item
+
     return jsonify(update_review_item(item_id, data))
 
 
@@ -1399,6 +1421,7 @@ def api_update_review_item(item_id):
 def api_delete_review_item(item_id):
     """Delete review queue item."""
     from ..services.data_service import delete_review_item
+
     return jsonify(delete_review_item(item_id))
 
 
@@ -1408,6 +1431,7 @@ def api_get_briefings():
     device_id = request.args.get("device_id")
     limit = request.args.get("limit", 50, type=int)
     from ..services.data_service import get_briefings
+
     return jsonify(get_briefings(device_id, limit))
 
 
@@ -1417,6 +1441,7 @@ def api_create_briefing():
     data = request.get_json() or {}
     device_id = data.get("device_id", "web")
     from ..services.data_service import create_briefing
+
     briefing = create_briefing(device_id, data)
     return jsonify(briefing)
 
@@ -1425,6 +1450,7 @@ def api_create_briefing():
 def api_mark_briefing_read(briefing_id):
     """Mark briefing as read."""
     from ..services.data_service import mark_briefing_read
+
     return jsonify(mark_briefing_read(briefing_id))
 
 
@@ -1432,6 +1458,7 @@ def api_mark_briefing_read(briefing_id):
 def api_delete_briefing(briefing_id):
     """Delete a briefing."""
     from ..services.data_service import delete_briefing
+
     return jsonify(delete_briefing(briefing_id))
 
 
@@ -1451,24 +1478,28 @@ def api_agents_sync():
 
         # Update agents in data service
         from ..services.data_service import sync_agents_from_device
+
         result = sync_agents_from_device(device_id, agents_data)
 
         # Broadcast to WebSocket clients
         try:
             from .websocket import broadcast_agents_updated
+
             broadcast_agents_updated(device_id)
         except Exception:
             pass
 
-        return jsonify({
-            "success": True,
-            "synced_count": len(agents_data),
-            "message": f"Synced {len(agents_data)} agents from {device_id}"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "synced_count": len(agents_data),
+                "message": f"Synced {len(agents_data)} agents from {device_id}",
+            }
+        )
     except Exception as e:
         logger.error(f"Agents sync failed: {e}")
         return jsonify({"error": str(e)}), 500
-    
+
     return jsonify(
         {"success": True, "message": f"Kill command sent for agent {agent_id}"}
     )
@@ -1718,6 +1749,51 @@ def api_status_health():
     return jsonify(get_task_service().get_system_health())
 
 
+@api_bp.route("/locks")
+def api_locks():
+    """Get current repo/path locks and recent blocked tasks."""
+    snapshot = get_lock_manager().get_snapshot()
+    locks = [
+        {"key": key, **info}
+        for key, info in snapshot.get("locks", {}).items()
+    ]
+    return jsonify({
+        "locks": locks,
+        "count": len(locks),
+        "updated_at": snapshot.get("updated_at"),
+        "blocked": get_task_blocks(),
+    })
+
+
+@api_bp.route("/locks/release", methods=["POST"])
+def api_release_locks():
+    """Release locks by agent, key, or all (admin)."""
+    data = request.get_json() or {}
+    agent_id = data.get("agent_id")
+    task_id = data.get("task_id")
+    lock_keys = data.get("lock_keys") or []
+    release_all = bool(data.get("all"))
+
+    manager = get_lock_manager()
+
+    if release_all:
+        released = manager.clear_all()
+        broadcast_agent_event("agent_locks_released", {"released": released, "scope": "all"})
+        return jsonify({"success": True, "released": released, "scope": "all"})
+
+    if lock_keys:
+        released = manager.release_keys(lock_keys)
+        broadcast_agent_event("agent_locks_released", {"released": released, "lock_keys": lock_keys})
+        return jsonify({"success": True, "released": released, "lock_keys": lock_keys})
+
+    if agent_id:
+        released = manager.release(agent_id, task_id=task_id)
+        broadcast_agent_event("agent_locks_released", {"released": released, "agent_id": agent_id, "task_id": task_id})
+        return jsonify({"success": True, "released": released, "agent_id": agent_id, "task_id": task_id})
+
+    return jsonify({"success": False, "error": "agent_id, lock_keys, or all=true is required"}), 400
+
+
 @api_bp.route("/celebrate", methods=["POST"])
 def api_celebrate():
     """
@@ -1726,6 +1802,7 @@ def api_celebrate():
     """
     try:
         from .websocket import broadcast_celebrate
+
         data = request.get_json() or {}
         message = data.get("message", "Connection Successful!")
         broadcast_celebrate(message)
@@ -1740,10 +1817,7 @@ def api_tailscale_status():
     result = None
     try:
         result = subprocess.run(
-            ["tailscale", "status", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=8
+            ["tailscale", "status", "--json"], capture_output=True, text=True, timeout=8
         )
 
         if result.returncode != 0:
@@ -1841,11 +1915,20 @@ def api_qr():
         try:
             import sys
             import os
+
             # Add parent directory to path for imports
-            parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            parent_dir = os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            )
             if parent_dir not in sys.path:
                 sys.path.insert(0, parent_dir)
-            from shadow_bridge_gui import get_local_ip, get_tailscale_ip, get_hostname_local, get_username, find_ssh_port
+            from shadow_bridge_gui import (
+                get_local_ip,
+                get_tailscale_ip,
+                get_hostname_local,
+                get_username,
+                find_ssh_port,
+            )
         except ImportError:
             # Fallback implementations if import fails
             def get_local_ip(wait=False):
@@ -1862,6 +1945,7 @@ def api_qr():
             def get_tailscale_ip():
                 try:
                     import subprocess
+
                     result = subprocess.run(
                         ["tailscale", "ip", "-4"],
                         capture_output=True,
@@ -1884,6 +1968,7 @@ def api_qr():
                     return os.getlogin()
                 except Exception:
                     import getpass
+
                     return getpass.getuser()
 
             def find_ssh_port():
@@ -1915,9 +2000,18 @@ def api_qr():
         # Build hosts list (simplified: LAN + Tailscale)
         hosts_to_try = []
         if local_ip and not local_ip.startswith("127."):
-            hosts_to_try.append({"host": local_ip, "type": "local", "stable": False, "label": "LAN"})
+            hosts_to_try.append(
+                {"host": local_ip, "type": "local", "stable": False, "label": "LAN"}
+            )
         if tailscale_ip:
-            hosts_to_try.append({"host": tailscale_ip, "type": "tailscale", "stable": True, "label": "Tailscale"})
+            hosts_to_try.append(
+                {
+                    "host": tailscale_ip,
+                    "type": "tailscale",
+                    "stable": True,
+                    "label": "Tailscale",
+                }
+            )
 
         # Primary host (prefer Tailscale for stability)
         primary_host = tailscale_ip or local_ip
@@ -1957,7 +2051,10 @@ def api_qr():
 
         # Create image with dark theme colors (white on dark)
         img = qr.make_image(fill_color="white", back_color="#1a1a1a")
-        img = img.resize((380, 380), Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS)
+        img = img.resize(
+            (380, 380),
+            Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS,
+        )
 
         # Convert to base64
         buffer = io.BytesIO()
@@ -2182,7 +2279,14 @@ def api_launch_cli(project_id):
                 launcher = "wt"
             except FileNotFoundError:
                 subprocess.Popen(
-                    ["cmd", "/c", "start", "cmd", "/k", f'cd /d "{path}" && {command_text}'],
+                    [
+                        "cmd",
+                        "/c",
+                        "start",
+                        "cmd",
+                        "/k",
+                        f'cd /d "{path}" && {command_text}',
+                    ],
                     creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
                 )
                 launcher = "cmd"
@@ -2726,7 +2830,7 @@ def api_context_track():
                 pred_action, pred_type, conf = prediction
                 if conf > 0.4:  # Low threshold for prototype
                     logger.info(
-                        f"🧠 Predictive Engine: Expecting {pred_action}:{pred_type} (conf: {conf:.2f})"
+                        f"ðŸ§  Predictive Engine: Expecting {pred_action}:{pred_type} (conf: {conf:.2f})"
                     )
 
                     # Heuristic: If we predict user will use a type, they likely want
@@ -2735,7 +2839,7 @@ def api_context_track():
                     if recent:
                         target_id = recent[0].resource_id
                         logger.info(
-                            f"🚀 Pre-loading context for {pred_type}:{target_id}"
+                            f"ðŸš€ Pre-loading context for {pred_type}:{target_id}"
                         )
                         # Run in background to not block response
                         import threading
@@ -5446,7 +5550,7 @@ def api_batch_generate():
 
         data = request.get_json()
         print(f"[DEBUG] Batch generate request data: {data}")
-        
+
         if not data or "prompt" not in data:
             return jsonify({"success": False, "error": "prompt is required"}), 400
 
@@ -5470,6 +5574,7 @@ def api_batch_generate():
     except Exception as e:
         print(f"[ERROR] Batch generation error: {e}")
         import traceback
+
         traceback.print_exc()
         logger.error(f"Batch generation error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -5622,20 +5727,19 @@ def api_image_estimate():
 @rate_limit
 @api_error_handler
 def autonomous_start():
-    """Start the autonomous agent loop."""
+    """Start the autonomous agent loop. If already running, restarts with new config."""
     from ..services.autonomous_loop import get_autonomous_loop
 
     loop = get_autonomous_loop()
-    if loop.running:
-        return jsonify({"error": "Autonomous loop already running"}), 409
 
     data = request.get_json() or {}
     count = data.get("count", 5)
     focus = data.get("focus", "backend-polish")
-    provider = data.get("provider", "claude")
-    model = data.get("model", "claude-sonnet-4-20250514")
+    provider = data.get("provider", "gemini")
+    model = data.get("model", "gemini-3-flash-preview")
     agent_configs = data.get("configs")
 
+    # start() handles restart internally if already running
     loop.start(
         agent_count=count,
         focus=focus,
@@ -5644,7 +5748,7 @@ def autonomous_start():
         agent_configs=agent_configs,
     )
 
-    return jsonify({"success": True, "status": loop.get_status()})
+    return jsonify({"success": True, "restarted": loop.running, "status": loop.get_status()})
 
 
 @api_bp.route("/autonomous/stop", methods=["POST"])
@@ -5713,12 +5817,73 @@ def autonomous_scan():
     scanner = AutonomousScanner()
     tasks = scanner.scan_all()
 
+    return jsonify(
+        {
+            "success": True,
+            "tasks_found": len(tasks),
+            "tasks": tasks[:50],  # Return first 50 for preview
+            "categories": _count_by_key(tasks, "category"),
+            "repos": _count_by_key(tasks, "repo"),
+        }
+    )
+
+
+@api_bp.route("/autonomous/generate_tasks", methods=["POST"])
+@rate_limit
+@api_error_handler
+def autonomous_generate_tasks():
+    """Generate AI todo tasks per project and add to the queue."""
+    from ..services.autonomous_task_generator import AutonomousTaskGenerator
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    data = request.get_json(silent=True) or {}
+    repos = data.get("repos") or data.get("projects")
+    max_tasks = data.get("max_tasks", 5)
+    todo_limit = data.get("todo_limit", 20)
+    model = data.get("model")
+
+    try:
+        max_tasks = int(max_tasks)
+    except (TypeError, ValueError):
+        max_tasks = 5
+    try:
+        todo_limit = int(todo_limit)
+    except (TypeError, ValueError):
+        todo_limit = 20
+
+    if repos:
+        normalized = []
+        for repo in repos:
+            if os.path.isabs(repo):
+                normalized.append(repo)
+            else:
+                normalized.append(os.path.join("C:/shadow", repo))
+        repos = normalized
+
+    generator = AutonomousTaskGenerator(repos=repos, model=model)
+
+    def _run_async(coro):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    results = _run_async(generator.generate_all(max_tasks, todo_limit))
+    flat_tasks = [t for proj in results for t in proj.get("tasks", [])]
+
+    loop = get_autonomous_loop()
+    added = loop.add_tasks(flat_tasks) if flat_tasks else 0
+
     return jsonify({
         "success": True,
-        "tasks_found": len(tasks),
-        "tasks": tasks[:50],  # Return first 50 for preview
-        "categories": _count_by_key(tasks, "category"),
-        "repos": _count_by_key(tasks, "repo"),
+        "generated": results,
+        "total_tasks": len(flat_tasks),
+        "added": added
     })
 
 
@@ -5735,20 +5900,32 @@ def autonomous_tasks():
     status = request.args.get("status")
 
     tasks = loop.get_tasks()
+    completed = loop.get_completed_tasks()
 
     if category:
         tasks = [t for t in tasks if t.get("category") == category]
+        completed = [t for t in completed if t.get("category") == category]
     if repo:
         tasks = [t for t in tasks if t.get("repo") == repo]
+        completed = [t for t in completed if t.get("repo") == repo]
     if status:
         tasks = [t for t in tasks if t.get("status") == status]
+        completed = [t for t in completed if t.get("status") == status]
 
     return jsonify({
         "tasks": tasks,
-        "total": len(tasks),
-        "completed": loop.get_completed_tasks()[-20:],  # Last 20
-        "failed": loop.failed_tasks[-10:],  # Last 10
+        "completed": completed
     })
+
+
+@api_bp.route("/autonomous/tasks/<task_id>", methods=["DELETE"])
+def autonomous_task_delete(task_id):
+    """Delete an autonomous task."""
+    from ..services.autonomous_loop import get_autonomous_loop
+    loop = get_autonomous_loop()
+    if loop.remove_task(task_id):
+        return jsonify({"success": True, "message": f"Task {task_id} removed"})
+    return jsonify({"success": False, "error": "Task not found"}), 404
 
 
 @api_bp.route("/autonomous/builds")
@@ -5769,3 +5946,185 @@ def _count_by_key(items: list, key: str) -> dict:
         val = item.get(key, "unknown")
         counts[val] = counts.get(val, 0) + 1
     return counts
+
+
+# ========== Mobile Sync (Push/Pull) ==========
+
+
+@api_bp.route("/mobile/push", methods=["POST"])
+def api_mobile_push():
+    """Push a file to mobile sync queue."""
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    device_id = request.form.get("device_id")
+    if not device_id:
+        return jsonify({"success": False, "error": "device_id is required"}), 400
+
+    # Save to temp then queue
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        file.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        result = queue_file_for_sync(device_id, file.filename, tmp_path)
+        # Notify phone via bridge (optional, notifier service handles this)
+        from ..services.notifier_service import get_notifier
+
+        notifier = get_notifier()
+        notifier.send_bridge_notification(
+            session_id="sync",
+            message=f"New file available for download: {file.filename}",
+            summary="File Push",
+            notif_type="info",
+        )
+        return jsonify(result)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+@api_bp.route("/mobile/pull/<file_id>", methods=["GET"])
+def api_mobile_pull(file_id):
+    """Let mobile device (or CLI) download a file from the sync queue."""
+    # Find file in sync dir
+    for f in MOBILE_SYNC_DIR.glob(f"{file_id}_*"):
+        return send_file(str(f), as_attachment=True)
+    return jsonify({"success": False, "error": "File not found"}), 404
+
+
+# ========== Network / IP Detection ==========
+
+
+@api_bp.route("/network/ips", methods=["GET"])
+@api_error_handler
+def api_network_ips():
+    """Get all detected IP addresses with classification."""
+    from ..services.ip_detection_service import get_ip_detection_service
+
+    service = get_ip_detection_service()
+    force_refresh = request.args.get("refresh", "false").lower() == "true"
+    ips = service.get_all_ips(force_refresh=force_refresh)
+
+    return jsonify(
+        {
+            "ips": [
+                {
+                    "address": ip.address,
+                    "type": ip.type,
+                    "interface": ip.interface,
+                    "is_primary": ip.is_primary,
+                    "reachable": ip.reachable,
+                }
+                for ip in ips
+            ],
+            "count": len(ips),
+            "timestamp": service._cache_time if hasattr(service, "_cache_time") else 0,
+        }
+    )
+
+
+@api_bp.route("/network/ips/tailscale", methods=["GET"])
+@api_error_handler
+def api_network_tailscale_ips():
+    """Get Tailscale IP addresses."""
+    from ..services.ip_detection_service import get_ip_detection_service
+
+    service = get_ip_detection_service()
+    force_refresh = request.args.get("refresh", "false").lower() == "true"
+    tailscale_ips = service.get_ips_by_type("tailscale", force_refresh=force_refresh)
+
+    return jsonify(
+        {
+            "tailscale_ips": [ip.address for ip in tailscale_ips],
+            "count": len(tailscale_ips),
+            "available": service.is_tailscale_available(force_refresh=force_refresh),
+        }
+    )
+
+
+@api_bp.route("/network/ips/external", methods=["GET"])
+@api_error_handler
+def api_network_external_ip():
+    """Get external/public IP address."""
+    from ..services.ip_detection_service import get_ip_detection_service
+
+    service = get_ip_detection_service()
+    force_refresh = request.args.get("refresh", "false").lower() == "true"
+    external_ip = service.get_external_ip(force_refresh=force_refresh)
+
+    if external_ip:
+        return jsonify(
+            {
+                "external_ip": external_ip,
+                "cached_age_seconds": time.time() - service._external_ip_cache_time
+                if hasattr(service, "_external_ip_cache_time")
+                else 0,
+            }
+        )
+    else:
+        return jsonify(
+            {"external_ip": None, "error": "Failed to detect external IP"}
+        ), 503
+
+
+@api_bp.route("/network/primary-ip", methods=["GET"])
+@api_error_handler
+def api_network_primary_ip():
+    """Get the primary (outbound) IP address."""
+    from ..services.ip_detection_service import get_ip_detection_service
+
+    service = get_ip_detection_service()
+    force_refresh = request.args.get("refresh", "false").lower() == "true"
+    primary_ip = service.get_primary_ip(force_refresh=force_refresh)
+
+    if primary_ip:
+        return jsonify(
+            {
+                "primary_ip": primary_ip,
+                "cached_age_seconds": time.time() - service._primary_ip_cache_time
+                if hasattr(service, "_primary_ip_cache_time")
+                else 0,
+            }
+        )
+    else:
+        return jsonify(
+            {"primary_ip": None, "error": "Failed to detect primary IP"}
+        ), 503
+
+
+@api_bp.route("/network/summary", methods=["GET"])
+@api_error_handler
+def api_network_summary():
+    """Get comprehensive network summary including all IP types and metadata."""
+    from ..services.ip_detection_service import get_ip_detection_service
+
+    service = get_ip_detection_service()
+    force_refresh = request.args.get("refresh", "false").lower() == "true"
+    summary = service.get_ip_summary(force_refresh=force_refresh)
+
+    return jsonify(summary)
+
+
+@api_bp.route("/network/refresh", methods=["POST"])
+@api_error_handler
+def api_network_refresh():
+    """Force refresh all IP detection caches."""
+    from ..services.ip_detection_service import get_ip_detection_service
+
+    service = get_ip_detection_service()
+    service.clear_cache()
+
+    # Force refresh after clearing cache
+    summary = service.get_ip_summary(force_refresh=True)
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "Network detection cache refreshed",
+            "summary": summary,
+        }
+    )

@@ -350,7 +350,8 @@ class AgentOrchestrator {
     updateOverviewStats() {
         const agents = Array.from(this.agents.values());
         const total = agents.length;
-        const active = agents.filter(a => a.status === 'busy').length;
+        const activeStatuses = ['busy', 'working', 'active'];
+        const active = agents.filter(a => activeStatuses.includes(a.status)).length;
         const tasksCompleted = agents.reduce((sum, a) => sum + (a.tasks_completed || 0), 0);
 
         const totalEl = document.getElementById('overview-total-agents');
@@ -471,6 +472,8 @@ class AgentOrchestrator {
         const statusColors = {
             'idle': 'var(--text-dim)',
             'busy': 'var(--warning)',
+            'working': 'var(--warning)',
+            'active': 'var(--success, #4caf50)',
             'error': 'var(--error)',
             'offline': 'var(--text-dim)'
         };

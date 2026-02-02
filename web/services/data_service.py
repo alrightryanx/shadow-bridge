@@ -5,6 +5,7 @@ Data Service - Read ~/.shadowai/ JSON files
 import json
 import copy
 import os
+import time
 import base64
 import hashlib
 import tempfile
@@ -1553,17 +1554,42 @@ def get_agents(device_id: Optional[str] = None) -> List[Dict]:
     except Exception as e:
         logger.error(f"Error reading agents from agents.json: {e}")
 
-    # Merge: SQLite agents take precedence for the 'autonomous-team' device_id
+    # Also get live orchestrator agents (actually running processes)
+    orchestrator_agents = []
+    try:
+        from .agent_orchestrator import get_all_agents
+        orchestrator_agents = get_all_agents()
+    except Exception:
+        pass
+
+    # Merge: Live orchestrator agents > SQLite > JSON
     merged_agents = {}
-    
-    # Add JSON agents first
+
+    # Add JSON agents first (lowest priority)
     for agent in json_agents:
         if agent["device_id"] != "autonomous-team":
             merged_agents[agent["id"]] = agent
 
-    # Add SQLite agents
+    # Add SQLite agents (override JSON for autonomous-team)
     for agent in sqlite_agents:
         merged_agents[agent["id"]] = agent
+
+    # Add live orchestrator agents (highest priority - real running state)
+    for agent in orchestrator_agents:
+        merged_agents[agent["id"]] = {
+            "id": agent.get("id", ""),
+            "name": agent.get("name", "Unnamed"),
+            "status": agent.get("status", "offline"),
+            "specialty": agent.get("specialty", ""),
+            "current_task": agent.get("current_task"),
+            "tasks_completed": agent.get("tasks_completed", 0),
+            "device_id": agent.get("device_id", "orchestrator"),
+            "cpu_percent": agent.get("cpu_percent", 0),
+            "memory_mb": agent.get("memory_mb", 0),
+            "uptime_seconds": agent.get("uptime_seconds", 0),
+            "model": agent.get("model", ""),
+            "cli_provider": agent.get("cli_provider", ""),
+        }
 
     result = list(merged_agents.values())
     
@@ -1590,12 +1616,29 @@ def get_agent(agent_id: str) -> Optional[Dict]:
 def get_agent_metrics() -> Dict:
     """Get aggregate agent performance metrics."""
     agents = get_agents()
+
+    # Also check orchestrator for live running agents
+    live_agents = []
+    try:
+        from .agent_orchestrator import get_all_agents
+        live_agents = get_all_agents()
+    except Exception:
+        pass
+
+    # Merge live agent statuses into our agent list
+    live_ids = {a["id"] for a in live_agents}
+    live_status_map = {a["id"]: a.get("status", "offline") for a in live_agents}
+
+    # Count active = busy + working + active (SQLite uses "active" for defined agents)
+    active_statuses = {"busy", "working", "active"}
+    idle_statuses = {"idle"}
+
     return {
-        "total_agents": len(agents),
-        "active_agents": len([a for a in agents if a["status"] == "busy"]),
-        "idle_agents": len([a for a in agents if a["status"] == "idle"]),
+        "total_agents": len(agents) + len([a for a in live_agents if a["id"] not in {ag["id"] for ag in agents}]),
+        "active_agents": len([a for a in agents if a["status"] in active_statuses]) + len([a for a in live_agents if a["id"] not in {ag["id"] for ag in agents} and a.get("status") in active_statuses]),
+        "idle_agents": len([a for a in agents if a["status"] in idle_statuses]) + len([a for a in live_agents if a["id"] not in {ag["id"] for ag in agents} and a.get("status") in idle_statuses]),
         "offline_agents": len([a for a in agents if a["status"] == "offline"]),
-        "total_tasks_completed": sum(a.get("tasks_completed", 0) for a in agents),
+        "total_tasks_completed": sum(a.get("tasks_completed", 0) for a in agents) + sum(a.get("tasks_completed", 0) for a in live_agents if a["id"] not in {ag["id"] for ag in agents}),
     }
 
 
@@ -1946,7 +1989,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.153",
+        "version": "1.154",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,

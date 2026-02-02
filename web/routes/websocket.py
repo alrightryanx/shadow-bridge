@@ -9,6 +9,7 @@ Supports:
 """
 
 from flask import request
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -56,6 +57,10 @@ if socketio is not None:
             "user_id": None,
             "device_id": None,
         }
+        
+        # CRITICAL: Join the 'all' room to receive agent broadcasts
+        join_room("all")
+        
         emit("status", {"connected": True, "clients": len(connected_clients)})
 
     @socketio.on("disconnect")
@@ -403,6 +408,10 @@ if socketio is not None:
         """Assign a task to an agent."""
         agent_id = data.get("agent_id")
         task = data.get("task")
+        task_id = data.get("task_id")
+        thread_id = data.get("thread_id")
+        repo = data.get("repo")
+        lock_paths = data.get("lock_paths")
 
         if not agent_id or not task:
             emit("error", {"message": "Agent ID and task are required"})
@@ -416,7 +425,14 @@ if socketio is not None:
             return
 
         # Assign task
-        success = assign_task(agent_id, task)
+        success = assign_task(
+            agent_id,
+            task,
+            task_id=task_id,
+            thread_id=thread_id,
+            repo=repo,
+            lock_paths=lock_paths
+        )
 
         if success:
             emit("task_assigned", {"agent_id": agent_id, "task": task})
