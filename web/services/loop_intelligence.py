@@ -107,7 +107,7 @@ class LoopIntelligence:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or os.path.join(
-            os.path.expanduser("~"), ".shadowai", "shadow_ai.db"
+            "C:", os.sep, "shadow", "backend", "data", "shadow_ai.db"
         )
         self.deploy_threshold = DEPLOY_THRESHOLD
         self.max_iterations = MAX_LOOP_ITERATIONS
@@ -353,13 +353,6 @@ class LoopIntelligence:
         try:
             if os.path.exists(self.db_path):
                 return sqlite3.connect(self.db_path)
-
-            # Try the backend db path
-            alt_path = os.path.join("C:", os.sep, "shadow", "backend", "data", "shadow_ai.db")
-            if os.path.exists(alt_path):
-                self.db_path = alt_path
-                return sqlite3.connect(alt_path)
-
             return None
         except Exception as e:
             logger.warning(f"Failed to connect to DB: {e}")
