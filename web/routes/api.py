@@ -6264,3 +6264,161 @@ def api_network_refresh():
             "summary": summary,
         }
     )
+
+
+# ============ Predictive Autonomous System ============
+
+
+@api_bp.route("/predictive/status")
+def api_predictive_status():
+    """Get predictive system status overview."""
+    from ..services.routine_scheduler import get_routine_scheduler
+    from ..services.loop_intelligence import get_loop_intelligence
+    import sqlite3
+
+    db_path = os.path.join("C:", os.sep, "shadow", "backend", "data", "shadow_ai.db")
+    result = {
+        "predictions": {"total": 0, "pending": 0, "accepted": 0},
+        "routines": {"total": 0, "enabled": 0},
+        "loops": {"total": 0, "completed": 0, "running": 0, "failed": 0},
+    }
+
+    try:
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Predictions
+            for row in cursor.execute("SELECT outcome, COUNT(*) as cnt FROM predictions GROUP BY outcome"):
+                result["predictions"]["total"] += row["cnt"]
+                outcome = row["outcome"] or "pending"
+                if outcome in result["predictions"]:
+                    result["predictions"][outcome] = row["cnt"]
+
+            # Routines
+            for row in cursor.execute("SELECT enabled, COUNT(*) as cnt FROM routines GROUP BY enabled"):
+                result["routines"]["total"] += row["cnt"]
+                if row["enabled"]:
+                    result["routines"]["enabled"] = row["cnt"]
+
+            # Loops
+            for row in cursor.execute("SELECT status, COUNT(*) as cnt FROM loop_history GROUP BY status"):
+                result["loops"]["total"] += row["cnt"]
+                status = row["status"] or "pending"
+                if status in result["loops"]:
+                    result["loops"][status] = row["cnt"]
+
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to fetch predictive status: {e}")
+
+    return jsonify(result)
+
+
+@api_bp.route("/predictive/routines")
+def api_get_routines():
+    """Get all scheduled routines."""
+    from ..services.routine_scheduler import get_routine_scheduler
+
+    scheduler = get_routine_scheduler()
+    routines = scheduler.get_all_routines()
+    return jsonify(routines)
+
+
+@api_bp.route("/predictive/routines", methods=["POST"])
+def api_create_routine():
+    """Create a new routine."""
+    from ..services.routine_scheduler import get_routine_scheduler
+
+    data = request.get_json() or {}
+    name = data.get("name")
+    cron_expression = data.get("cron_expression")
+    task_template = data.get("task_template")
+
+    if not name or not cron_expression or not task_template:
+        return jsonify({"error": "name, cron_expression, and task_template are required"}), 400
+
+    scheduler = get_routine_scheduler()
+    routine_id = scheduler.create_routine(
+        name=name,
+        description=data.get("description", ""),
+        cron_expression=cron_expression,
+        task_template=task_template if isinstance(task_template, dict) else json.loads(task_template),
+        project_id=data.get("project_id"),
+    )
+
+    if routine_id:
+        return jsonify({"success": True, "id": routine_id})
+    return jsonify({"error": "Failed to create routine"}), 500
+
+
+@api_bp.route("/predictive/routines/<int:routine_id>/toggle", methods=["POST"])
+def api_toggle_routine(routine_id):
+    """Toggle a routine's enabled status."""
+    from ..services.routine_scheduler import get_routine_scheduler
+
+    data = request.get_json() or {}
+    enabled = data.get("enabled", True)
+
+    scheduler = get_routine_scheduler()
+    success = scheduler.toggle_routine(routine_id, enabled)
+    return jsonify({"success": success, "enabled": enabled})
+
+
+@api_bp.route("/predictive/routines/<int:routine_id>", methods=["DELETE"])
+def api_delete_routine(routine_id):
+    """Delete a routine."""
+    from ..services.routine_scheduler import get_routine_scheduler
+
+    scheduler = get_routine_scheduler()
+    success = scheduler.delete_routine(routine_id)
+    return jsonify({"success": success})
+
+
+@api_bp.route("/predictive/predictions")
+def api_get_predictions():
+    """Get recent predictions."""
+    import sqlite3
+
+    limit = request.args.get("limit", 50, type=int)
+    db_path = os.path.join("C:", os.sep, "shadow", "backend", "data", "shadow_ai.db")
+    predictions = []
+
+    try:
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM predictions ORDER BY created_at DESC LIMIT ?", [limit]
+            ).fetchall()
+            predictions = [dict(r) for r in rows]
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to fetch predictions: {e}")
+
+    return jsonify(predictions)
+
+
+@api_bp.route("/predictive/loops")
+def api_get_loop_history():
+    """Get subagent loop execution history."""
+    import sqlite3
+
+    limit = request.args.get("limit", 50, type=int)
+    db_path = os.path.join("C:", os.sep, "shadow", "backend", "data", "shadow_ai.db")
+    loops = []
+
+    try:
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM loop_history ORDER BY started_at DESC LIMIT ?", [limit]
+            ).fetchall()
+            loops = [dict(r) for r in rows]
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to fetch loop history: {e}")
+
+    return jsonify(loops)

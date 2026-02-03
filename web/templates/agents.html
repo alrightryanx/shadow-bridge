@@ -122,6 +122,11 @@
         <span>Briefings</span>
         <span class="tab-count" id="tab-count-briefings">0</span>
     </button>
+    <button class="tab-button" data-tab="predictive" onclick="switchMainTab('predictive'); loadPredictiveTab();">
+        <span class="material-symbols-outlined">psychology</span>
+        <span>Predictive</span>
+        <span class="tab-count" id="tab-count-predictive">0</span>
+    </button>
 </div>
 
 <!-- Agents Tab -->
@@ -400,6 +405,161 @@
 
     <div class="briefings-list" id="briefings-list">
         <div class="empty-state-small">Loading briefings...</div>
+    </div>
+</div>
+
+<!-- Predictive Tab -->
+<div id="tab-predictive" class="main-tab-content">
+    <div class="tab-header">
+        <h3>Predictive System</h3>
+        <div class="tab-actions">
+            <button class="btn btn-secondary" onclick="loadPredictiveTab()">
+                <span class="material-symbols-outlined">refresh</span>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Predictive Overview Cards -->
+    <div class="overview-cards" id="predictive-overview" style="margin-bottom: 1.5rem;">
+        <div class="overview-card">
+            <div class="overview-card-icon">
+                <span class="material-symbols-outlined">event_repeat</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="pred-routines-count">0</div>
+                <div class="overview-card-label">Routines</div>
+            </div>
+        </div>
+        <div class="overview-card">
+            <div class="overview-card-icon active">
+                <span class="material-symbols-outlined">auto_awesome</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="pred-predictions-count">0</div>
+                <div class="overview-card-label">Predictions</div>
+            </div>
+        </div>
+        <div class="overview-card">
+            <div class="overview-card-icon success">
+                <span class="material-symbols-outlined">all_inclusive</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="pred-loops-count">0</div>
+                <div class="overview-card-label">Loops Run</div>
+            </div>
+        </div>
+        <div class="overview-card">
+            <div class="overview-card-icon">
+                <span class="material-symbols-outlined">speed</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="pred-loop-success-rate">-</div>
+                <div class="overview-card-label">Loop Success</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sub-tabs for Routines / Predictions / Loops -->
+    <div class="main-tabs" style="margin-bottom: 1rem;">
+        <button class="tab-button active" data-subtab="routines" onclick="switchPredictiveSubTab('routines')">
+            <span class="material-symbols-outlined">event_repeat</span>
+            <span>Routines</span>
+        </button>
+        <button class="tab-button" data-subtab="predictions" onclick="switchPredictiveSubTab('predictions')">
+            <span class="material-symbols-outlined">auto_awesome</span>
+            <span>Predictions</span>
+        </button>
+        <button class="tab-button" data-subtab="loops" onclick="switchPredictiveSubTab('loops')">
+            <span class="material-symbols-outlined">all_inclusive</span>
+            <span>Loops</span>
+        </button>
+    </div>
+
+    <!-- Routines Sub-tab -->
+    <div id="subtab-routines" class="predictive-subtab active">
+        <div class="tab-header" style="margin-bottom: 1rem;">
+            <h4>Scheduled Routines</h4>
+            <button class="btn btn-primary btn-small" onclick="openCreateRoutineModal()">
+                <span class="material-symbols-outlined">add</span>
+                New Routine
+            </button>
+        </div>
+        <div id="routines-list" class="briefings-list">
+            <div class="empty-state-small">Loading routines...</div>
+        </div>
+    </div>
+
+    <!-- Predictions Sub-tab -->
+    <div id="subtab-predictions" class="predictive-subtab" style="display: none;">
+        <h4 style="margin-bottom: 1rem;">Recent Predictions</h4>
+        <div id="predictions-list" class="briefings-list">
+            <div class="empty-state-small">Loading predictions...</div>
+        </div>
+    </div>
+
+    <!-- Loops Sub-tab -->
+    <div id="subtab-loops" class="predictive-subtab" style="display: none;">
+        <h4 style="margin-bottom: 1rem;">Loop Execution History</h4>
+        <div id="loops-list" class="briefings-list">
+            <div class="empty-state-small">Loading loop history...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Routine Modal -->
+<div id="create-routine-modal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>
+                <span class="material-symbols-outlined">event_repeat</span>
+                Create Routine
+            </h2>
+            <button class="modal-close" onclick="closeCreateRoutineModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Routine Name</label>
+                <input type="text" id="routine-name" class="form-input" placeholder="e.g., Daily Security Scan">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea id="routine-description" class="form-textarea" rows="2" placeholder="What does this routine do?"></textarea>
+            </div>
+            <div class="form-group">
+                <label>Schedule (Cron)</label>
+                <input type="text" id="routine-cron" class="form-input" placeholder="0 9 * * *">
+                <div class="form-hint">Examples: "0 9 * * *" (daily 9am), "0 9 * * 1" (Monday 9am), "0 * * * *" (hourly)</div>
+            </div>
+            <div class="form-group">
+                <label>Task Prompt</label>
+                <textarea id="routine-prompt" class="form-textarea" rows="3" placeholder="The prompt that will be sent to the agent..."></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Category</label>
+                    <select id="routine-category" class="form-select">
+                        <option value="general">General</option>
+                        <option value="security">Security</option>
+                        <option value="testing">Testing</option>
+                        <option value="code_review">Code Review</option>
+                        <option value="maintenance">Maintenance</option>
+                        <option value="reporting">Reporting</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Priority (1-10)</label>
+                    <input type="number" id="routine-priority" class="form-input" value="5" min="1" max="10">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateRoutineModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmCreateRoutine()">
+                <span class="material-symbols-outlined">check</span>
+                Create
+            </button>
+        </div>
     </div>
 </div>
 
@@ -3821,6 +3981,48 @@ function setupAutonomousWebSocket() {
             repo: data.repo
         });
     });
+
+    // Subagent Loop Events
+    socket.on('subagent_loop_started', (data) => {
+        addActivityItem(`🔄 Loop started: ${data.purpose || 'iteration'} (${data.max_iterations} iterations)`, 'info', null, {
+            agent_id: data.agent_id,
+            status: 'loop',
+            severity: 'info'
+        });
+    });
+
+    socket.on('subagent_loop_iteration', (data) => {
+        addActivityItem(`🔁 Loop ${data.iteration}/${data.max_iterations}: ${data.result || 'in progress'}`, 'info', null, {
+            agent_id: data.agent_id,
+            status: 'loop'
+        });
+    });
+
+    socket.on('subagent_loop_completed', (data) => {
+        const statusIcon = data.status === 'success' ? '✅' : (data.status === 'timeout' ? '⏰' : '❌');
+        addActivityItem(`${statusIcon} Loop ${data.status}: ${data.final_result || ''} (${data.iterations_completed}/${data.iterations_requested} iterations)`, 
+            data.status === 'success' ? 'success' : 'warning', null, {
+            agent_id: data.agent_id,
+            status: 'loop',
+            severity: data.status === 'success' ? 'success' : 'warning'
+        });
+    });
+
+    socket.on('subagent_loop_timeout', (data) => {
+        addActivityItem(`⏰ Loop timed out after ${data.iterations_completed} iterations`, 'warning', null, {
+            agent_id: data.agent_id,
+            status: 'loop',
+            severity: 'warning'
+        });
+    });
+
+    socket.on('subagent_loop_cancelled', (data) => {
+        addActivityItem(`🚫 Loop cancelled: ${data.reason || 'unknown'}`, 'warning', null, {
+            agent_id: data.agent_id,
+            status: 'loop',
+            severity: 'warning'
+        });
+    });
 }
 
 // ============ Briefings System ============
@@ -3974,5 +4176,273 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(() => {});
 });
+
+// ============ Predictive System Tab ============
+
+function switchPredictiveSubTab(tabName) {
+    document.querySelectorAll('[data-subtab]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.subtab === tabName);
+    });
+    document.querySelectorAll('.predictive-subtab').forEach(el => {
+        el.style.display = el.id === `subtab-${tabName}` ? 'block' : 'none';
+        if (el.id === `subtab-${tabName}`) el.classList.add('active');
+        else el.classList.remove('active');
+    });
+}
+
+async function loadPredictiveTab() {
+    await Promise.all([
+        loadPredictiveOverview(),
+        loadRoutines(),
+        loadPredictions(),
+        loadLoopHistory()
+    ]);
+}
+
+async function loadPredictiveOverview() {
+    try {
+        const resp = await fetch('/api/predictive/status');
+        const data = await resp.json();
+
+        document.getElementById('pred-routines-count').textContent = data.routines?.total || 0;
+        document.getElementById('pred-predictions-count').textContent = data.predictions?.total || 0;
+        document.getElementById('pred-loops-count').textContent = data.loops?.total || 0;
+
+        const completed = data.loops?.completed || 0;
+        const total = data.loops?.total || 0;
+        if (total > 0) {
+            document.getElementById('pred-loop-success-rate').textContent = Math.round((completed / total) * 100) + '%';
+        } else {
+            document.getElementById('pred-loop-success-rate').textContent = '-';
+        }
+
+        const countEl = document.getElementById('tab-count-predictive');
+        const activeCount = (data.routines?.enabled || 0) + (data.loops?.running || 0);
+        if (countEl) countEl.textContent = activeCount > 0 ? activeCount : '';
+    } catch (e) {
+        console.error('Failed to load predictive overview:', e);
+    }
+}
+
+async function loadRoutines() {
+    const container = document.getElementById('routines-list');
+    try {
+        const resp = await fetch('/api/predictive/routines');
+        const routines = await resp.json();
+
+        if (!routines.length) {
+            container.innerHTML = '<div class="empty-state-small">No routines configured. Click "New Routine" to create one.</div>';
+            return;
+        }
+
+        container.innerHTML = routines.map(r => `
+            <div class="briefing-card ${r.enabled ? '' : 'opacity-50'}" style="${r.enabled ? '' : 'opacity: 0.5;'}">
+                <div class="briefing-card-header">
+                    <div class="briefing-card-title">
+                        <span class="material-symbols-outlined" style="color: ${r.enabled ? 'var(--primary)' : 'var(--text-muted)'}">
+                            ${r.enabled ? 'event_available' : 'event_busy'}
+                        </span>
+                        <div>
+                            <h4>${escapeHtml(r.name)}</h4>
+                            <div class="briefing-card-meta">
+                                <span class="material-symbols-outlined" style="font-size: 14px;">schedule</span>
+                                ${escapeHtml(r.cron_expression)}
+                                ${r.last_run_at ? ' &middot; Last: ' + new Date(r.last_run_at).toLocaleString() : ' &middot; Never run'}
+                                ${r.next_run_at ? ' &middot; Next: ' + new Date(r.next_run_at).toLocaleString() : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="briefing-card-actions" style="display: flex; gap: 0.5rem;">
+                        <button class="btn btn-small ${r.enabled ? 'btn-secondary' : 'btn-primary'}" onclick="toggleRoutine(${r.id}, ${!r.enabled})" title="${r.enabled ? 'Disable' : 'Enable'}">
+                            <span class="material-symbols-outlined">${r.enabled ? 'pause' : 'play_arrow'}</span>
+                        </button>
+                        <button class="btn btn-small btn-danger" onclick="deleteRoutine(${r.id})" title="Delete">
+                            <span class="material-symbols-outlined">delete</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="briefing-card-body" style="margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.85rem;">
+                    ${escapeHtml(r.description || '')}
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        container.innerHTML = '<div class="empty-state-small">Failed to load routines</div>';
+        console.error('Failed to load routines:', e);
+    }
+}
+
+async function loadPredictions() {
+    const container = document.getElementById('predictions-list');
+    try {
+        const resp = await fetch('/api/predictive/predictions?limit=30');
+        const predictions = await resp.json();
+
+        if (!predictions.length) {
+            container.innerHTML = '<div class="empty-state-small">No predictions yet. The predictive engine generates these automatically during agent cycles.</div>';
+            return;
+        }
+
+        container.innerHTML = predictions.map(p => {
+            const confidence = Math.round((p.confidence || 0) * 100);
+            const outcomeColors = { pending: 'var(--text-muted)', accepted: 'var(--primary)', completed: 'var(--success)', rejected: 'var(--danger)', expired: 'var(--warning)' };
+            const outcomeColor = outcomeColors[p.outcome] || 'var(--text-muted)';
+            const signalIcons = { routine: 'event_repeat', project_activity: 'trending_up', code_health: 'healing', belief: 'psychology' };
+            const icon = signalIcons[p.signal_type] || 'auto_awesome';
+
+            let actionText = p.predicted_action || '';
+            try {
+                const parsed = JSON.parse(actionText);
+                actionText = parsed.prompt || parsed.type || actionText;
+            } catch (e) {}
+
+            return `
+                <div class="briefing-card">
+                    <div class="briefing-card-header">
+                        <div class="briefing-card-title">
+                            <span class="material-symbols-outlined" style="color: ${outcomeColor}">${icon}</span>
+                            <div>
+                                <h4 style="font-size: 0.9rem;">${escapeHtml(actionText.substring(0, 120))}${actionText.length > 120 ? '...' : ''}</h4>
+                                <div class="briefing-card-meta">
+                                    <span style="color: ${outcomeColor}; font-weight: 600;">${(p.outcome || 'pending').toUpperCase()}</span>
+                                    &middot; ${p.signal_type}
+                                    &middot; Confidence: <strong>${confidence}%</strong>
+                                    &middot; ${new Date(p.created_at).toLocaleString()}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = '<div class="empty-state-small">Failed to load predictions</div>';
+        console.error('Failed to load predictions:', e);
+    }
+}
+
+async function loadLoopHistory() {
+    const container = document.getElementById('loops-list');
+    try {
+        const resp = await fetch('/api/predictive/loops?limit=30');
+        const loops = await resp.json();
+
+        if (!loops.length) {
+            container.innerHTML = '<div class="empty-state-small">No loop executions yet. Loops are deployed automatically when the scoring system determines iterative execution is beneficial.</div>';
+            return;
+        }
+
+        container.innerHTML = loops.map(l => {
+            const statusColors = { completed: 'var(--success)', failed: 'var(--danger)', running: 'var(--primary)', pending: 'var(--text-muted)', stopped: 'var(--warning)' };
+            const statusColor = statusColors[l.status] || 'var(--text-muted)';
+            const statusIcons = { completed: 'check_circle', failed: 'error', running: 'sync', pending: 'hourglass_empty', stopped: 'stop_circle' };
+            const icon = statusIcons[l.status] || 'all_inclusive';
+            const score = l.deploy_score ? (l.deploy_score * 100).toFixed(0) + '%' : '-';
+
+            return `
+                <div class="briefing-card">
+                    <div class="briefing-card-header">
+                        <div class="briefing-card-title">
+                            <span class="material-symbols-outlined" style="color: ${statusColor}">${icon}</span>
+                            <div>
+                                <h4 style="font-size: 0.9rem;">${escapeHtml((l.loop_prompt || '').substring(0, 120))}${(l.loop_prompt || '').length > 120 ? '...' : ''}</h4>
+                                <div class="briefing-card-meta">
+                                    <span style="color: ${statusColor}; font-weight: 600;">${(l.status || 'pending').toUpperCase()}</span>
+                                    &middot; ${l.iteration_count || 0}/${l.max_iterations || 10} iterations
+                                    &middot; Score: <strong>${score}</strong>
+                                    &middot; ${l.started_at ? new Date(l.started_at).toLocaleString() : 'Not started'}
+                                    ${l.completed_at ? ' &middot; Completed: ' + new Date(l.completed_at).toLocaleString() : ''}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = '<div class="empty-state-small">Failed to load loop history</div>';
+        console.error('Failed to load loop history:', e);
+    }
+}
+
+async function toggleRoutine(id, enabled) {
+    try {
+        await fetch(`/api/predictive/routines/${id}/toggle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+        await loadRoutines();
+        await loadPredictiveOverview();
+        if (typeof showToast === 'function') showToast(`Routine ${enabled ? 'enabled' : 'disabled'}`, 'success');
+    } catch (e) {
+        console.error('Failed to toggle routine:', e);
+        if (typeof showToast === 'function') showToast('Failed to toggle routine', 'error');
+    }
+}
+
+async function deleteRoutine(id) {
+    if (!confirm('Delete this routine?')) return;
+    try {
+        await fetch(`/api/predictive/routines/${id}`, { method: 'DELETE' });
+        await loadRoutines();
+        await loadPredictiveOverview();
+        if (typeof showToast === 'function') showToast('Routine deleted', 'success');
+    } catch (e) {
+        console.error('Failed to delete routine:', e);
+        if (typeof showToast === 'function') showToast('Failed to delete routine', 'error');
+    }
+}
+
+function openCreateRoutineModal() {
+    document.getElementById('create-routine-modal').classList.remove('hidden');
+}
+
+function closeCreateRoutineModal() {
+    document.getElementById('create-routine-modal').classList.add('hidden');
+}
+
+async function confirmCreateRoutine() {
+    const name = document.getElementById('routine-name').value.trim();
+    const description = document.getElementById('routine-description').value.trim();
+    const cron = document.getElementById('routine-cron').value.trim();
+    const prompt = document.getElementById('routine-prompt').value.trim();
+    const category = document.getElementById('routine-category').value;
+    const priority = parseInt(document.getElementById('routine-priority').value) || 5;
+
+    if (!name || !cron || !prompt) {
+        if (typeof showToast === 'function') showToast('Name, schedule, and prompt are required', 'error');
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/predictive/routines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name,
+                description,
+                cron_expression: cron,
+                task_template: { type: category, prompt, category, priority }
+            })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            closeCreateRoutineModal();
+            document.getElementById('routine-name').value = '';
+            document.getElementById('routine-description').value = '';
+            document.getElementById('routine-cron').value = '';
+            document.getElementById('routine-prompt').value = '';
+            await loadRoutines();
+            await loadPredictiveOverview();
+            if (typeof showToast === 'function') showToast('Routine created', 'success');
+        } else {
+            if (typeof showToast === 'function') showToast(data.error || 'Failed to create routine', 'error');
+        }
+    } catch (e) {
+        console.error('Failed to create routine:', e);
+        if (typeof showToast === 'function') showToast('Failed to create routine', 'error');
+    }
+}
 </script>
 {% endblock %}
