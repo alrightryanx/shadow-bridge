@@ -292,7 +292,9 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.158"
+APP_VERSION = "1.159"
+SYNC_SCHEMA_VERSION = 2
+SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
 PROJECTS_FILE = os.path.join(HOME_DIR, ".shadowai", "projects.json")
 NOTES_FILE = os.path.join(HOME_DIR, ".shadowai", "notes.json")
@@ -2215,6 +2217,22 @@ class DataReceiver(threading.Thread):
                     ip = addr[0]
                     raw_device_id = payload.get("device_id", None)
                     device_id = raw_device_id or self.ip_to_device_id.get(ip) or ip
+                    try:
+                        client_schema = int(payload.get("schema_version", SYNC_SCHEMA_MIN_VERSION))
+                    except (TypeError, ValueError):
+                        client_schema = SYNC_SCHEMA_MIN_VERSION
+
+                    def send_sync_response(response_payload: dict):
+                        response_payload["schema_version"] = SYNC_SCHEMA_VERSION
+                        response_payload["schema_min_version"] = SYNC_SCHEMA_MIN_VERSION
+                        compatible = SYNC_SCHEMA_MIN_VERSION <= client_schema <= SYNC_SCHEMA_VERSION
+                        response_payload["schema_compatible"] = compatible
+                        if not compatible:
+                            if client_schema < SYNC_SCHEMA_MIN_VERSION:
+                                response_payload["schema_warning"] = "Client sync schema too old; upgrade the app."
+                            else:
+                                response_payload["schema_warning"] = "Client sync schema is newer; some fields may be ignored."
+                        self._send_response(conn, response_payload)
 
                     with self._devices_lock:
                         if raw_device_id:
@@ -2328,7 +2346,7 @@ class DataReceiver(threading.Thread):
                                 log.info(
                                     f"Including {len(pending['projects'])} pending projects for sync to device"
                                 )
-                        self._send_response(conn, response)
+                        send_sync_response(response)
                     elif "agents" in payload:
                         # Handle agents data from Android device
                         self._save_agents(device_id, device_name, ip, payload["agents"])
@@ -2349,21 +2367,17 @@ class DataReceiver(threading.Thread):
                                 response["sync_to_device"] = {"agents": bridge_agents}
                         except Exception:
                             pass
-                        self._send_response(conn, response)
+                        send_sync_response(response)
                     elif "tasks" in payload:
                         # Handle tasks data
                         self._save_tasks(device_id, device_name, ip, payload["tasks"])
-                        self._send_response(
-                            conn, {"success": True, "message": "Tasks synced"}
-                        )
+                        send_sync_response({"success": True, "message": "Tasks synced"})
                     elif "automations" in payload:
                         # Handle automations data
                         self._save_automations(
                             device_id, device_name, ip, payload["automations"]
                         )
-                        self._send_response(
-                            conn, {"success": True, "message": "Automations synced"}
-                        )
+                        send_sync_response({"success": True, "message": "Automations synced"})
                     elif "notes" in payload:
                         # Handle notes data (titles only, content fetched on-demand)
                         ip_candidates = payload.get("ip_candidates")
@@ -2388,7 +2402,7 @@ class DataReceiver(threading.Thread):
                                 log.info(
                                     f"Including {len(pending['notes'])} pending notes for sync to device"
                                 )
-                        self._send_response(conn, response)
+                        send_sync_response(response)
                     elif action == "sync_sessions" or "sessions" in payload:
                         sessions_payload = payload.get("sessions", [])
                         if SYNC_SERVICE_AVAILABLE and isinstance(
@@ -2410,7 +2424,7 @@ class DataReceiver(threading.Thread):
                                 log.info(
                                     f"Including {len(pending['sessions'])} pending sessions for sync to device"
                                 )
-                        self._send_response(conn, response)
+                        send_sync_response(response)
                     elif action == "sync_cards" or "cards" in payload:
                         cards_payload = payload.get("cards", [])
                         if SYNC_SERVICE_AVAILABLE and isinstance(cards_payload, list):
@@ -2426,7 +2440,7 @@ class DataReceiver(threading.Thread):
                                 log.info(
                                     f"Including {len(pending['cards'])} pending cards for sync to device"
                                 )
-                        self._send_response(conn, response)
+                        send_sync_response(response)
                     elif action == "sync_collections" or "collections" in payload:
                         collections_payload = payload.get("collections", [])
                         if SYNC_SERVICE_AVAILABLE and isinstance(
@@ -2446,7 +2460,7 @@ class DataReceiver(threading.Thread):
                                 log.info(
                                     f"Including {len(pending['collections'])} pending collections for sync to device"
                                 )
-                        self._send_response(conn, response)
+                        send_sync_response(response)
                     elif action == "sync_confirm":
                         # Android confirming it received and saved web-created items
                         if SYNC_SERVICE_AVAILABLE:
@@ -2478,9 +2492,7 @@ class DataReceiver(threading.Thread):
                                 log.info(
                                     f"Marked {len(synced_sessions)} sessions as synced"
                                 )
-                        self._send_response(
-                            conn, {"success": True, "message": "Sync confirmed"}
-                        )
+                        send_sync_response({"success": True, "message": "Sync confirmed"})
                     else:
                         self._send_response(conn, {"success": True, "message": "OK"})
 

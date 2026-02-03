@@ -510,25 +510,24 @@ class AutonomousLoop:
             import sqlite3
             SQLITE_DB_PATH = r"C:\shadow\backend\data\shadow_ai.db"
             if os.path.exists(SQLITE_DB_PATH):
-                conn = sqlite3.connect(SQLITE_DB_PATH)
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT id, description as title, status, priority, metadata FROM goals WHERE status != 'completed'")
-                rows = cursor.fetchall()
-                for row in rows:
-                    status = row['status'].lower()
-                    if status == 'active': status = 'pending' # Map for dashboard
-                    
-                    # Deduplicate
-                    if not any(t.get("id") == str(row['id']) for t in tasks):
-                        tasks.append({
-                            "id": str(row['id']),
-                            "title": row['title'],
-                            "status": status,
-                            "priority": row['priority'],
-                            "repo": "shadow-ai" # Default
-                        })
-                conn.close()
+                with sqlite3.connect(SQLITE_DB_PATH, timeout=5.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id, description as title, status, priority, metadata FROM goals WHERE status != 'completed'")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        status = row['status'].lower()
+                        if status == 'active': status = 'pending' # Map for dashboard
+
+                        # Deduplicate
+                        if not any(t.get("id") == str(row['id']) for t in tasks):
+                            tasks.append({
+                                "id": str(row['id']),
+                                "title": row['title'],
+                                "status": status,
+                                "priority": row['priority'],
+                                "repo": "shadow-ai" # Default
+                            })
         except Exception as e:
             logger.error(f"Error pulling tasks from SQLite: {e}")
 
@@ -554,26 +553,25 @@ class AutonomousLoop:
     def get_completed_tasks(self) -> List[dict]:
         """Get completed tasks including synced ones via SQLite and data service."""
         tasks = list(self.completed_tasks)
-        
+
         # Pull from SQLite ShadowAI DB
         try:
             import sqlite3
             SQLITE_DB_PATH = r"C:\shadow\backend\data\shadow_ai.db"
             if os.path.exists(SQLITE_DB_PATH):
-                conn = sqlite3.connect(SQLITE_DB_PATH)
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT id, description as title, status, priority FROM goals WHERE status = 'completed'")
-                rows = cursor.fetchall()
-                for row in rows:
-                    if not any(t.get("id") == str(row['id']) for t in tasks):
-                        tasks.append({
-                            "id": str(row['id']),
-                            "title": row['title'],
-                            "status": "completed",
-                            "priority": row['priority']
-                        })
-                conn.close()
+                with sqlite3.connect(SQLITE_DB_PATH, timeout=5.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id, description as title, status, priority FROM goals WHERE status = 'completed'")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        if not any(t.get("id") == str(row['id']) for t in tasks):
+                            tasks.append({
+                                "id": str(row['id']),
+                                "title": row['title'],
+                                "status": "completed",
+                                "priority": row['priority']
+                            })
         except Exception as e:
             logger.error(f"Error pulling completed tasks from SQLite: {e}")
 
@@ -630,17 +628,14 @@ class AutonomousLoop:
             import sqlite3
             SQLITE_DB_PATH = r"C:\shadow\backend\data\shadow_ai.db"
             if os.path.exists(SQLITE_DB_PATH):
-                conn = sqlite3.connect(SQLITE_DB_PATH)
-                cursor = conn.cursor()
-                # Check if it exists
-                cursor.execute("SELECT id FROM goals WHERE id = ?", (task_id,))
-                if cursor.fetchone():
-                    cursor.execute("DELETE FROM goals WHERE id = ?", (task_id,))
-                    conn.commit()
-                    conn.close()
-                    logger.info(f"Deleted task {task_id} from SQLite goals table")
-                    return True
-                conn.close()
+                with sqlite3.connect(SQLITE_DB_PATH, timeout=5.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM goals WHERE id = ?", (task_id,))
+                    if cursor.fetchone():
+                        cursor.execute("DELETE FROM goals WHERE id = ?", (task_id,))
+                        conn.commit()
+                        logger.info(f"Deleted task {task_id} from SQLite goals table")
+                        return True
         except Exception as e:
             logger.error(f"Error deleting task {task_id} from SQLite: {e}")
 

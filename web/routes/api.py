@@ -201,6 +201,55 @@ def api_error_handler(f):
     return decorated_function
 
 
+# ============ Bridge Control Auth ============
+
+
+def _load_bridge_api_tokens() -> list[str]:
+    """Load bridge control API tokens from env or backend/.env."""
+    raw = os.environ.get("SHADOW_BRIDGE_API_TOKEN")
+    if not raw:
+        env_path = "C:/shadow/backend/.env"
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("SHADOW_BRIDGE_API_TOKEN="):
+                            raw = line.split("=", 1)[1].strip()
+                            break
+            except OSError:
+                raw = None
+    if not raw:
+        return []
+    return [token.strip() for token in raw.split(",") if token.strip()]
+
+
+def _extract_bridge_auth_token() -> str | None:
+    """Extract bearer token from headers or query params."""
+    header = request.headers.get("Authorization", "") or ""
+    if header.lower().startswith("bearer "):
+        token = header[7:].strip()
+        if token:
+            return token
+    token = request.headers.get("X-Shadow-Auth") or request.args.get("auth") or request.args.get("token")
+    return token.strip() if token else None
+
+
+def require_bridge_auth(f):
+    """Require SHADOW_BRIDGE_API_TOKEN for control endpoints if configured."""
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        tokens = _load_bridge_api_tokens()
+        if not tokens:
+            return f(*args, **kwargs)
+        provided = _extract_bridge_auth_token()
+        if not provided or provided not in tokens:
+            return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
 # ============ Note Content Cache ============
 
 # Note content cache for faster repeated access
@@ -1290,9 +1339,54 @@ def api_agent(agent_id):
 
 @api_bp.route("/agents/<agent_id>/tasks")
 def api_agent_tasks(agent_id):
-    """Get agent's task history."""
-    # TODO: Implement task history
-    return jsonify([])
+    """Get agent's task history from autonomous loop data."""
+    try:
+        from web.services.autonomous_loop import get_autonomous_loop
+        loop = get_autonomous_loop()
+
+        history = []
+        # Completed tasks assigned to this agent
+        for task in loop.completed_tasks:
+            if task.get("assigned_to") == agent_id:
+                history.append({
+                    "id": task.get("id"),
+                    "title": task.get("title"),
+                    "status": "completed",
+                    "repo": task.get("repo"),
+                    "assigned_at": task.get("assigned_at"),
+                    "completed_at": task.get("completed_at"),
+                    "efficiency_ms": task.get("efficiency_ms"),
+                })
+
+        # Failed tasks assigned to this agent
+        for task in loop.failed_tasks:
+            if task.get("assigned_to") == agent_id:
+                history.append({
+                    "id": task.get("id"),
+                    "title": task.get("title"),
+                    "status": "failed",
+                    "repo": task.get("repo"),
+                    "assigned_at": task.get("assigned_at"),
+                    "failed_at": task.get("failed_at"),
+                })
+
+        # Currently in-progress task
+        for task in loop.task_queue:
+            if task.get("assigned_to") == agent_id and task.get("status") == "in_progress":
+                history.append({
+                    "id": task.get("id"),
+                    "title": task.get("title"),
+                    "status": "in_progress",
+                    "repo": task.get("repo"),
+                    "assigned_at": task.get("assigned_at"),
+                })
+
+        # Sort by most recent first
+        history.sort(key=lambda t: t.get("completed_at") or t.get("failed_at") or t.get("assigned_at") or "", reverse=True)
+        return jsonify(history)
+    except Exception as e:
+        logger.error(f"Error fetching task history for agent {agent_id}: {e}")
+        return jsonify([])
 
 
 @api_bp.route("/agents/metrics")
@@ -1341,6 +1435,7 @@ def api_agent_activity():
 
 
 @api_bp.route("/agents/pause", methods=["POST"])
+@require_bridge_auth
 def api_pause_agents():
     """Pause all agent execution."""
     _add_activity("system", "All agents paused", "pause")
@@ -1351,6 +1446,7 @@ def api_pause_agents():
 
 
 @api_bp.route("/agents/resume", methods=["POST"])
+@require_bridge_auth
 def api_resume_agents():
     """Resume all agent execution."""
     _add_activity("system", "All agents resumed", "play")
@@ -1361,6 +1457,7 @@ def api_resume_agents():
 
 
 @api_bp.route("/agents/kill-all", methods=["POST"])
+@require_bridge_auth
 def api_kill_all_agents():
     """Emergency kill switch for all agents."""
     _add_activity("kill", "KILL ALL command executed", "cancel")
@@ -1376,6 +1473,7 @@ def api_kill_all_agents():
 
 
 @api_bp.route("/agents/<agent_id>/kill", methods=["POST"])
+@require_bridge_auth
 def api_kill_agent(agent_id):
     """Kill a specific agent."""
     agent = get_agent(agent_id)
@@ -1552,6 +1650,7 @@ get_task_service().set_on_complete_callback(notify_companion_relay)
 
 
 @api_bp.route("/tasks/start", methods=["POST"])
+@require_bridge_auth
 @api_error_handler
 def api_start_task():
     """Start a new supervised background task."""
@@ -1618,6 +1717,7 @@ def api_task_output(task_id):
 
 
 @api_bp.route("/tasks/<task_id>/stop", methods=["POST"])
+@require_bridge_auth
 @api_error_handler
 def api_stop_task(task_id):
     """Stop a running supervised task."""
@@ -1629,6 +1729,7 @@ def api_stop_task(task_id):
 
 
 @api_bp.route("/tasks/<task_id>/cancel", methods=["POST"])
+@require_bridge_auth
 def api_cancel_task(task_id):
     """Alias for stop_task for backward compatibility."""
     return api_stop_task(task_id)
@@ -1766,6 +1867,7 @@ def api_locks():
 
 
 @api_bp.route("/locks/release", methods=["POST"])
+@require_bridge_auth
 def api_release_locks():
     """Release locks by agent, key, or all (admin)."""
     data = request.get_json() or {}
@@ -1859,6 +1961,7 @@ def api_tailscale_status():
 
 
 @api_bp.route("/autonomous-mode", methods=["POST"])
+@require_bridge_auth
 def api_autonomous_mode():
     """
     Trigger autonomous mode to analyze and improve projects.
@@ -2156,6 +2259,7 @@ def api_task(task_id):
 
 
 @api_bp.route("/tasks", methods=["POST"])
+@require_bridge_auth
 def api_create_task():
     """Create a new task."""
     data = request.get_json()
@@ -2166,6 +2270,7 @@ def api_create_task():
 
 
 @api_bp.route("/tasks/<task_id>", methods=["PUT"])
+@require_bridge_auth
 def api_update_task(task_id):
     """Update task details."""
     data = request.get_json()
@@ -2176,6 +2281,7 @@ def api_update_task(task_id):
 
 
 @api_bp.route("/tasks/<task_id>", methods=["DELETE"])
+@require_bridge_auth
 def api_delete_task(task_id):
     """Delete a task."""
     result = delete_task(task_id)
@@ -4424,6 +4530,7 @@ def api_override_status():
 
 
 @api_bp.route("/override/pause", methods=["POST"])
+@require_bridge_auth
 def api_override_pause():
     """
     Pause agent(s).
@@ -4467,6 +4574,7 @@ def api_override_pause():
 
 
 @api_bp.route("/override/resume", methods=["POST"])
+@require_bridge_auth
 def api_override_resume():
     """
     Resume from a pause.
@@ -4516,6 +4624,7 @@ def api_override_is_paused():
 
 
 @api_bp.route("/override/kill-switch", methods=["POST"])
+@require_bridge_auth
 def api_override_kill_switch():
     """
     Activate the emergency kill switch.
@@ -4546,6 +4655,7 @@ def api_override_kill_switch():
 
 
 @api_bp.route("/override/kill-switch/deactivate", methods=["POST"])
+@require_bridge_auth
 def api_override_deactivate_kill_switch():
     """
     Deactivate the kill switch.
@@ -4580,6 +4690,7 @@ def api_override_deactivate_kill_switch():
 
 
 @api_bp.route("/override/decision", methods=["POST"])
+@require_bridge_auth
 def api_override_request_decision():
     """
     Request human approval for a decision.
@@ -5724,6 +5835,7 @@ def api_image_estimate():
 
 
 @api_bp.route("/autonomous/start", methods=["POST"])
+@require_bridge_auth
 @rate_limit
 @api_error_handler
 def autonomous_start():
@@ -5752,6 +5864,7 @@ def autonomous_start():
 
 
 @api_bp.route("/autonomous/stop", methods=["POST"])
+@require_bridge_auth
 @rate_limit
 @api_error_handler
 def autonomous_stop():
@@ -5767,6 +5880,7 @@ def autonomous_stop():
 
 
 @api_bp.route("/autonomous/pause", methods=["POST"])
+@require_bridge_auth
 @rate_limit
 @api_error_handler
 def autonomous_pause():
@@ -5782,6 +5896,7 @@ def autonomous_pause():
 
 
 @api_bp.route("/autonomous/resume", methods=["POST"])
+@require_bridge_auth
 @rate_limit
 @api_error_handler
 def autonomous_resume():
@@ -5808,6 +5923,7 @@ def autonomous_status():
 
 
 @api_bp.route("/autonomous/scan", methods=["POST"])
+@require_bridge_auth
 @rate_limit
 @api_error_handler
 def autonomous_scan():
@@ -5829,6 +5945,7 @@ def autonomous_scan():
 
 
 @api_bp.route("/autonomous/generate_tasks", methods=["POST"])
+@require_bridge_auth
 @rate_limit
 @api_error_handler
 def autonomous_generate_tasks():
@@ -5919,6 +6036,7 @@ def autonomous_tasks():
 
 
 @api_bp.route("/autonomous/tasks/add", methods=["POST"])
+@require_bridge_auth
 @rate_limit
 @api_error_handler
 def autonomous_task_add():
@@ -5936,6 +6054,7 @@ def autonomous_task_add():
 
 
 @api_bp.route("/autonomous/tasks/<task_id>", methods=["DELETE"])
+@require_bridge_auth
 def autonomous_task_delete(task_id):
     """Delete an autonomous task."""
     from ..services.autonomous_loop import get_autonomous_loop
