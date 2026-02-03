@@ -109,10 +109,11 @@ def create_app():
     # Initialize SocketIO if available - skip in frozen builds to avoid async_mode issues
     if socketio is not None:
         try:
+            allowed_origins = os.environ.get("CORS_ORIGINS", "http://localhost:6767,http://127.0.0.1:6767").split(",")
             socketio.init_app(
                 app,
                 async_mode="threading",
-                cors_allowed_origins="*",  # Allow all origins for remote dashboard access
+                cors_allowed_origins=allowed_origins,
             )
         except ValueError:
             # async_mode not supported in frozen environment, disable SocketIO
@@ -237,6 +238,17 @@ def create_app():
         print(f"Error registering Ralph Swarm routes: {e}")
         traceback.print_exc()
 
+    # Health Dashboard (Ouroboros V2)
+    try:
+        from .routes.health_routes import health_bp
+
+        app.register_blueprint(health_bp)
+    except ImportError as e:
+        print(f"Warning: Health dashboard routes not available: {e}")
+    except Exception as e:
+        print(f"Error registering Health dashboard routes: {e}")
+        traceback.print_exc()
+
     # SECURITY: Add security headers to all responses
     @app.after_request
     def add_security_headers(response):
@@ -251,7 +263,7 @@ def create_app():
         # Content Security Policy - allow self and inline for dashboard functionality
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.socket.io https://cdn.jsdelivr.net; "
+            "script-src 'self' 'unsafe-inline' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "img-src 'self' data: blob:; "
             "connect-src 'self' ws: wss:; "

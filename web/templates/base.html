@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Shadow Web{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-fixes.css') }}">
+    <title>{% block title %}ShadowAI{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ version }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-fixes.css') }}?v={{ version }}">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
     {% block head %}{% endblock %}
 </head>
@@ -15,7 +15,7 @@
         <nav class="sidebar">
             <div class="logo">
                 <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Shadow" class="logo-img">
-                <span class="logo-text">Shadow Web</span>
+                <span class="logo-text">ShadowAI</span>
             </div>
             <ul class="nav-links">
                 <li><a href="/" class="{% if request.path == '/' %}active{% endif %}">
@@ -41,11 +41,14 @@
                  <li><a href="/automations" class="{% if request.path == '/automations' %}active{% endif %}">
                      <span class="material-symbols-outlined nav-icon">auto_awesome</span> <span class="nav-label">Automations</span> <span class="pro-badge">PRO</span>
                 </a></li>
-                <li><a href="/teams" class="{% if request.path == '/teams' %}active{% endif %}">
-                    <span class="material-symbols-outlined nav-icon">group</span> <span class="nav-label">Agents</span> <span class="pro-badge">PRO</span>
+                <li><a href="/agents" class="{% if request.path == '/agents' %}active{% endif %}">
+                    <span class="material-symbols-outlined nav-icon">smart_toy</span> <span class="nav-label">Agents</span> <span class="pro-badge">PRO</span>
                 </a></li>
                 <li><a href="/audits" class="{% if request.path == '/audits' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">fact_check</span> <span class="nav-label">Audits</span> <span class="pro-badge">PRO</span>
+                </a></li>
+                <li><a href="/health" class="{% if request.path == '/health' %}active{% endif %}">
+                    <span class="material-symbols-outlined nav-icon">monitor_heart</span> <span class="nav-label">Health</span>
                 </a></li>
                 <li><a href="/analytics" class="{% if request.path == '/analytics' %}active{% endif %}">
                     <span class="material-symbols-outlined nav-icon">analytics</span> <span class="nav-label">Analytics</span>
@@ -59,42 +62,55 @@
         <!-- Main Content -->
         <main class="main-content">
             <header class="top-bar">
+                <button class="mobile-menu-toggle-header hidden" id="mobile-menu-toggle-header" onclick="toggleMobileMenu()">
+                    <span class="material-symbols-outlined">menu</span>
+                </button>
                 <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
+                
+                <!-- Search Centered -->
+                <div class="global-search-container">
+                    <input type="text" id="global-search" class="global-search-input" placeholder="Search resources..." onkeyup="handleSearchKeyup(event)" onfocus="showSearchResults()" onblur="hideSearchResultsDelayed()">
+                    <div id="search-results" class="search-results-dropdown hidden"></div>
+                </div>
+
                 <div class="top-bar-actions">
-                    <!-- Global Search -->
-                    <div class="global-search-container">
-                        <input type="text" id="global-search" class="global-search-input" placeholder="Search..." onkeyup="handleSearchKeyup(event)" onfocus="showSearchResults()" onblur="hideSearchResultsDelayed()">
-                        <div id="search-results" class="search-results-dropdown hidden"></div>
-                    </div>
+                    <!-- Backend & Model Group -->
                     <div class="connection-banner">
                         <div class="connection-controls">
                             <div class="connection-control">
-                                <span class="connection-control-label">Backend</span>
+                                <span class="connection-control-label">AI</span>
                                 <select id="backend-selector" class="device-selector connection-select"></select>
                             </div>
                             <div class="connection-control">
-                                <span class="connection-control-label">Model</span>
                                 <select id="model-selector" class="device-selector connection-select"></select>
                             </div>
                         </div>
-                        <span class="connection-selection-hint" id="connection-selection-hint">Switch backend/model anytime</span>
-                        <div class="connection-health" id="connection-health">
-                            <span class="status-dot idle" id="connection-health-dot"></span>
-                            <span class="connection-health-text" id="connection-health-text">Backend: Unknown</span>
+                        <div class="connection-status-wrap">
+                            <div class="connection-health" id="connection-health">
+                                <span class="status-dot idle" id="connection-health-dot" title="Connection status"></span>
+                            </div>
                         </div>
                     </div>
+
+                    <!-- Device Switched Group -->
                     <div class="device-switcher" id="device-switcher">
                         <button class="device-switcher-button" id="device-switcher-button" type="button" aria-haspopup="listbox" aria-expanded="false">
                             <span class="status-dot offline" id="device-status-dot"></span>
+                            <span class="material-symbols-outlined device-switcher-icon">devices</span>
                             <div class="device-switcher-text">
                                 <span class="device-switcher-title" id="device-switcher-title">All Devices</span>
-                                <span class="device-switcher-status" id="device-switcher-status">Connecting...</span>
+                                <span class="device-switcher-status" id="device-switcher-status">Initializing...</span>
                             </div>
-                            <span class="material-symbols-outlined device-switcher-icon">devices</span>
                         </button>
                         <div class="device-switcher-menu hidden" id="device-switcher-menu" role="listbox"></div>
                     </div>
-                    <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+
+                    <!-- System Toggles -->
+                    <button id="briefings-toggle" class="theme-toggle" onclick="location.href='/agents#briefings'" title="View Briefings">
+                        <span class="material-symbols-outlined">notifications</span>
+                    </button>
+
+                    <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle appearance">
                         <span class="material-symbols-outlined sun-icon">light_mode</span>
                         <span class="material-symbols-outlined moon-icon">dark_mode</span>
                     </button>
@@ -142,16 +158,18 @@
     <!-- Toast Notifications Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <!-- Mobile Menu Toggle -->
+    <!-- Mobile Menu Toggle (Bottom Right FAB) -->
     <button class="mobile-menu-toggle" id="mobile-menu-toggle" onclick="toggleMobileMenu()">
         <span class="material-symbols-outlined">menu</span>
     </button>
 
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="{{ url_for('static', filename='js/api.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/websocket.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <script src="{{ url_for('static', filename='js/api.js') }}?v={{ version }}"></script>
+    <script src="{{ url_for('static', filename='js/websocket.js') }}?v={{ version }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>
+

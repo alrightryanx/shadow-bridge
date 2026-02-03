@@ -5,6 +5,8 @@ Monitors:
 - ShadowBridge Web Server
 - Ollama (Local LLM)
 - Node.js Backend (if applicable)
+- Telemetry trends (Ouroboros V2)
+- Health scoring (Ouroboros V2)
 """
 
 import threading
@@ -13,20 +15,35 @@ import logging
 import requests
 import socket
 import subprocess
+import os
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Default database path
+DEFAULT_DB_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    '..', 'backend', 'data', 'shadow_ai.db'
+)
+
 class Sentinel:
     """
     Background service that monitors the health of local AI services.
+    Extended with Ouroboros V2: trend analysis and health scoring.
     """
-    
-    def __init__(self, check_interval: int = 30):
+
+    def __init__(self, check_interval: int = 30, db_path: str = None):
         self.check_interval = check_interval
         self.running = False
         self.thread: Optional[threading.Thread] = None
-        
+        self.db_path = db_path or DEFAULT_DB_PATH
+
+        # Ouroboros V2 components
+        self.trend_analyzer = None
+        self.health_scorer = None
+        self._trend_check_counter = 0
+        self._trend_check_interval = 30  # Run trend check every 30 loops (~15 min at 30s interval)
+
         self.services = {
             "shadow_bridge": {
                 "name": "ShadowBridge Web",
@@ -48,7 +65,17 @@ class Sentinel:
         """Starts the sentinel monitoring thread."""
         if self.running:
             return
-            
+
+        # Initialize Ouroboros V2 components
+        try:
+            from .trend_analyzer import TrendAnalyzer
+            from .health_scorer import HealthScorer
+            self.trend_analyzer = TrendAnalyzer(self.db_path)
+            self.health_scorer = HealthScorer(self.db_path)
+            logger.info("Ouroboros V2 components initialized")
+        except Exception as e:
+            logger.warning(f"Ouroboros V2 init failed (non-critical): {e}")
+
         self.running = True
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
@@ -71,19 +98,41 @@ class Sentinel:
             try:
                 for key, config in self.services.items():
                     is_healthy = self._check_service(config)
-                    
+
                     if not is_healthy and self.health_status.get(key, True):
                         logger.warning(f"Service {config['name']} is DOWN")
                         self._attempt_healing(key, config)
                     elif is_healthy and not self.health_status.get(key, True):
                         logger.info(f"Service {config['name']} recovered")
-                        
+
                     self.health_status[key] = is_healthy
-                    
+
+                # Ouroboros V2: Run trend analysis periodically
+                self._trend_check_counter += 1
+                if self._trend_check_counter >= self._trend_check_interval:
+                    self._trend_check_counter = 0
+                    self._run_trend_analysis()
+
             except Exception as e:
                 logger.error(f"Sentinel monitor error: {e}")
-                
+
             time.sleep(self.check_interval)
+
+    def _run_trend_analysis(self):
+        """Run Ouroboros V2 trend analysis and health scoring."""
+        try:
+            if self.trend_analyzer:
+                alerts = self.trend_analyzer.run()
+                if alerts:
+                    logger.info(f"[Sentinel] Trend analysis: {len(alerts)} alerts generated")
+
+            if self.health_scorer:
+                score = self.health_scorer.compute_score()
+                logger.info(f"[Sentinel] Health score: {score.overall}/100 ({score.status})")
+                self.health_scorer.push_notification_if_degraded(score)
+
+        except Exception as e:
+            logger.error(f"[Sentinel] Trend analysis failed: {e}")
 
     def _check_service(self, config: Dict) -> bool:
         """Checks if a specific service is healthy."""
