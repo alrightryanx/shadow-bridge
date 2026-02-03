@@ -117,6 +117,11 @@
         <span>Monitor</span>
         <span class="tab-count" id="tab-count-monitor">0</span>
     </button>
+    <button class="tab-button" data-tab="briefings" onclick="switchMainTab('briefings'); loadBriefings();">
+        <span class="material-symbols-outlined">summarize</span>
+        <span>Briefings</span>
+        <span class="tab-count" id="tab-count-briefings">0</span>
+    </button>
 </div>
 
 <!-- Agents Tab -->
@@ -374,6 +379,27 @@
         <div class="deploy-log" id="deploy-log">
             <div class="empty-state-small">No deploys yet</div>
         </div>
+    </div>
+</div>
+
+<!-- Briefings Tab -->
+<div id="tab-briefings" class="main-tab-content">
+    <div class="tab-header">
+        <h3>Briefings</h3>
+        <div class="tab-actions">
+            <button class="btn btn-secondary" onclick="loadBriefings()">
+                <span class="material-symbols-outlined">refresh</span>
+                Refresh
+            </button>
+            <button class="btn btn-secondary" onclick="markAllBriefingsRead()">
+                <span class="material-symbols-outlined">done_all</span>
+                Mark All Read
+            </button>
+        </div>
+    </div>
+
+    <div class="briefings-list" id="briefings-list">
+        <div class="empty-state-small">Loading briefings...</div>
     </div>
 </div>
 
@@ -2105,6 +2131,151 @@
         display: none;
     }
 }
+
+/* Briefings Tab */
+.briefings-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.briefing-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    transition: border-color 0.2s;
+    animation: slide-in 0.3s ease-out;
+}
+
+.briefing-card:hover {
+    border-color: var(--accent);
+}
+
+.briefing-card.unread {
+    border-left: 4px solid var(--accent);
+}
+
+.briefing-card.priority-high {
+    border-left: 4px solid var(--warning);
+}
+
+.briefing-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--spacing-sm);
+}
+
+.briefing-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.briefing-meta {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+.briefing-badge {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.briefing-badge.daily { background: var(--accent); color: var(--bg); }
+.briefing-badge.weekly { background: var(--success); color: var(--bg); }
+.briefing-badge.insight { background: var(--warning); color: var(--bg); }
+.briefing-badge.monthly { background: var(--text-dim); color: var(--bg); }
+
+.briefing-summary {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: var(--spacing-md);
+    white-space: pre-wrap;
+}
+
+.briefing-sections {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.briefing-section {
+    background: var(--bg-hover);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+}
+
+.briefing-section-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.briefing-section-content {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.briefing-metrics {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-top: 6px;
+}
+
+.briefing-metric {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.briefing-metric.completed { color: var(--success); }
+.briefing-metric.review { color: var(--warning); }
+.briefing-metric.blocked { color: var(--error); }
+
+.briefing-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--border);
+}
+
+.briefing-actions button {
+    padding: 4px 12px;
+    font-size: 0.8rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.briefing-actions button:hover {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+}
+
+.briefing-actions button .material-symbols-outlined {
+    font-size: 16px;
+}
 </style>
 {% endblock %}
 
@@ -3652,6 +3823,130 @@ function setupAutonomousWebSocket() {
     });
 }
 
+// ============ Briefings System ============
+
+let briefingsData = [];
+
+async function loadBriefings() {
+    const container = document.getElementById('briefings-list');
+    if (!container) return;
+
+    try {
+        const response = await fetch('/api/briefings?limit=50');
+        briefingsData = await response.json();
+
+        // Update tab count
+        const unreadCount = briefingsData.filter(b => !b.read).length;
+        const countEl = document.getElementById('tab-count-briefings');
+        if (countEl) {
+            countEl.textContent = unreadCount > 0 ? unreadCount : briefingsData.length;
+        }
+
+        if (!briefingsData || briefingsData.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state-small" style="text-align: center; padding: 40px;">
+                    <span class="material-symbols-outlined" style="font-size: 48px; opacity: 0.3; display: block; margin-bottom: 12px;">summarize</span>
+                    <p style="margin: 0; font-size: 1rem;">No briefings yet</p>
+                    <p style="margin: 8px 0 0; font-size: 0.85rem; opacity: 0.6;">Briefings are generated automatically from agent activity</p>
+                </div>`;
+            return;
+        }
+
+        container.innerHTML = briefingsData.map(b => renderBriefingCard(b)).join('');
+    } catch (error) {
+        console.error('Failed to load briefings:', error);
+        container.innerHTML = '<div class="empty-state-small">Failed to load briefings</div>';
+    }
+}
+
+function renderBriefingCard(briefing) {
+    const date = briefing.created_at ? new Date(briefing.created_at).toLocaleString() : (briefing.date || 'Unknown');
+    const isUnread = !briefing.read;
+    const isPriorityHigh = briefing.priority === 'high';
+    const badgeType = briefing.type || 'daily';
+
+    let sectionsHtml = '';
+    if (briefing.sections && briefing.sections.length > 0) {
+        sectionsHtml = '<div class="briefing-sections">' +
+            briefing.sections.map(s => {
+                let metricsHtml = '';
+                if (s.metrics) {
+                    const metrics = s.metrics;
+                    metricsHtml = '<div class="briefing-metrics">';
+                    if (metrics.completed !== undefined) metricsHtml += `<span class="briefing-metric completed">&#10003; ${metrics.completed} completed</span>`;
+                    if (metrics.pending_review !== undefined) metricsHtml += `<span class="briefing-metric review">&#9733; ${metrics.pending_review} review</span>`;
+                    if (metrics.blocked !== undefined) metricsHtml += `<span class="briefing-metric blocked">&#10007; ${metrics.blocked} blocked</span>`;
+                    metricsHtml += '</div>';
+                }
+                return `<div class="briefing-section">
+                    <div class="briefing-section-title">${escapeHtml(s.title || '')}</div>
+                    <div class="briefing-section-content">${escapeHtml(s.content || '')}</div>
+                    ${metricsHtml}
+                </div>`;
+            }).join('') + '</div>';
+    }
+
+    const projectName = briefing.metadata?.project_name || '';
+    const deviceId = briefing.device_id || '';
+
+    return `<div class="briefing-card ${isUnread ? 'unread' : ''} ${isPriorityHigh ? 'priority-high' : ''}" data-id="${briefing.id}">
+        <div class="briefing-header">
+            <h4 class="briefing-title">${escapeHtml(briefing.title || 'Briefing')}</h4>
+            <div class="briefing-meta">
+                <span class="briefing-badge ${badgeType}">${badgeType}</span>
+                ${projectName ? `<span>${escapeHtml(projectName)}</span>` : ''}
+                ${deviceId ? `<span>${escapeHtml(deviceId)}</span>` : ''}
+                <span>${date}</span>
+            </div>
+        </div>
+        <div class="briefing-summary">${escapeHtml(briefing.summary || '')}</div>
+        ${sectionsHtml}
+        <div class="briefing-actions">
+            ${isUnread ? `<button onclick="markBriefingRead('${briefing.id}')">
+                <span class="material-symbols-outlined">done</span> Mark Read
+            </button>` : ''}
+            <button onclick="deleteBriefing('${briefing.id}')">
+                <span class="material-symbols-outlined">delete</span> Delete
+            </button>
+        </div>
+    </div>`;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function markBriefingRead(briefingId) {
+    try {
+        await fetch(`/api/briefings/${briefingId}/read`, { method: 'POST' });
+        await loadBriefings();
+    } catch (error) {
+        console.error('Failed to mark briefing read:', error);
+    }
+}
+
+async function deleteBriefing(briefingId) {
+    if (!confirm('Delete this briefing?')) return;
+    try {
+        await fetch(`/api/briefings/${briefingId}`, { method: 'DELETE' });
+        await loadBriefings();
+    } catch (error) {
+        console.error('Failed to delete briefing:', error);
+    }
+}
+
+async function markAllBriefingsRead() {
+    const unread = briefingsData.filter(b => !b.read);
+    for (const b of unread) {
+        try {
+            await fetch(`/api/briefings/${b.id}/read`, { method: 'POST' });
+        } catch (e) { /* continue */ }
+    }
+    await loadBriefings();
+}
+
 // Init autonomous system on page load
 document.addEventListener('DOMContentLoaded', () => {
     // Initial status check
@@ -3662,6 +3957,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Setup WebSocket listeners
     setupAutonomousWebSocket();
+
+    // Check URL hash for briefings tab
+    if (window.location.hash === '#briefings') {
+        switchMainTab('briefings');
+        loadBriefings();
+    }
+
+    // Load briefing count on page load
+    fetch('/api/briefings?limit=50')
+        .then(r => r.json())
+        .then(data => {
+            const unread = data.filter(b => !b.read).length;
+            const countEl = document.getElementById('tab-count-briefings');
+            if (countEl) countEl.textContent = unread > 0 ? unread : (data.length || '0');
+        })
+        .catch(() => {});
 });
 </script>
 {% endblock %}
