@@ -55,7 +55,7 @@ class TrendAnalyzer:
         },
         {
             'name': 'error_rate',
-            'query': "SELECT CAST(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS FLOAT) / MAX(COUNT(*), 1) FROM usage_analytics WHERE request_timestamp > ?",
+            'query': "SELECT CASE WHEN COUNT(*) > 0 THEN CAST(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) ELSE 0 END FROM usage_analytics WHERE request_timestamp > ?",
             'direction': 'higher_is_worse',
             'unit': '%',
             'recommendation': 'Check API key validity and provider status pages.'
@@ -105,6 +105,7 @@ class TrendAnalyzer:
         recent_since = now - timedelta(hours=24)
         baseline_since = now - timedelta(days=30)
 
+        conn = None
         try:
             conn = self._get_connection()
 
@@ -154,10 +155,11 @@ class TrendAnalyzer:
                 except Exception as e:
                     logger.error(f"Failed to analyze metric {metric['name']}: {e}")
 
-            conn.close()
-
         except Exception as e:
             logger.error(f"Trend analysis failed: {e}")
+        finally:
+            if conn:
+                conn.close()
 
         return alerts
 
