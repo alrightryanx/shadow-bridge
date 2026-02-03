@@ -1989,7 +1989,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.157",
+        "version": "1.158",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,

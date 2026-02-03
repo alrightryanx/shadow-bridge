@@ -96,6 +96,14 @@ FAILURE_BACKOFF_THRESHOLD = int(get_config_value("FAILURE_BACKOFF_THRESHOLD", "3
 FAILURE_BACKOFF_BASE_SECONDS = int(get_config_value("FAILURE_BACKOFF_BASE_SECONDS", "300") or 300)
 FAILURE_BACKOFF_MAX_SECONDS = int(get_config_value("FAILURE_BACKOFF_MAX_SECONDS", "3600") or 3600)
 DAILY_TASK_LIMIT = int(get_config_value("DAILY_TASK_LIMIT", "500") or 500)
+
+# Estimated cost per task by provider (rough averages in USD)
+COST_PER_TASK_ESTIMATE = {
+    "gemini": 0.002,       # Gemini Flash is very cheap
+    "claude": 0.025,       # Claude Sonnet ~$3/MTok input, $15/MTok output
+    "codex": 0.015,        # o4-mini moderate pricing
+}
+
 PULSE_POLICY_FILE = get_config_value("PULSE_POLICY_FILE", "C:/shadow/.aidev/pulse_policy.json")
 PULSE_POLICY_START = "[PULSE_POLICY]"
 PULSE_POLICY_END = "[/PULSE_POLICY]"
@@ -156,6 +164,8 @@ class AutonomousLoop:
         self._repo_completions: Dict[str, int] = {}  # repo -> completions since last build
         self._repo_workspaces: Dict[str, str] = {}  # repo -> workspace root
         self.efficiency_log: List[dict] = [] # Track task efficiency: {agent_id, task_id, duration_ms}
+        self.estimated_cost_usd: float = 0.0  # Running cost estimate
+        self._cost_by_provider: Dict[str, float] = {}  # provider -> cost
         self._last_build_time: float = 0.0
         self._last_deploy_time: float = 0.0
         self._last_build_skip_notice: float = 0.0
@@ -486,6 +496,9 @@ class AutonomousLoop:
             "build_cooldown_remaining": self._build_cooldown_remaining(),
             "deploy_cooldown_remaining": self._deploy_cooldown_remaining(),
             "pulse_policy": self._pulse_policy,
+            "estimated_cost_usd": round(self.estimated_cost_usd, 4),
+            "cost_by_provider": {k: round(v, 4) for k, v in self._cost_by_provider.items()},
+            "daily_task_limit": DAILY_TASK_LIMIT,
         }
 
     def get_tasks(self) -> List[dict]:
@@ -672,6 +685,15 @@ class AutonomousLoop:
                     # 5. Check if build should trigger
                     if not self._backoff_active():
                         self._check_build_trigger()
+
+                    # 6. Periodic workspace garbage collection (every 100 cycles)
+                    if self.cycle_count % 100 == 0:
+                        try:
+                            gc_result = self.workspace_manager.gc(max_age_hours=24)
+                            if gc_result["removed"] > 0:
+                                logger.info(f"Workspace GC: removed {gc_result['removed']} stale workspaces")
+                        except Exception as e:
+                            logger.warning(f"Workspace GC failed: {e}")
 
                     # Broadcast status
                     self._broadcast_status()
@@ -1024,7 +1046,13 @@ After the protocol markers, respond with a JSON list of tasks:
 
                 agent_info["tasks_completed"] = agent_info.get("tasks_completed", 0) + 1
 
-                logger.info(f"Task completed: {task.get('title')} in {duration_ms}ms")
+                # Track estimated cost
+                provider = agent_info.get("provider", "gemini").lower()
+                task_cost = COST_PER_TASK_ESTIMATE.get(provider, 0.005)
+                self.estimated_cost_usd += task_cost
+                self._cost_by_provider[provider] = self._cost_by_provider.get(provider, 0.0) + task_cost
+
+                logger.info(f"Task completed: {task.get('title')} in {duration_ms}ms (est. cost: ${task_cost:.4f})")
                 self._broadcast_event("task_completed", {
                     "task_id": task_id,
                     "task_title": task.get("title"),
@@ -1032,11 +1060,17 @@ After the protocol markers, respond with a JSON list of tasks:
                     "efficiency_ms": duration_ms,
                     "repo": task.get("repo")
                 })
+
+                # Cleanup workspace after successful completion
+                self._cleanup_task_workspace(task, agent_id)
             else:
                 task["status"] = "failed"
                 task["failed_at"] = datetime.utcnow().isoformat()
                 self.failed_tasks.append(task)
                 self.task_queue.remove(task)
+
+                # Cleanup workspace after failure too
+                self._cleanup_task_workspace(task, agent_id)
                 self._record_failure(f"task_failed:{task.get('title')}")
 
                 logger.warning(f"Task failed: {task.get('title')}")
@@ -1050,6 +1084,17 @@ After the protocol markers, respond with a JSON list of tasks:
         # Reset agent
         agent_info["current_task"] = None
         agent_info["status"] = "idle"
+
+    def _cleanup_task_workspace(self, task: dict, agent_id: str):
+        """Clean up workspace after task completion/failure."""
+        try:
+            repo = task.get("repo", "")
+            task_id = task.get("id", "")
+            thread_id = agent_id
+            if repo and task_id:
+                self.workspace_manager.cleanup_workspace(repo, task_id, thread_id)
+        except Exception as e:
+            logger.warning(f"Workspace cleanup failed for task {task.get('id')}: {e}")
 
     def _check_build_trigger(self):
         """Check if we should trigger a build."""

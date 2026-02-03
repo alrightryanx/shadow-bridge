@@ -78,6 +78,15 @@
                 <div class="overview-card-label">Cycles</div>
             </div>
         </div>
+        <div class="overview-card" id="overview-cost-card">
+            <div class="overview-card-icon">
+                <span class="material-symbols-outlined">payments</span>
+            </div>
+            <div class="overview-card-content">
+                <div class="overview-card-value" id="overview-cost">$0.00</div>
+                <div class="overview-card-label">Est. Cost</div>
+            </div>
+        </div>
     </div>
 </section>
 
@@ -2937,6 +2946,18 @@ function updateAutonomousUI(status) {
     if (status.task_queue !== undefined) {
         document.getElementById('overview-total-tasks').textContent =
             (status.task_queue || 0) + (status.tasks_completed || 0);
+    }
+
+    // Update estimated cost
+    const costEl = document.getElementById('overview-cost');
+    if (costEl && status.estimated_cost_usd !== undefined) {
+        const cost = status.estimated_cost_usd || 0;
+        costEl.textContent = cost < 1 ? `$${cost.toFixed(3)}` : `$${cost.toFixed(2)}`;
+        // Color code: green < $1, yellow < $5, red > $5
+        const card = document.getElementById('overview-cost-card');
+        if (card) {
+            card.style.borderColor = cost < 1 ? 'var(--success)' : cost < 5 ? 'var(--warning)' : 'var(--error)';
+        }
     }
 
     // Render tasks if available in status
