@@ -6,6 +6,7 @@ Supports spawning, monitoring, task assignment, and stopping agents.
 """
 
 import subprocess
+import shutil
 import threading
 import queue
 import os
@@ -14,10 +15,13 @@ import uuid
 import json
 import re
 import psutil
+import concurrent.futures
 import logging
 from typing import Dict, List, Optional, Callable
 from datetime import datetime
 from collections import defaultdict
+
+from .lock_manager import get_lock_manager
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,8 @@ output_callbacks: Dict[str, List[Callable]] = defaultdict(list)
 # Task completion tracking
 agent_task_events: Dict[str, threading.Event] = {}  # agent_id -> completion event
 agent_task_states: Dict[str, Dict] = {}  # agent_id -> {task, status, started_at}
+agent_task_blocks: List[Dict] = []  # recent task block events
+MAX_TASK_BLOCKS = 50
 
 # Crash recovery tracking
 agent_restart_counts: Dict[str, List[float]] = defaultdict(list)  # agent_id -> [timestamps]
@@ -48,7 +54,57 @@ RESTART_BACKOFF_SECONDS = [1, 2, 4, 8]
 WATCHDOG_CHECK_INTERVAL = 5
 
 # Agent data file path
-AGENTS_DATA_FILE = os.path.join(os.path.expanduser("~"), ".shadowbridge", "agents.json")
+AGENTS_DATA_FILE = os.path.join(os.path.expanduser("~"), ".shadowai", "agents.json")
+TASK_MARKER_PATTERN = re.compile(r'^<<<(TASK_STARTED|TASK_PROGRESS|TASK_RESULT|TASK_DONE)\s+(\{.*\})>>>$')
+TASK_LOG_TAIL_LINES = 50
+TASK_ID_LENGTH = 12
+TASK_TIMEOUT_SECONDS = 600  # 10 minutes - tasks stuck longer are force-completed
+
+
+def _record_task_block(entry: Dict):
+    """Record a task block event for UI/API visibility."""
+    agent_task_blocks.append(entry)
+    if len(agent_task_blocks) > MAX_TASK_BLOCKS:
+        del agent_task_blocks[0:len(agent_task_blocks) - MAX_TASK_BLOCKS]
+
+
+def get_task_blocks() -> List[Dict]:
+    """Get recent task block events."""
+    return list(agent_task_blocks)
+
+
+def _build_protocol_header(task_id: str, thread_id: str) -> str:
+    """Build the strict task completion protocol header for agents."""
+    started_payload = json.dumps({"task_id": task_id, "thread_id": thread_id}, separators=(",", ":"))
+    progress_payload = json.dumps({"pct": 30, "msg": "..."}, separators=(",", ":"))
+    result_payload = json.dumps(
+        {
+            "status": "success|fail|blocked",
+            "summary": "...",
+            "files_changed": [],
+            "commands_run": [],
+            "next_steps": []
+        },
+        separators=(",", ":")
+    )
+    done_payload = json.dumps({"status": "success|fail", "elapsed_ms": 12345}, separators=(",", ":"))
+
+    return (
+        "PROTOCOL REQUIRED: print these markers as standalone lines exactly.\n"
+        f"<<<TASK_STARTED {started_payload}>>>\n"
+        f"<<<TASK_PROGRESS {progress_payload}>>>\n"
+        f"<<<TASK_RESULT {result_payload}>>>\n"
+        f"<<<TASK_DONE {done_payload}>>>\n"
+        "TASK_PROGRESS is optional."
+    )
+
+
+def _ensure_protocol_header(task_text: str, task_id: str, thread_id: str) -> str:
+    """Ensure the task prompt includes the strict protocol header."""
+    if "<<<TASK_STARTED" in task_text:
+        return task_text
+    header = _build_protocol_header(task_id, thread_id)
+    return f"{header}\n\n{task_text}"
 
 
 def spawn_agent(
@@ -59,7 +115,8 @@ def spawn_agent(
     model: str,
     working_directory: Optional[str] = None,
     auto_accept_edits: bool = True,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    env: Optional[Dict[str, str]] = None
 ) -> Dict:
     """
     Spawn a new persistent AI agent.
@@ -72,6 +129,8 @@ def spawn_agent(
         model: Model ID
         working_directory: Working directory for agent
         auto_accept_edits: Whether to auto-accept edits
+        session_id: Optional session ID link
+        env: Optional environment variables for the agent process
 
     Returns:
         Agent info dict with id, status, etc.
@@ -93,7 +152,12 @@ def spawn_agent(
     # Set working directory
     cwd = working_directory or os.path.expanduser("~")
 
-    logger.info(f"Spawning agent {agent_id}: {name} ({specialty})")
+    # Prepare environment
+    process_env = os.environ.copy()
+    if env:
+        process_env.update(env)
+
+    logger.info(f"Spawning agent {agent_id}: {name} ({specialty}) using {model}")
     logger.debug(f"Command: {cmd}")
 
     # Start subprocess
@@ -105,6 +169,7 @@ def spawn_agent(
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
             cwd=cwd,
+            env=process_env,
             text=True,
             bufsize=1,
             universal_newlines=True
@@ -120,6 +185,8 @@ def spawn_agent(
             "model": model,
             "status": "idle",
             "current_task": None,
+            "current_task_id": None,
+            "current_thread_id": None,
             "tasks_completed": 0,
             "spawned_at": datetime.utcnow().isoformat(),
             "working_directory": cwd,
@@ -156,6 +223,23 @@ def spawn_agent(
         # Save agents data
         save_agents_data()
 
+        # Quick check: did the process die immediately? (bad CLI, missing tool, etc.)
+        time.sleep(0.3)
+        if process.poll() is not None:
+            exit_code = process.poll()
+            stderr_out = ""
+            try:
+                stderr_out = process.stderr.read() if process.stderr else ""
+            except Exception:
+                pass
+            # Cleanup
+            active_agents.pop(agent_id, None)
+            agent_task_queues.pop(agent_id, None)
+            raise RuntimeError(
+                f"Agent process died immediately (exit code {exit_code}). "
+                f"stderr: {stderr_out[:500]}"
+            )
+
         # Broadcast agent spawned event
         broadcast_agent_event("agent_spawned", agent_info)
 
@@ -168,13 +252,26 @@ def spawn_agent(
         raise
 
 
-def assign_task(agent_id: str, task: str) -> bool:
+def assign_task(
+    agent_id: str,
+    task: str,
+    task_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    repo: Optional[str] = None,
+    lock_paths: Optional[List[str]] = None,
+    workspace_root: Optional[str] = None
+) -> bool:
     """
     Assign a task to a running agent.
 
     Args:
         agent_id: Agent ID
         task: Task description
+        task_id: Optional external task ID for correlation
+        thread_id: Optional thread/session ID for correlation
+        repo: Optional repo name for lock routing
+        lock_paths: Optional list of file/dir paths to lock
+        workspace_root: Optional workspace path for task isolation
 
     Returns:
         True if task was assigned successfully
@@ -192,8 +289,49 @@ def assign_task(agent_id: str, task: str) -> bool:
         logger.error(f"No task queue for agent {agent_id}")
         return False
 
+    assigned_task_id = task_id or str(uuid.uuid4())[:TASK_ID_LENGTH]
+    assigned_thread_id = thread_id or agent_id
+    task_with_protocol = _ensure_protocol_header(task, assigned_task_id, assigned_thread_id)
+
+    lock_keys: List[str] = []
+    if repo or lock_paths:
+        lock_manager = get_lock_manager()
+        acquired, reason, keys = lock_manager.acquire(repo, lock_paths, agent_id, assigned_task_id)
+        if not acquired:
+            now = datetime.utcnow().isoformat()
+            agent["last_blocked_reason"] = reason
+            agent["last_blocked_at"] = now
+            _record_task_block({
+                "agent_id": agent_id,
+                "task_id": assigned_task_id,
+                "thread_id": assigned_thread_id,
+                "repo": repo,
+                "lock_paths": lock_paths or [],
+                "reason": reason,
+                "timestamp": now
+            })
+            broadcast_agent_event("agent_task_blocked", {
+                "agent_id": agent_id,
+                "task_id": assigned_task_id,
+                "thread_id": assigned_thread_id,
+                "repo": repo,
+                "lock_paths": lock_paths or [],
+                "reason": reason,
+                "timestamp": now
+            })
+            logger.info(f"Task blocked for agent {agent_id}: {reason}")
+            return False
+        lock_keys = keys
+
     task_data = {
-        "task": task,
+        "task": task_with_protocol,
+        "display_task": task,
+        "task_id": assigned_task_id,
+        "thread_id": assigned_thread_id,
+        "repo": repo,
+        "lock_paths": lock_paths or [],
+        "lock_keys": lock_keys,
+        "workspace_root": workspace_root,
         "assigned_at": datetime.utcnow().isoformat()
     }
 
@@ -202,6 +340,10 @@ def assign_task(agent_id: str, task: str) -> bool:
     # Update agent status
     agent["status"] = "busy"
     agent["current_task"] = task
+    agent["current_task_id"] = assigned_task_id
+    agent["current_thread_id"] = assigned_thread_id
+    if workspace_root:
+        agent["current_workspace"] = workspace_root
 
     # Broadcast status change
     broadcast_agent_event("agent_status_changed", get_agent_status(agent_id))
@@ -236,7 +378,9 @@ def get_agent_status(agent_id: str) -> Optional[Dict]:
     if process and process.poll() is None:
         try:
             proc = psutil.Process(process.pid)
-            cpu_percent = proc.cpu_percent(interval=0.1)
+            # Use interval=None to prevent blocking the main thread.
+            # The first call may return 0.0, but subsequent calls will be accurate and non-blocking.
+            cpu_percent = proc.cpu_percent(interval=None)
             memory_mb = proc.memory_info().rss / 1024 / 1024
             uptime_seconds = int(time.time() - proc.create_time())
         except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -244,6 +388,13 @@ def get_agent_status(agent_id: str) -> Optional[Dict]:
 
     # Get recent output lines
     output_lines = agent_logs.get(agent_id, [])[-10:]  # Last 10 lines
+
+    # Task progress/result state (for UI)
+    state = agent_task_states.get(agent_id, {})
+    progress_pct = state.get("progress_pct")
+    progress_msg = state.get("progress_msg")
+    result = state.get("result")
+    workspace_root = agent.get("current_workspace") or state.get("workspace_root")
 
     return {
         "id": agent["id"],
@@ -254,14 +405,22 @@ def get_agent_status(agent_id: str) -> Optional[Dict]:
         "model": agent["model"],
         "status": agent["status"],
         "current_task": agent.get("current_task"),
+        "current_task_id": agent.get("current_task_id"),
+        "current_thread_id": agent.get("current_thread_id"),
+        "current_workspace": workspace_root,
         "tasks_completed": agent.get("tasks_completed", 0),
+        "last_blocked_reason": agent.get("last_blocked_reason"),
+        "last_blocked_at": agent.get("last_blocked_at"),
         "spawned_at": agent["spawned_at"],
         "working_directory": agent["working_directory"],
         "process_id": agent["process_id"],
         "cpu_percent": round(cpu_percent, 1),
         "memory_mb": round(memory_mb, 1),
         "uptime_seconds": uptime_seconds,
-        "output_lines": output_lines
+        "output_lines": output_lines,
+        "task_progress_pct": progress_pct,
+        "task_progress_msg": progress_msg,
+        "task_result": result
     }
 
 
@@ -322,8 +481,25 @@ def stop_agent(agent_id: str, graceful: bool = True) -> bool:
         logger.error(f"Error stopping agent {agent_id}: {e}")
         return False
 
+    state = agent_task_states.get(agent_id, {})
+    if agent.get("current_task") and not state.get("done_at"):
+        tail_logs = [entry["line"] for entry in agent_logs.get(agent_id, [])[-TASK_LOG_TAIL_LINES:]]
+        exit_code = process.poll() if process else None
+        _finalize_task(
+            agent_id,
+            "fail",
+            reason="agent_stopped",
+            exit_code=exit_code,
+            tail_logs=tail_logs
+        )
+
     # Update status
     agent["status"] = "offline"
+
+    try:
+        get_lock_manager().release(agent_id)
+    except Exception as exc:
+        logger.error(f"Failed to release locks for stopped agent {agent_id}: {exc}")
 
     # Broadcast event
     broadcast_agent_event("agent_stopped", {"id": agent_id})
@@ -343,9 +519,19 @@ def stop_agent(agent_id: str, graceful: bool = True) -> bool:
     return True
 
 
+def stop_all_agents(graceful: bool = True) -> int:
+    """Stop all running agents. Returns count stopped."""
+    stopped = 0
+    for agent_id in list(active_agents.keys()):
+        if stop_agent(agent_id, graceful=graceful):
+            stopped += 1
+    return stopped
+
+
 def get_all_agents(device_id: Optional[str] = None) -> List[Dict]:
     """
     Get all active agents, optionally filtered by device.
+    Uses parallel fetching for improved dashboard responsiveness.
 
     Args:
         device_id: Optional device ID to filter by
@@ -354,58 +540,174 @@ def get_all_agents(device_id: Optional[str] = None) -> List[Dict]:
         List of agent status dicts
     """
 
-    agents = []
-    for agent_id in list(active_agents.keys()):
-        status = get_agent_status(agent_id)
-        if status:
-            if device_id is None or status.get("device_id") == device_id:
-                agents.append(status)
+    agent_ids = list(active_agents.keys())
+    if not agent_ids:
+        return []
 
+    agents = []
+    
+    # Use ThreadPoolExecutor to fetch statuses in parallel
+    # This protects against any potential blocking I/O in get_agent_status
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(agent_ids), 10)) as executor:
+        # Create a mapping of future to agent_id
+        future_to_id = {executor.submit(get_agent_status, aid): aid for aid in agent_ids}
+        
+        for future in concurrent.futures.as_completed(future_to_id):
+            try:
+                status = future.result()
+                if status:
+                    if device_id is None or status.get("device_id") == device_id:
+                        agents.append(status)
+            except Exception as e:
+                logger.error(f"Error fetching status for agent {future_to_id[future]}: {e}")
+
+    # Sort by name for consistent UI display
+    agents.sort(key=lambda x: x.get("name", ""))
     return agents
 
 
 def parse_task_marker(line: str) -> Optional[Dict]:
     """Parse task completion markers from agent output."""
-    patterns = {
-        r'\[TASK:START\]\s+(\S+)': ('start', 1),
-        r'\[TASK:COMPLETE\]\s+(\S+)\s+(SUCCESS|FAILED)': ('complete', 2),
-        r'\[TASK:ERROR\]\s+(\S+)\s+(.+)': ('error', 2),
+    match = TASK_MARKER_PATTERN.match(line)
+    if not match:
+        return None
+
+    marker_type = match.group(1)
+    payload_raw = match.group(2)
+    try:
+        payload = json.loads(payload_raw)
+    except json.JSONDecodeError as exc:
+        logger.warning(f"Invalid task marker JSON for {marker_type}: {exc}")
+        return {"type": "invalid", "marker": marker_type, "raw": payload_raw}
+
+    return {"type": marker_type, "payload": payload}
+
+
+def _finalize_task(
+    agent_id: str,
+    status: str,
+    reason: Optional[str] = None,
+    elapsed_ms: Optional[int] = None,
+    exit_code: Optional[int] = None,
+    tail_logs: Optional[List[str]] = None
+):
+    """Finalize a task when TASK_DONE is observed or the subprocess exits."""
+    normalized_status = status if status in ("success", "fail") else "fail"
+    now = datetime.utcnow().isoformat()
+
+    state = agent_task_states.setdefault(agent_id, {})
+    if state.get("done_at"):
+        return
+
+    state["done_at"] = now
+    state["done_status"] = normalized_status
+    if elapsed_ms is not None:
+        state["elapsed_ms"] = elapsed_ms
+    if reason:
+        state["done_reason"] = reason
+    if exit_code is not None:
+        state["exit_code"] = exit_code
+    if tail_logs:
+        state["tail_logs"] = tail_logs
+
+    try:
+        released = get_lock_manager().release(agent_id, task_id=state.get("task_id"))
+        if released:
+            state["locks_released"] = released
+    except Exception as exc:
+        logger.error(f"Failed to release locks for agent {agent_id}: {exc}")
+
+    if agent_id not in agent_task_events:
+        agent_task_events[agent_id] = threading.Event()
+    agent_task_events[agent_id].set()
+
+    agent = active_agents.get(agent_id)
+    if agent:
+        agent["status"] = "idle"
+        agent["current_task"] = None
+        agent["current_task_id"] = None
+        agent["current_thread_id"] = None
+        agent["current_workspace"] = None
+
+    event_payload = {
+        "agent_id": agent_id,
+        "task": state.get("task"),
+        "task_id": state.get("task_id"),
+        "thread_id": state.get("thread_id"),
+        "status": normalized_status,
+        "completed_at": now,
+        "result": state.get("result"),
+        "reason": reason,
+        "exit_code": exit_code,
+        "tail_logs": tail_logs
     }
-    for pattern, (marker_type, groups) in patterns.items():
-        match = re.search(pattern, line)
-        if match:
-            return {
-                'type': marker_type,
-                'task_id': match.group(1) if groups >= 1 else None,
-                'status': match.group(2) if groups >= 2 else None
-            }
 
-    # Fallback: check for common completion keywords
-    if re.search(r'(done|finished|completed|success)', line, re.IGNORECASE):
-        return {'type': 'complete', 'task_id': None, 'status': 'SUCCESS'}
-    if re.search(r'(error|exception|failed)', line, re.IGNORECASE):
-        return {'type': 'error', 'task_id': None, 'status': 'FAILED'}
+    if normalized_status == "success":
+        if agent:
+            agent["tasks_completed"] = agent.get("tasks_completed", 0) + 1
+    else:
+        broadcast_agent_event("agent_task_failed", event_payload)
 
-    return None
+    broadcast_agent_event("agent_task_completed", event_payload)
+
+    if agent:
+        broadcast_agent_event("agent_status_changed", get_agent_status(agent_id))
 
 
 def update_task_status(agent_id: str, marker: Dict):
     """Update task status and signal completion event."""
-    if marker['type'] == 'complete':
-        # Signal task completion event
-        if agent_id in agent_task_events:
-            agent_task_events[agent_id].set()
+    if marker.get("type") == "invalid":
+        return
 
-        # Update agent status
-        agent = active_agents.get(agent_id)
-        if agent:
-            agent['status'] = 'idle'
-            agent['current_task'] = None
-            broadcast_agent_event('agent_task_completed', {
-                'agent_id': agent_id,
-                'task': agent_task_states.get(agent_id, {}).get('task'),
-                'completed_at': datetime.utcnow().isoformat()
-            })
+    marker_type = marker.get("type")
+    payload = marker.get("payload", {})
+    now = datetime.utcnow().isoformat()
+
+    state = agent_task_states.setdefault(agent_id, {})
+    state["last_marker_at"] = now
+
+    if marker_type == "TASK_STARTED":
+        state["task_id"] = payload.get("task_id") or state.get("task_id")
+        state["thread_id"] = payload.get("thread_id") or state.get("thread_id")
+        state["status"] = "running"
+        state["started_at"] = state.get("started_at") or now
+        broadcast_agent_event("agent_task_started", {
+            "agent_id": agent_id,
+            "task_id": state.get("task_id"),
+            "thread_id": state.get("thread_id"),
+            "started_at": state.get("started_at")
+        })
+        return
+
+    if marker_type == "TASK_PROGRESS":
+        state["progress_pct"] = payload.get("pct")
+        state["progress_msg"] = payload.get("msg")
+        broadcast_agent_event("agent_task_progress", {
+            "agent_id": agent_id,
+            "task_id": state.get("task_id"),
+            "thread_id": state.get("thread_id"),
+            "pct": payload.get("pct"),
+            "msg": payload.get("msg"),
+            "timestamp": now
+        })
+        return
+
+    if marker_type == "TASK_RESULT":
+        state["result"] = payload
+        state["result_status"] = payload.get("status")
+        broadcast_agent_event("agent_task_result", {
+            "agent_id": agent_id,
+            "task_id": state.get("task_id"),
+            "thread_id": state.get("thread_id"),
+            "result": payload,
+            "timestamp": now
+        })
+        return
+
+    if marker_type == "TASK_DONE":
+        done_status = payload.get("status") or "fail"
+        elapsed_ms = payload.get("elapsed_ms")
+        _finalize_task(agent_id, done_status, elapsed_ms=elapsed_ms)
 
 
 def monitor_agent_output(agent_id: str, stdout, stderr):
@@ -489,6 +791,29 @@ def monitor_agent_output(agent_id: str, stdout, stderr):
     stdout_thread.join()
     stderr_thread.join()
 
+    # If the subprocess exited without TASK_DONE, mark task failed and capture tail logs.
+    agent = active_agents.get(agent_id)
+    process = agent.get("process") if agent else None
+    exit_code = process.poll() if process else None
+    state = agent_task_states.get(agent_id, {})
+    if exit_code is not None and not state.get("done_at") and (state or (agent and agent.get("current_task"))):
+        if not state and agent and agent.get("current_task"):
+            agent_task_states[agent_id] = {
+                "task": agent.get("current_task"),
+                "task_id": agent.get("current_task_id"),
+                "thread_id": agent.get("current_thread_id"),
+                "status": "running",
+                "started_at": datetime.utcnow().isoformat()
+            }
+        tail_logs = [entry["line"] for entry in agent_logs.get(agent_id, [])[-TASK_LOG_TAIL_LINES:]]
+        _finalize_task(
+            agent_id,
+            "fail",
+            reason="process_exited_without_task_done",
+            exit_code=exit_code,
+            tail_logs=tail_logs
+        )
+
     logger.info(f"Output monitoring stopped for agent {agent_id}")
 
 
@@ -523,8 +848,15 @@ def process_agent_tasks(agent_id: str):
                 continue
 
             task = task_data["task"]
+            display_task = task_data.get("display_task", task)
+            task_id = task_data.get("task_id")
+            thread_id = task_data.get("thread_id")
+            repo = task_data.get("repo")
+            lock_paths = task_data.get("lock_paths") or []
+            lock_keys = task_data.get("lock_keys") or []
+            workspace_root = task_data.get("workspace_root")
 
-            logger.info(f"Agent {agent_id} executing task: {task}")
+            logger.info(f"Agent {agent_id} executing task: {display_task}")
 
             # Send task to agent's stdin
             try:
@@ -533,7 +865,9 @@ def process_agent_tasks(agent_id: str):
 
                 # Update status
                 agent["status"] = "busy"
-                agent["current_task"] = task
+                agent["current_task"] = display_task
+                agent["current_task_id"] = task_id
+                agent["current_thread_id"] = thread_id
 
                 # Initialize task tracking
                 if agent_id not in agent_task_events:
@@ -544,29 +878,42 @@ def process_agent_tasks(agent_id: str):
 
                 # Store task state
                 agent_task_states[agent_id] = {
-                    'task': task,
-                    'status': 'running',
-                    'started_at': datetime.utcnow().isoformat()
+                    "task": display_task,
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                    "repo": repo,
+                    "lock_paths": lock_paths,
+                    "lock_keys": lock_keys,
+                    "workspace_root": workspace_root,
+                    "status": "running",
+                    "started_at": datetime.utcnow().isoformat()
                 }
 
                 # Broadcast status change
                 broadcast_agent_event("agent_status_changed", get_agent_status(agent_id))
 
-                # Wait up to 30 minutes for task completion
-                completed = event.wait(timeout=1800)
+                # Wait until TASK_DONE is observed or subprocess exits
+                while True:
+                    if event.wait(timeout=1):
+                        break
+                    if process.poll() is not None:
+                        tail_logs = [entry["line"] for entry in agent_logs.get(agent_id, [])[-TASK_LOG_TAIL_LINES:]]
+                        _finalize_task(
+                            agent_id,
+                            "fail",
+                            reason="process_exited_without_task_done",
+                            exit_code=process.returncode,
+                            tail_logs=tail_logs
+                        )
+                        break
+                    if agent_id not in active_agents:
+                        break
 
-                if not completed:
-                    logger.warning(f"Task timeout for agent {agent_id}")
-                    agent["status"] = "error"
-                    broadcast_agent_event("agent_task_timeout", {
-                        "agent_id": agent_id,
-                        "task": task,
-                        "timeout_seconds": 1800
-                    })
+                state = agent_task_states.get(agent_id, {})
+                if state.get("done_status") == "success":
+                    logger.info(f"Agent {agent_id} completed task: {display_task}")
                 else:
-                    # Task completed successfully
-                    agent["tasks_completed"] = agent.get("tasks_completed", 0) + 1
-                    logger.info(f"Agent {agent_id} completed task: {task}")
+                    logger.warning(f"Agent {agent_id} task ended without success: {display_task}")
 
                 # Broadcast status change
                 broadcast_agent_event("agent_status_changed", get_agent_status(agent_id))
@@ -613,6 +960,17 @@ def build_agent_command(
 
     # Build system prompt based on specialty
     system_prompt = get_specialty_prompt(specialty)
+
+    # Validate CLI tool exists before building command
+    cli_name = {"claude": "claude", "gemini": "gemini", "codex": "codex"}.get(cli_provider)
+    if cli_name and not shutil.which(cli_name):
+        logger.error(f"CLI tool '{cli_name}' not found in PATH")
+        raise FileNotFoundError(
+            f"CLI tool '{cli_name}' is not installed or not in PATH. "
+            f"Install it first: https://docs.anthropic.com/en/docs/claude-code"
+            if cli_name == "claude" else
+            f"CLI tool '{cli_name}' is not installed or not in PATH."
+        )
 
     if cli_provider == "claude":
         cmd = f'claude'
@@ -702,6 +1060,38 @@ def watchdog_loop():
             if process.poll() is not None:
                 logger.warning(f"Watchdog detected crash: agent {agent_id}")
                 handle_agent_crash(agent_id)
+                continue
+
+            # Check for stuck tasks (no output for TASK_TIMEOUT_SECONDS)
+            state = agent_task_states.get(agent_id, {})
+            if state.get("started_at") and not state.get("done_at"):
+                try:
+                    started = datetime.fromisoformat(state["started_at"]).timestamp()
+                except (ValueError, TypeError):
+                    started = time.time()
+                elapsed = time.time() - started
+                if elapsed > TASK_TIMEOUT_SECONDS:
+                    task_id = state.get("task_id", "unknown")
+                    logger.warning(
+                        f"Watchdog: agent {agent_id} task {task_id} stuck for "
+                        f"{elapsed:.0f}s (limit {TASK_TIMEOUT_SECONDS}s), force-completing"
+                    )
+                    tail_logs = [entry["line"] for entry in agent_logs.get(agent_id, [])[-TASK_LOG_TAIL_LINES:]]
+                    _finalize_task(
+                        agent_id,
+                        "timeout",
+                        reason="task_timeout",
+                        exit_code=None,
+                        tail_logs=tail_logs
+                    )
+                    agent["status"] = "idle"
+                    agent["current_task"] = None
+                    agent["current_task_id"] = None
+                    broadcast_agent_event("agent_task_timeout", {
+                        "agent_id": agent_id,
+                        "task_id": task_id,
+                        "elapsed": elapsed
+                    })
 
 
 def handle_agent_crash(agent_id: str):
@@ -727,12 +1117,19 @@ def handle_agent_crash(agent_id: str):
     }
 
     # Cleanup dead agent
-    if agent.get('current_task'):
-        broadcast_agent_event('agent_task_failed', {
-            'agent_id': agent_id,
-            'task': agent['current_task'],
-            'reason': 'agent_crashed'
-        })
+    if agent.get("current_task"):
+        state = agent_task_states.get(agent_id, {})
+        if not state.get("done_at"):
+            process = agent.get("process")
+            exit_code = process.poll() if process else None
+            tail_logs = [entry["line"] for entry in agent_logs.get(agent_id, [])[-TASK_LOG_TAIL_LINES:]]
+            _finalize_task(
+                agent_id,
+                "fail",
+                reason="agent_crashed",
+                exit_code=exit_code,
+                tail_logs=tail_logs
+            )
 
     # Stop agent (cleanup resources)
     stop_agent(agent_id, graceful=False)
