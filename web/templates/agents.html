@@ -2698,16 +2698,60 @@ function clearActivityFeed() {
     renderErrorPanel();
 }
 
-// Task management (placeholder)
 function showCreateTaskModal() {
     document.getElementById('create-task-modal').classList.remove('hidden');
+    document.getElementById('task-title').focus();
 }
 
 function closeCreateTaskModal() {
     document.getElementById('create-task-modal').classList.add('hidden');
 }
 
-function confirmCreateTask() {
+async function confirmCreateTask() {
+    const title = document.getElementById('task-title').value.trim();
+    const description = document.getElementById('task-description').value.trim();
+    const priority = document.getElementById('task-priority').value;
+
+    if (!title) {
+        document.getElementById('task-title').focus();
+        return;
+    }
+
+    const priorityMap = { 'urgent': 1, 'high': 2, 'medium': 3, 'low': 4 };
+    const task = {
+        id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36),
+        title: title,
+        description: description || title,
+        category: 'todo',
+        priority: priorityMap[priority] || 3,
+        scope: 'small',
+        status: 'pending',
+        source: 'manual',
+        created_at: new Date().toISOString()
+    };
+
+    try {
+        const resp = await fetch('/api/autonomous/tasks/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tasks: [task] })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            addActivityItem(`Task created: ${title}`, 'success');
+            // Clear form
+            document.getElementById('task-title').value = '';
+            document.getElementById('task-description').value = '';
+            document.getElementById('task-priority').value = 'medium';
+            // Refresh task board
+            pollAutonomousStatus();
+        } else {
+            addActivityItem('Failed to create task: ' + (data.error || 'Unknown'), 'error');
+        }
+    } catch (e) {
+        addActivityItem('Error creating task: ' + e.message, 'error');
+    }
+
     closeCreateTaskModal();
 }
 

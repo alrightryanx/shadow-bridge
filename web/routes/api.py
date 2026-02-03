@@ -5918,6 +5918,23 @@ def autonomous_tasks():
     })
 
 
+@api_bp.route("/autonomous/tasks/add", methods=["POST"])
+@rate_limit
+@api_error_handler
+def autonomous_task_add():
+    """Add manually created tasks to the queue."""
+    from ..services.autonomous_loop import get_autonomous_loop
+
+    data = request.get_json(silent=True) or {}
+    tasks = data.get("tasks", [])
+    if not tasks:
+        return jsonify({"success": False, "error": "No tasks provided"}), 400
+
+    loop = get_autonomous_loop()
+    added = loop.add_tasks(tasks)
+    return jsonify({"success": True, "added": added, "total": len(tasks)})
+
+
 @api_bp.route("/autonomous/tasks/<task_id>", methods=["DELETE"])
 def autonomous_task_delete(task_id):
     """Delete an autonomous task."""
