@@ -36,6 +36,9 @@ from web.services.agent_orchestrator import (
     agent_task_states,
     broadcast_agent_event,
 )
+from web.services.subagent_loop import get_subagent_loop_controller, SubagentLoopController
+from web.services.routine_scheduler import get_routine_scheduler
+from web.services.loop_intelligence import get_loop_intelligence
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +85,8 @@ def get_config_value(key: str, default: str = None) -> Optional[str]:
                 for line in f:
                     if line.startswith(f"{key}="):
                         return line.split("=", 1)[1].strip()
-        except: pass
+        except (IOError, OSError) as e:
+            pass  # Config resolution fallback - not critical
     return default
 
 DEFAULT_MODEL = "gemini-3-flash-preview"
@@ -147,6 +151,7 @@ class AutonomousLoop:
         self.build_automation = BuildAutomation()
         self.deployment_automation = DeploymentAutomation()
         self.workspace_manager = WorkspaceManager()
+        self.subagent_loop_controller = get_subagent_loop_controller()
 
         self.running = False
         self.paused = False
@@ -186,7 +191,7 @@ class AutonomousLoop:
             try:
                 with open(PULSE_FILE, "r") as f:
                     return f.read()
-            except:
+            except (IOError, OSError):
                 pass
         return "No specific temporal nudges active."
 
@@ -662,6 +667,10 @@ class AutonomousLoop:
                     self.cycle_count += 1
                     logger.debug(f"Autonomous cycle #{self.cycle_count}")
 
+                    # 0. Check scheduled routines (every 10 cycles to avoid overhead)
+                    if self.cycle_count % 10 == 1:
+                        self._check_routines()
+
                     # 1. Scan if queue empty or stale
                     if not self._backoff_active() and self._should_scan():
                         self._do_scan()
@@ -706,6 +715,38 @@ class AutonomousLoop:
             self._stop_event.wait(CYCLE_INTERVAL_SECONDS)
 
         logger.info("Autonomous loop thread exiting")
+
+    def _check_routines(self):
+        """Check and execute any scheduled routines that are due."""
+        try:
+            scheduler = get_routine_scheduler()
+            due_routines = scheduler.check_due_routines()
+            for routine in due_routines:
+                goal_id = scheduler.execute_routine(routine)
+                if goal_id:
+                    logger.info(f"Routine '{routine.get('name')}' triggered -> goal {goal_id}")
+                    self._broadcast_event("routine_triggered", {
+                        "routine": routine.get("name"),
+                        "goal_id": goal_id,
+                    })
+        except Exception as e:
+            logger.warning(f"Routine check failed: {e}")
+
+    def _evaluate_loop_deployment(self, task_description: str, context: dict = None) -> dict:
+        """Evaluate whether a task should be deployed as a subagent loop."""
+        try:
+            intel = get_loop_intelligence()
+            should_deploy, score, factors = intel.should_deploy_loop(task_description, context)
+            iterations = intel.recommend_iterations(score, task_description) if should_deploy else 0
+            return {
+                "should_deploy": should_deploy,
+                "score": score,
+                "factors": factors,
+                "recommended_iterations": iterations,
+            }
+        except Exception as e:
+            logger.warning(f"Loop intelligence evaluation failed: {e}")
+            return {"should_deploy": False, "score": 0.0, "factors": {}, "recommended_iterations": 0}
 
     def _generate_tasks(self):
         """Proactively generate new tasks if the queue is empty."""
@@ -833,6 +874,21 @@ After the protocol markers, respond with a JSON list of tasks:
 
             # Build prompt and assign
             prompt = self._build_task_prompt(task, pulse_nudge)
+
+            # Evaluate if task should run as a subagent loop
+            loop_eval = self._evaluate_loop_deployment(
+                task.get("description", task.get("title", "")),
+                context={"files": lock_paths if lock_paths else [], "repo": task.get("repo")},
+            )
+            if loop_eval.get("should_deploy"):
+                task["loop_mode"] = True
+                task["loop_iterations"] = loop_eval.get("recommended_iterations", 3)
+                task["loop_score"] = loop_eval.get("score", 0)
+                logger.info(
+                    f"Loop deployment recommended for '{task.get('title')}' "
+                    f"(score: {loop_eval['score']:.2f}, iterations: {loop_eval['recommended_iterations']})"
+                )
+
             lock_paths = task.get("lock_paths") or []
             if not lock_paths and task.get("file_path"):
                 lock_paths = [task.get("file_path")]
@@ -1298,6 +1354,12 @@ After the protocol markers, respond with a JSON list of tasks:
 
     def _build_task_prompt(self, task: dict, pulse_nudge: str = "") -> str:
         """Build a complete task prompt for an agent, including temporal pulse nudges."""
+        # Check if this task should suggest using a loop
+        should_loop, loop_reason = self.subagent_loop_controller.should_deploy_loop(task)
+        loop_suggestion = ""
+        if should_loop:
+            loop_suggestion = f"\n[LOOP RECOMMENDED: {loop_reason}]\n"
+        
         return f"""[AUTONOMOUS MODE - TEMPORAL PULSE ACTIVE]
 
 You are an autonomous agent working on the ShadowAI codebase.
@@ -1305,7 +1367,7 @@ Current Time: {datetime.now().strftime('%H:%M:%S')}
 
 [TEMPORAL NUDGE]
 {pulse_nudge}
-
+{loop_suggestion}
 TASK: {task.get('title', 'Unknown task')}
 
 DESCRIPTION:
@@ -1329,6 +1391,28 @@ INSTRUCTIONS:
 4. Verify your change doesn't break anything
 5. Stage, commit, and push with: git add <files> && git commit -m "<type>: <description>" && git push
 6. Use the protocol header at the top of this task for completion markers
+
+SUBAGENT LOOP CAPABILITY:
+If you need to iterate on your work (fix-test-fix cycles, quality improvements, 
+build repair), you can deploy a subagent loop.
+
+To START a loop (max 100 iterations), output this marker on its own line:
+<<<SUBAGENT_LOOP_START {{"iterations": 5, "purpose": "fix all lint errors"}}>>>
+
+For EACH iteration, output progress:
+<<<SUBAGENT_LOOP_ITERATION {{"num": 1, "result": "fixed 3 of 10 errors"}}>>>
+
+When DONE, output completion:
+<<<SUBAGENT_LOOP_END {{"status": "success", "final_result": "all errors fixed"}}>>>
+
+USE loops when:
+- Multiple related fixes needed (code smell cleanup, test repairs)
+- Iterative refinement required (optimization, polish)
+- Build/test cycles (fix until green)
+
+DO NOT use loops for:
+- Single, simple changes
+- Tasks with scope "small"
 """
 
     # ---- Broadcasting ----
