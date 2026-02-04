@@ -17,3 +17,7 @@ On Ubuntu/Debian:
 ```bash
 sudo apt install libxcb-cursor0 libxcb-xinerama0
 ```
+
+## Packaging
+1. After building successfully, run `./package_linux.sh` to create a compressed archive.
+2. The script packages `dist/ShadowBridge` into `dist/ShadowBridge-linux-<timestamp>.tar.gz`, ready for distribution.

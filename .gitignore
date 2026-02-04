@@ -35,4 +35,25 @@ email_config.json
 build/
 dist/
 *.spec
-build/
+!ShadowBridge.spec
+
+# Temp files (created by tempfile module)
+tmp*
+nul
+
+# Old GUI backups
+shadow_bridge_gui_v*.py
+
+# Stale MSIs at root
+/*.msi
+
+# Build locked archives
+build_locked*/
+
+# Test artifacts
+test_*.png
+*_result.json
+
+# Backup/fixed copies
+*.backup
+*.fixed

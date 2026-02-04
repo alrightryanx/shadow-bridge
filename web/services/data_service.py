@@ -1989,7 +1989,7 @@ def get_status() -> Dict:
         "total_projects": len(projects),
         "total_notes": len(notes),
         "ssh_status": ssh_status,
-        "version": "1.159",
+        "version": "1.161",
         "local_ip": local_ip,
         "data_path": str(SHADOWAI_DIR),
         "debug_mode": debug_mode,
@@ -2698,9 +2698,15 @@ def start_workflow(workflow_type: str, options: Dict) -> Dict:
         # Trigger background shadow_agent execution
         import subprocess
         try:
+            # Validate inputs to prevent injection
+            import re
+            safe_team = re.sub(r'[^a-zA-Z0-9_-]', '', team)
+            safe_task = task.replace('"', '').replace("'", '')[:500]
             # We run this detached to not block the API
-            cmd = f"python -m shadow_agent --team {team} --task \"{task}\""
-            subprocess.Popen(cmd, shell=True)
+            subprocess.Popen(
+                ["python", "-m", "shadow_agent", "--team", safe_team, "--task", safe_task],
+                shell=False
+            )
             workflow["current_stage"] = f"Team '{team}' working on task"
         except Exception as e:
             logger.error(f"Failed to start shadow_agent: {e}")
