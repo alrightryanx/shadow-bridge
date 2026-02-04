@@ -9,6 +9,7 @@ import json
 import time
 import unittest
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
 # Add parent directory to path to import web modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -63,8 +64,9 @@ class TestVideoSystem(unittest.TestCase):
         mock_popen.return_value = mock_process
 
         # Mock output file creation
-        output_path = os.path.join(os.path.expanduser("~"), ".shadowai", "video_models", "outputs", "test.mp4")
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_dir = Path(os.path.expanduser("~")) / ".shadowai" / "video_models" / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(output_dir / "test.mp4")
         with open(output_path, 'w') as f:
             f.write("mock video content")
 
@@ -80,7 +82,7 @@ class TestVideoSystem(unittest.TestCase):
 
         # Assertions
         self.assertTrue(result['success'])
-        self.assertEqual(result['model'], "LTX Video")
+        self.assertEqual(result['model'], "LTX Video (Fast)")
         self.assertGreater(len(progress_updates), 0)
         
         # Verify metrics were recorded (manually trigger recording since we skipped api_generate)

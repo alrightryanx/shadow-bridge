@@ -12,6 +12,72 @@ import socket
 import threading
 import time
 
+def _can_write_dir(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        testfile = path / ".__shadowai_write_test__"
+        with open(testfile, "w") as f:
+            f.write("ok")
+        testfile.unlink()
+        return True
+    except Exception:
+        return False
+
+
+_WIN_TEMP_ROOT = None
+
+
+def _setup_windows_temp_root():
+    # tempfile on Windows creates subdirs with mode=0o700, which can produce
+    # ACLs that block file creation in this environment. Patch mkdir to ignore mode.
+    if os.name != "nt":
+        return
+
+    _orig_mkdir = tempfile._os.mkdir
+    _orig_os_mkdir = os.mkdir
+
+    def _mkdir_no_mode(path, mode=0o777):
+        return _orig_mkdir(path)
+
+    def _os_mkdir_no_mode(path, mode=0o777):
+        return _orig_os_mkdir(path)
+
+    tempfile._os.mkdir = _mkdir_no_mode
+    os.mkdir = _os_mkdir_no_mode
+
+    repo_root = Path(__file__).resolve().parent.parent
+    candidates = []
+    env_root = os.environ.get("SHADOWAI_TEST_TMP")
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.append(repo_root.parent / ".aidev" / "tmp")
+    candidates.append(repo_root / ".pytest_tmp")
+
+    global _WIN_TEMP_ROOT
+    for candidate in candidates:
+        if _can_write_dir(candidate):
+            os.environ.setdefault("TEMP", str(candidate))
+            os.environ.setdefault("TMP", str(candidate))
+            os.environ.setdefault("TMPDIR", str(candidate))
+            tempfile.tempdir = str(candidate)
+            home_dir = candidate / "home"
+            home_dir.mkdir(parents=True, exist_ok=True)
+            os.environ["USERPROFILE"] = str(home_dir)
+            os.environ["HOME"] = str(home_dir)
+            _WIN_TEMP_ROOT = candidate
+            break
+
+
+_setup_windows_temp_root()
+os.environ["SHADOWAI_TESTING"] = "1"
+
+
+def pytest_configure(config):
+    if os.name != "nt" or not _WIN_TEMP_ROOT:
+        return
+    basetemp = _WIN_TEMP_ROOT / "pytest-tmp"
+    basetemp.mkdir(parents=True, exist_ok=True)
+    config.option.basetemp = str(basetemp)
 
 # ==================== Path Fixtures ====================
 
@@ -305,15 +371,19 @@ def rate_limiter_class():
 @pytest.fixture
 def flask_app(mock_home, shadowai_dir):
     """Create Flask app for testing."""
-    try:
-        import sys
-        sys.path.insert(0, str(Path(__file__).parent.parent / "web"))
-        from app import create_app
+    import sys
+    # Add the root shadow-bridge path for other imports
+    bridge_path = str(Path(__file__).parent.parent)
+    if bridge_path not in sys.path:
+        sys.path.insert(0, bridge_path)
 
+    try:
+        from web.app import create_app
         app = create_app()
         app.config['TESTING'] = True
         return app
-    except ImportError:
+    except Exception as e:
+        print(f"Error creating test app: {e}")
         # Return a mock app if imports fail
         from unittest.mock import MagicMock
         mock_app = MagicMock()

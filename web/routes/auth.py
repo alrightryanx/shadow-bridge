@@ -10,7 +10,7 @@ from typing import Optional
 
 from ..services import user_service
 
-auth_bp = Blueprint("auth", __name__)
+auth_bp = Blueprint("auth_web", __name__)
 
 
 # =============================================================================

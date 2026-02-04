@@ -377,7 +377,7 @@ function updateConnectionSelectionHint() {
         const backendLabel = getBackendLabelForBanner(activeSession);
         const modelLabel = getModelLabelForBanner(activeSession);
         if (backendLabel && modelLabel) {
-            hint.textContent = `Active: ${backendLabel} Â· ${modelLabel}`;
+            hint.textContent = `Active: ${backendLabel} • ${modelLabel}`;
             return;
         }
         if (backendLabel) {
@@ -446,16 +446,10 @@ function getModelLabelForBanner(session) {
 
 function updateConnectionBanner(status = null) {
     const dot = document.getElementById('connection-health-dot');
-    const text = document.getElementById('connection-health-text');
-    if (!dot || !text) return;
+    if (!dot) return;
 
     const statusSnapshot = status || lastStatusSnapshot;
     const session = resolveActiveSessionMeta();
-    const backendLabel = session ? getBackendLabelForBanner(session) : '';
-    const modelLabel = session ? getModelLabelForBanner(session) : '';
-    const activeLabel = backendLabel
-        ? `${backendLabel}${modelLabel ? ` Â· ${modelLabel}` : ''}`
-        : 'No active session';
 
     let dotClass = 'status-dot idle';
     let healthLabel = 'Unknown health';
@@ -464,39 +458,20 @@ function updateConnectionBanner(status = null) {
         dotClass = 'status-dot offline';
         healthLabel = 'Bridge offline';
     } else if (session) {
-        const rawType = String(session.backend_type || session.backendType || '').toLowerCase();
-        if (rawType.includes('ssh')) {
-            const sshStatus = statusSnapshot?.ssh_status || 'unknown';
-            if (sshStatus === 'connected') {
-                dotClass = 'status-dot online';
-                healthLabel = 'SSH connected';
-            } else if (sshStatus === 'offline') {
-                dotClass = 'status-dot offline';
-                healthLabel = 'SSH offline';
-            } else if (sshStatus === 'no_devices') {
-                dotClass = 'status-dot idle';
-                healthLabel = 'No devices';
-            } else {
-                dotClass = 'status-dot idle';
-                healthLabel = 'SSH unknown';
-            }
-        } else if (rawType.includes('api')) {
-            dotClass = api.isOnline ? 'status-dot online' : 'status-dot offline';
-            healthLabel = api.isOnline ? 'API reachable' : 'API offline';
-        } else if (rawType.includes('local')) {
-            dotClass = 'status-dot idle';
-            healthLabel = 'Local device';
+        if (session.is_running) {
+            dotClass = 'status-dot online';
+            healthLabel = 'Session active';
         } else {
-            dotClass = api.isOnline ? 'status-dot online' : 'status-dot offline';
-            healthLabel = api.isOnline ? 'Bridge online' : 'Bridge offline';
+            dotClass = 'status-dot idle';
+            healthLabel = 'Session idle';
         }
     } else {
-        dotClass = api.isOnline ? 'status-dot idle' : 'status-dot offline';
+        dotClass = api.isOnline ? 'status-dot online' : 'status-dot offline';
         healthLabel = api.isOnline ? 'Bridge online' : 'Bridge offline';
     }
 
     dot.className = dotClass;
-    text.textContent = `${activeLabel} Â· ${healthLabel}`;
+    dot.title = healthLabel;
 }
 
 // Get device ID for API calls (null for all devices)
@@ -684,7 +659,16 @@ function renderNoteContent() {
         const noteContent = currentNoteContent || '(Empty note)';
         if (typeof marked !== 'undefined') {
             content.classList.add('markdown-body');
-            content.innerHTML = marked.parse(noteContent, { breaks: true });
+            // Sanitize markdown output to prevent XSS
+            const rawHtml = marked.parse(noteContent, { breaks: true });
+            if (typeof DOMPurify !== 'undefined') {
+                content.innerHTML = DOMPurify.sanitize(rawHtml);
+            } else {
+                // Fallback: strip script tags and event handlers
+                const sanitized = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+                content.innerHTML = sanitized;
+            }
         } else {
             content.innerHTML = '<pre>' + escapeHtml(noteContent) + '</pre>';
         }
@@ -922,12 +906,11 @@ async function performSearch(query) {
     if (results.error || items.length === 0) {
         container.innerHTML = `
             <div class="search-mode-header">
-                <div class="search-mode-toggle">
-                    <button class="search-mode-btn ${searchMode === 'keyword' ? 'active' : ''}" data-mode="keyword" onclick="setSearchMode('keyword')" title="Keyword search">ABC</button>
-                    <button class="search-mode-btn ${searchMode === 'hybrid' ? 'active' : ''}" data-mode="hybrid" onclick="setSearchMode('hybrid')" title="Hybrid search">&#x2726;</button>
-                    <button class="search-mode-btn ${searchMode === 'semantic' ? 'active' : ''}" data-mode="semantic" onclick="setSearchMode('semantic')" title="Semantic AI search">&#x1F9E0;</button>
-                </div>
-            </div>
+                                <div class="search-mode-toggle">
+                                    <button class="search-mode-btn ${searchMode === 'keyword' ? 'active' : ''}" data-mode="keyword" onclick="setSearchMode('keyword')" title="Keyword search"><span class="material-symbols-outlined">abc</span></button>
+                                    <button class="search-mode-btn ${searchMode === 'hybrid' ? 'active' : ''}" data-mode="hybrid" onclick="setSearchMode('hybrid')" title="Hybrid search"><span class="material-symbols-outlined">auto_awesome</span></button>
+                                    <button class="search-mode-btn ${searchMode === 'semantic' ? 'active' : ''}" data-mode="semantic" onclick="setSearchMode('semantic')" title="Semantic AI search"><span class="material-symbols-outlined">psychology</span></button>
+                                </div>            </div>
             <div class="search-no-results">No results found${results.error ? ' - ' + results.error : ''}</div>`;
         return;
     }
@@ -935,12 +918,11 @@ async function performSearch(query) {
     // Build search mode header
     const modeHeader = `
         <div class="search-mode-header">
-            <div class="search-mode-toggle">
-                <button class="search-mode-btn ${searchMode === 'keyword' ? 'active' : ''}" data-mode="keyword" onclick="setSearchMode('keyword')" title="Keyword search">ABC</button>
-                <button class="search-mode-btn ${searchMode === 'hybrid' ? 'active' : ''}" data-mode="hybrid" onclick="setSearchMode('hybrid')" title="Hybrid search">&#x2726;</button>
-                <button class="search-mode-btn ${searchMode === 'semantic' ? 'active' : ''}" data-mode="semantic" onclick="setSearchMode('semantic')" title="Semantic AI search">&#x1F9E0;</button>
-            </div>
-            ${isSemanticResult ? '<span class="search-type-badge">AI</span>' : '<span class="search-type-badge keyword">Keyword</span>'}
+                            <div class="search-mode-toggle">
+                                <button class="search-mode-btn ${searchMode === 'keyword' ? 'active' : ''}" data-mode="keyword" onclick="setSearchMode('keyword')" title="Keyword search"><span class="material-symbols-outlined">abc</span></button>
+                                <button class="search-mode-btn ${searchMode === 'hybrid' ? 'active' : ''}" data-mode="hybrid" onclick="setSearchMode('hybrid')" title="Hybrid search"><span class="material-symbols-outlined">auto_awesome</span></button>
+                                <button class="search-mode-btn ${searchMode === 'semantic' ? 'active' : ''}" data-mode="semantic" onclick="setSearchMode('semantic')" title="Semantic AI search"><span class="material-symbols-outlined">psychology</span></button>
+                            </div>            ${isSemanticResult ? '<span class="search-type-badge">AI</span>' : '<span class="search-type-badge keyword">Keyword</span>'}
         </div>`;
 
     container.innerHTML = modeHeader + items.slice(0, 10).map(item => {
@@ -970,13 +952,14 @@ async function performSearch(query) {
 
 function getSearchIcon(type) {
     const icons = {
-        'project': '&#128193;',
-        'note': '&#128221;',
-        'automation': '&#9881;',
-        'agent': '&#129302;',
-        'team': '&#128101;'
+        'project': 'folder',
+        'note': 'description',
+        'automation': 'auto_awesome',
+        'agent': 'smart_toy',
+        'team': 'group'
     };
-    return icons[type] || '&#128196;';
+    const icon = icons[type] || 'article';
+    return `<span class="material-symbols-outlined">${icon}</span>`;
 }
 
 function navigateToResult(type, id) {

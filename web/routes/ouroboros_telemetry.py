@@ -539,6 +539,145 @@ def _update_crash_patterns(crash_data: dict):
         logger.warning(f"Failed to update crash_patterns: {e}")
 
 
+@ouroboros_telemetry_bp.route('/api/ouroboros/issues', methods=['GET'])
+def get_ouroboros_issues():
+    """
+    Returns issues from the local issue queue.
+    Used by the Refiner agent in --local mode as an alternative to GitHub.
+
+    Query params:
+      - status: filter by status (open, submitted, fixed, dismissed). Default: open
+      - build_type: filter by build type (debug, aidev, release). Default: all
+      - limit: max results. Default: 50
+      - since: ISO timestamp to filter issues since. Default: last 24 hours
+    """
+    try:
+        status_filter = request.args.get('status', 'open')
+        build_type_filter = request.args.get('build_type', None)
+        limit = min(int(request.args.get('limit', 50)), 200)
+        since = request.args.get('since', None)
+
+        # Load issues from all device telemetry files
+        issues = []
+        for device_dir in TELEMETRY_DIR.glob("*_crashes.jsonl"):
+            device_id = device_dir.stem.replace("_crashes", "")
+            try:
+                with open(device_dir, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                            # Build a normalized issue object
+                            error_info = entry.get("error", {})
+                            issue = {
+                                "id": hash(f"{device_id}_{entry.get('timestamp', '')}_{error_info.get('type', '')}") & 0x7FFFFFFF,
+                                "device_id": device_id,
+                                "issue_type": error_info.get("type", "UNKNOWN"),
+                                "severity": "CRITICAL",
+                                "component": error_info.get("source_reference", {}).get("class_name", "Unknown"),
+                                "sanitized_description": f"{error_info.get('type', 'Unknown')}: {error_info.get('message', 'No message')}",
+                                "sanitized_stack_trace": error_info.get("stack_trace_raw", None),
+                                "build_type": entry.get("build_type", entry.get("environment", "debug")),
+                                "build_version": entry.get("device_info", {}).get("app_version", "unknown"),
+                                "category": "CRASH",
+                                "status": "open",
+                                "created_at": entry.get("timestamp", ""),
+                            }
+
+                            # Apply filters
+                            if build_type_filter and issue["build_type"] != build_type_filter:
+                                continue
+
+                            issues.append(issue)
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+            except Exception as e:
+                logger.warning(f"Error reading {device_dir}: {e}")
+
+        # Also include frustration-derived issues
+        for frust_file in TELEMETRY_DIR.glob("*_frustration.jsonl"):
+            device_id = frust_file.stem.replace("_frustration", "")
+            try:
+                with open(frust_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                            issue = {
+                                "id": hash(f"{device_id}_{entry.get('timestamp', '')}_{entry.get('pattern', '')}") & 0x7FFFFFFF,
+                                "device_id": device_id,
+                                "issue_type": entry.get("pattern", "UNKNOWN").upper(),
+                                "severity": entry.get("severity", "medium").upper(),
+                                "component": "FrustrationDetector",
+                                "sanitized_description": entry.get("description", ""),
+                                "sanitized_stack_trace": None,
+                                "build_type": entry.get("build_type", "debug"),
+                                "build_version": "unknown",
+                                "category": "USER_BEHAVIOR",
+                                "status": "open",
+                                "created_at": entry.get("timestamp", ""),
+                            }
+
+                            if build_type_filter and issue["build_type"] != build_type_filter:
+                                continue
+
+                            issues.append(issue)
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+            except Exception as e:
+                logger.warning(f"Error reading {frust_file}: {e}")
+
+        # Sort by created_at descending, limit
+        issues.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        issues = issues[:limit]
+
+        return jsonify({
+            "status": "ok",
+            "count": len(issues),
+            "issues": issues
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching ouroboros issues: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ouroboros_telemetry_bp.route('/api/ouroboros/aggregate', methods=['POST'])
+def receive_aggregate_telemetry():
+    """
+    Receives batched anonymized aggregate stats from release builds.
+    Contains ONLY counts and categories - no PII, no raw data.
+    """
+    try:
+        data = request.get_json()
+
+        device_id = data.get("device_id")
+        if not validate_device_id(device_id):
+            return jsonify({"error": "Invalid device ID"}), 400
+
+        # Store aggregate report
+        aggregate_file = TELEMETRY_DIR / f"{device_id}_aggregate.jsonl"
+        with open(aggregate_file, 'a') as f:
+            f.write(json.dumps({
+                "received_at": datetime.now().isoformat(),
+                **data
+            }) + "\n")
+
+        logger.info(f"Received aggregate telemetry from {device_id}: "
+                    f"crashes={data.get('crash_count', 0)}, "
+                    f"period={data.get('period', 'unknown')}")
+
+        return jsonify({"status": "received"}), 200
+
+    except Exception as e:
+        logger.error(f"Error receiving aggregate telemetry: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 def _categorize_root_cause(error_type: str, stack_trace: str) -> str:
     """Categorize the root cause of a crash based on error type and stack trace."""
     error_lower = error_type.lower()

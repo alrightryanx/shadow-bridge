@@ -146,6 +146,19 @@ class ContextWindowService:
         if event_type in ('view', 'edit', 'open'):
             self._current_focus = event
 
+        # Broadcast via WebSocket
+        try:
+            from ..routes import websocket
+            websocket.broadcast_activity(
+                event_type, 
+                resource_type, 
+                resource_id, 
+                resource_title, 
+                metadata
+            )
+        except Exception as e:
+            logger.debug(f"Failed to broadcast activity: {e}")
+
         logger.debug(f"Tracked activity: {event_type} {resource_type}:{resource_id}")
 
     def get_recent_activity(

@@ -94,6 +94,7 @@ class AutonomousScanner:
         tasks = []
         repo_name = os.path.basename(repo)
         pattern = re.compile(r"(TODO|FIXME|HACK|XXX)\s*:?\s*(.*)", re.IGNORECASE)
+        phrase_pattern = re.compile(r"\b(for now|do this later|to be implemented)\b\s*:?\s*(.*)", re.IGNORECASE)
 
         for filepath in self._walk_source_files(repo):
             try:
@@ -118,6 +119,28 @@ class AutonomousScanner:
                                 "line_number": line_num,
                                 "category": "todo",
                                 "priority": priority,
+                                "repo": repo_name,
+                                "scope": "small",
+                                "assigned_to": None,
+                                "status": "pending",
+                                "created_at": datetime.utcnow().isoformat(),
+                            })
+                            continue
+
+                        phrase_match = phrase_pattern.search(line)
+                        if phrase_match:
+                            phrase = phrase_match.group(1).strip()
+                            comment = phrase_match.group(2).strip() or phrase
+                            rel_path = os.path.relpath(filepath, repo)
+
+                            tasks.append({
+                                "id": str(uuid.uuid4()),
+                                "title": f"Follow up ({phrase}) in {os.path.basename(filepath)}:{line_num}",
+                                "description": f"NOTE: {comment}\n\nFile: {rel_path}\nLine: {line_num}",
+                                "file_path": rel_path,
+                                "line_number": line_num,
+                                "category": "todo",
+                                "priority": 4,
                                 "repo": repo_name,
                                 "scope": "small",
                                 "assigned_to": None,

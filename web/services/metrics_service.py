@@ -57,7 +57,7 @@ class MetricsService:
         """Load metrics from disk."""
         try:
             if os.path.exists(METRICS_FILE):
-                with open(METRICS_FILE, 'r') as f:
+                with open(METRICS_FILE, 'r', encoding="utf-8") as f:
                     return json.load(f)
         except Exception as e:
             logger.error(f"Failed to load metrics: {e}")
@@ -74,7 +74,7 @@ class MetricsService:
         """Save metrics to disk."""
         try:
             os.makedirs(os.path.dirname(METRICS_FILE), exist_ok=True)
-            with open(METRICS_FILE, 'w') as f:
+            with open(METRICS_FILE, 'w', encoding="utf-8") as f:
                 json.dump(self._cache, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save metrics: {e}")

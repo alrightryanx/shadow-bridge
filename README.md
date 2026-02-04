@@ -25,6 +25,18 @@ ShadowBridge includes a web dashboard at `http://localhost:6767` for managing pr
 - **Claude Code Companion**: Relay notifications and approvals between Claude Code and ShadowAI
 - **System Tray**: Runs quietly in the background
 
+## 🚀 Capabilities
+
+### 🧠 Agent Swarm Orchestration
+ShadowBridge acts as the central nervous system for **Hierarchical Agent Swarms**.
+- **Process Management:** Spawns and manages isolated Python processes for each sub-agent (`shadow_agent.py`).
+- **Context Piping:** Securely serializes and pipes `ContextPackets` (files, memory, variables) from parent to child processes via stdin/stdout.
+- **Lifecycle Tracking:** Monitors process health and exit codes, bubbling up `TaskResult` events to the Android `AgentOrchestrator`.
+
+### ⚡ Local LLM Inference
+- **llama.cpp Server:** Integrated server for running GGUF models locally.
+- **Model Management:** Auto-download and quantization support.
+
 ## Requirements
 
 - Windows 10/11
@@ -56,7 +68,22 @@ chmod +x build_linux.sh
 
 This will create a virtual environment, install dependencies, and build the executable in `dist/ShadowBridge/ShadowBridge`.
 
+After the build finishes, run `./package_linux.sh` to bundle the compiled ShadowBridge alongside its web assets into `dist/ShadowBridge-linux-<timestamp>.tar.gz`, ready for handoff.
+
 For troubleshooting and system dependencies, see [README_LINUX.md](README_LINUX.md).
+
+### macOS
+
+1. Ensure you have Python 3.8+ installed (use `brew install python` if needed).
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Run ShadowBridge:
+   ```bash
+   python shadow_bridge_gui.py
+   ```
+4. (Optional) For Tailscale support, click the **Install** button within the app or install via the App Store.
 
 ## Ports
 

@@ -267,12 +267,12 @@ async function checkAudioService() {
                 installNote.textContent = '';
             }
 
-            if (service.is_frozen) {
+            if (!service.can_install) {
                 installBtn.textContent = 'Not Available';
                 installBtn.disabled = true;
                 installBtn.classList.add('btn-disabled');
             } else {
-                const sizeGb = service.install_size_gb || 2.5;
+                const sizeGb = service.install_size_gb || 3.0;
                 installBtn.textContent = `Install (~${sizeGb}GB)`;
                 installBtn.disabled = false;
                 installBtn.classList.remove('btn-disabled');

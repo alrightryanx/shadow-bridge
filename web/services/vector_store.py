@@ -25,8 +25,9 @@ CHROMA_PERSIST_DIR = Path.home() / ".shadowai" / "chroma_db"
 COLLECTION_NAME = "shadowai_memory"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # Small, fast, good quality
 
-# Feature flag - disable if dependencies aren't installed
-VECTOR_STORE_ENABLED = False
+# Feature flag - auto-enables if dependencies are available
+# Will attempt initialization on first use via is_available()
+VECTOR_STORE_ENABLED = True  # Try to enable by default
 
 
 def _init_vector_store():

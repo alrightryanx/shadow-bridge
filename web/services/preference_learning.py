@@ -117,7 +117,7 @@ class PreferenceLearningService:
         """Load preferences from disk."""
         try:
             if PREFERENCES_FILE.exists():
-                with open(PREFERENCES_FILE, 'r') as f:
+                with open(PREFERENCES_FILE, 'r', encoding="utf-8") as f:
                     data = json.load(f)
                     self.preferences = UserPreferences.from_dict(data)
                 logger.info("Loaded user preferences")
@@ -129,7 +129,7 @@ class PreferenceLearningService:
         """Save preferences to disk."""
         try:
             PREFERENCES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(PREFERENCES_FILE, 'w') as f:
+            with open(PREFERENCES_FILE, 'w', encoding="utf-8") as f:
                 json.dump(self.preferences.to_dict(), f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save preferences: {e}")

@@ -9,6 +9,7 @@ import logging
 import socket
 import threading
 import time
+import os
 from typing import Callable, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,10 @@ class WebServerManager:
         """Check if the configured port is available."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE") and os.name == "nt":
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((self.host if self.host != "0.0.0.0" else "127.0.0.1", self.port))
                 return True
         except socket.error:
@@ -82,7 +86,10 @@ class WebServerManager:
             port = start + offset
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    if hasattr(socket, "SO_EXCLUSIVEADDRUSE") and os.name == "nt":
+                        s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                    else:
+                        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     s.bind(("127.0.0.1", port))
                     return port
             except socket.error:

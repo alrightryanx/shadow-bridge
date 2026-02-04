@@ -74,11 +74,13 @@ def execute_cli_command(
     # Set working directory (default to user's home if not specified)
     cwd = working_dir or os.path.expanduser("~")
 
-    # Start subprocess
+    # Start subprocess - use shlex to parse command safely
     try:
+        import shlex
+        cmd_parts = shlex.split(cmd) if isinstance(cmd, str) else cmd
         process = subprocess.Popen(
-            cmd,
-            shell=True,
+            cmd_parts,
+            shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE,
@@ -464,8 +466,8 @@ def cleanup_session(session_id: str):
                 logger.error(f"Failed to terminate process: {e}")
                 try:
                     process.kill()
-                except:
-                    pass
+                except (OSError, ProcessLookupError):
+                    pass  # Process already terminated
 
         del active_processes[session_id]
 

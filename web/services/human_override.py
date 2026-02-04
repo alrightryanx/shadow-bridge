@@ -200,7 +200,7 @@ class HumanOverrideSystem:
         """Load override state from disk."""
         try:
             if OVERRIDE_STATE_FILE.exists():
-                with open(OVERRIDE_STATE_FILE, 'r') as f:
+                with open(OVERRIDE_STATE_FILE, 'r', encoding="utf-8") as f:
                     data = json.load(f)
 
                 self._global_pause = data.get('global_pause', False)
@@ -219,7 +219,7 @@ class HumanOverrideSystem:
         """Save override state to disk."""
         try:
             OVERRIDE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(OVERRIDE_STATE_FILE, 'w') as f:
+            with open(OVERRIDE_STATE_FILE, 'w', encoding="utf-8") as f:
                 json.dump({
                     'global_pause': self._global_pause,
                     'kill_switch_active': self._kill_switch_active,

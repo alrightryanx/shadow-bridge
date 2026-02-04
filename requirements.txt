@@ -7,6 +7,7 @@ cryptography>=41.0.0
 qrcode>=7.0.0
 psutil>=5.9.0
 requests>=2.31.0
+zeroconf>=0.131.0
 
 # Image Generation (optional - install separately for GPU support)
 # pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
@@ -15,4 +16,5 @@ requests>=2.31.0
 # accelerate>=0.25.0
 
 # Background Removal
-# rembg>=2.0.50
+# Media Assembly
+ffmpeg-python>=0.2.0

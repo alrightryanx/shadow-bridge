@@ -66,10 +66,14 @@ def main():
     )
 
     # Image-to-Image command
-    i2i_parser = subparsers.add_parser("image-to-image", help="Generate image from image")
+    i2i_parser = subparsers.add_parser(
+        "image-to-image", help="Generate image from image"
+    )
     i2i_parser.add_argument("--image_b64", help="Base64 encoded source image")
     i2i_parser.add_argument("--prompt_b64", help="Base64 encoded text prompt")
-    i2i_parser.add_argument("--strength", type=float, default=0.7, help="Transformation strength")
+    i2i_parser.add_argument(
+        "--strength", type=float, default=0.7, help="Transformation strength"
+    )
     i2i_parser.add_argument("--model", default="sd-xl-turbo", help="Model to use")
     i2i_parser.add_argument("--steps", type=int, default=4, help="Inference steps")
     i2i_parser.add_argument("--width", type=int, default=1024, help="Width")
@@ -119,6 +123,9 @@ def main():
     # Setup command - ensures model is downloaded
     setup_parser = subparsers.add_parser("setup", help="Ensure model is ready")
     setup_parser.add_argument("--model", default="sd-xl-turbo", help="Model to prepare")
+
+    # List-styles command - get available styles
+    subparsers.add_parser("list-styles", help="List available image generation styles")
 
     args = parser.parse_args()
 
@@ -200,7 +207,7 @@ def main():
                     negative = (
                         base64.b64decode(negative_b64).decode("utf-8")
                         if negative_b64
-                        else None
+                        else ""
                     )
 
                 except Exception as e:
@@ -223,7 +230,7 @@ def main():
 
                 prompt = base64.b64decode(args.prompt_b64).decode("utf-8")
                 image_b64 = args.image_b64
-                negative = None
+                negative = ""
                 strength = args.strength
                 model = args.model
                 steps = args.steps
@@ -238,7 +245,7 @@ def main():
                 model=model,
                 steps=steps,
                 width=width,
-                height=height
+                height=height,
             )
             print_json(result)
 
@@ -365,6 +372,21 @@ def main():
                         "success": True,
                         "model": model,
                         "message": f"Model {model} is ready",
+                    }
+                )
+            except Exception as e:
+                print_json({"success": False, "error": str(e)})
+
+        elif args.command == "list-styles":
+            from web.services.image_service import get_image_generation_service
+
+            service = get_image_generation_service()
+            try:
+                styles = service.get_styles()
+                print_json(
+                    {
+                        "success": True,
+                        "styles": styles,
                     }
                 )
             except Exception as e:

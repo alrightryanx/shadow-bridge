@@ -178,7 +178,7 @@ class RateLimiter:
         """Load rate limit configs from disk."""
         try:
             if RATE_CONFIG_FILE.exists():
-                with open(RATE_CONFIG_FILE, 'r') as f:
+                with open(RATE_CONFIG_FILE, 'r', encoding="utf-8") as f:
                     data = json.load(f)
 
                 for config_data in data.get('configs', []):
@@ -193,7 +193,7 @@ class RateLimiter:
         """Save rate limit configs to disk."""
         try:
             RATE_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(RATE_CONFIG_FILE, 'w') as f:
+            with open(RATE_CONFIG_FILE, 'w', encoding="utf-8") as f:
                 json.dump({
                     'configs': [c.to_dict() for c in self._configs.values()],
                     'saved_at': datetime.now().isoformat()

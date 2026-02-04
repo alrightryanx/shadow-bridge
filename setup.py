@@ -8,6 +8,7 @@ import sv_ttk
 from cx_Freeze import Executable, setup
 
 BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR))
 SV_TTK_PATH = Path(sv_ttk.__file__).parent
 
 def _read_version() -> str:
@@ -25,6 +26,7 @@ include_files = [
     (str(BASE_DIR / "web" / "static"), "web/static"),
     (str(BASE_DIR / "images"), "images"),
     (str(BASE_DIR / "icon.ico"), "icon.ico"),
+    (str(BASE_DIR / "logo.png"), "logo.png"),
     (str(SV_TTK_PATH / "theme"), "lib/sv_ttk/theme"),
 ]
 
@@ -42,6 +44,7 @@ build_exe_options = {
         "web",
         "web.routes",
         "web.services",
+        "web.models",
         "web.utils",
         "shadow_bridge",
         "shadow_bridge.utils",
@@ -53,6 +56,7 @@ build_exe_options = {
         "requests",
         "engineio",
         "bidict",
+        "zeroconf",
     ],
     "includes": ["sv_ttk"],
     "excludes": [
@@ -80,6 +84,10 @@ build_exe_options = {
         "web.services.video_progress",
         "web.services.video_error_handling",
         "web.services.comfyui_executor",
+        "web.services.music_service",
+        "web.routes.music",
+        "web.utils.rvc_manager",
+        "web.utils.music_generator",
     ],
     "zip_exclude_packages": ["sv_ttk"],
 }

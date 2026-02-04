@@ -163,29 +163,38 @@ def record_image_generation(
     source: str = "unknown",
 ) -> Dict[str, Any]:
     """Persist an image generation to the local history."""
-    IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    image_id = str(uuid.uuid4())
-    output_path = IMAGE_OUTPUT_DIR / f"{image_id}.png"
-    image.save(output_path, format="PNG")
+    try:
+        IMAGE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        image_id = str(uuid.uuid4())
+        
+        # Ensure path is valid for Windows
+        output_path = (IMAGE_OUTPUT_DIR / f"{image_id}.png").resolve()
+        
+        logger.debug(f"Saving generated image to {output_path}")
+        image.save(output_path, format="PNG")
 
-    entry = {
-        "id": image_id,
-        "prompt": prompt,
-        "negative_prompt": negative_prompt,
-        "model": model,
-        "width": width,
-        "height": height,
-        "seed": seed,
-        "generation_time_ms": generation_time_ms,
-        "created_at": int(time.time() * 1000),
-        "image_path": str(output_path),
-        "source": source,
-    }
+        entry = {
+            "id": image_id,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "model": model,
+            "width": width,
+            "height": height,
+            "seed": seed,
+            "generation_time_ms": generation_time_ms,
+            "created_at": int(time.time() * 1000),
+            "image_path": str(output_path),
+            "source": source,
+        }
 
-    data = _load_image_history()
-    data.setdefault("images", []).append(entry)
-    _save_image_history(data)
-    return entry
+        data = _load_image_history()
+        data.setdefault("images", []).append(entry)
+        _save_image_history(data)
+        return entry
+    except Exception as e:
+        logger.error(f"Failed to record image generation: {e}", exc_info=True)
+        # Return a partial entry so the service doesn't completely crash
+        return {"id": "error", "image_path": None}
 
 
 def get_image_history(limit: int = 50) -> List[Dict[str, Any]]:
@@ -768,6 +777,14 @@ class ImageGenerationService:
         """
         start_time = time.time()
 
+        # Validate dimensions (must be positive and usually multiple of 8)
+        if width <= 0 or height <= 0:
+            return {"success": False, "error": f"Invalid dimensions: {width}x{height}", "generation_time_ms": 0}
+        
+        # Normalize to multiple of 8 (common requirement for diffusers)
+        width = (width // 8) * 8
+        height = (height // 8) * 8
+
         try:
             self._initialize(model)
 
@@ -776,10 +793,14 @@ class ImageGenerationService:
             # Set seed for reproducibility
             generator = None
             if seed is not None:
+                # Ensure seed is within valid range for torch
+                seed = int(seed) % (2**32)
                 generator = torch.Generator(device=self.device).manual_seed(seed)
             else:
                 seed = torch.randint(0, 2**32, (1,)).item()
                 generator = torch.Generator(device=self.device).manual_seed(seed)
+
+            logger.info(f"Generating image: {width}x{height}, steps={steps}, seed={seed}")
 
             # Generate image
             result = _pipeline(
@@ -831,21 +852,13 @@ class ImageGenerationService:
             }
 
         except Exception as e:
-            logger.error(f"Image generation failed: {e}")
+            logger.error(f"Image generation failed: {e}", exc_info=True)
             # Cleanup GPU memory on error
             if hasattr(self, "device") and self.device == "cuda":
                 _cleanup_gpu_memory()
             return {
                 "success": False,
-                "error": str(e),
-                "generation_time_ms": int((time.time() - start_time) * 1000),
-            }
-
-        except Exception as e:
-            logger.error(f"Image generation failed: {e}")
-            return {
-                "success": False,
-                "error": str(e),
+                "error": f"Generation failed: {str(e)}",
                 "generation_time_ms": int((time.time() - start_time) * 1000),
             }
 
@@ -876,6 +889,13 @@ class ImageGenerationService:
         global _i2i_pipeline
 
         start_time = time.time()
+
+        # Validate and normalize dimensions
+        if width <= 0 or height <= 0:
+            return {"success": False, "error": f"Invalid dimensions: {width}x{height}"}
+        
+        width = (width // 8) * 8
+        height = (height // 8) * 8
 
         try:
             if not _diffusers_available or not _torch_available:
@@ -913,7 +933,12 @@ class ImageGenerationService:
                     _i2i_pipeline.enable_attention_slicing()
 
             # Decode image
-            image = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB")
+            try:
+                image_data = base64.b64decode(image_base64)
+                image = Image.open(io.BytesIO(image_data)).convert("RGB")
+            except Exception as decode_err:
+                logger.error(f"Failed to decode input image: {decode_err}")
+                return {"success": False, "error": f"Invalid input image: {str(decode_err)}"}
             
             # Resize if needed
             if image.width != width or image.height != height:
@@ -922,6 +947,7 @@ class ImageGenerationService:
             # Set seed for reproducibility
             generator = None
             if seed is not None:
+                seed = int(seed) % (2**32)
                 generator = torch.Generator(device=self.device).manual_seed(seed)
             else:
                 seed = torch.randint(0, 2**32, (1,)).item()
@@ -959,12 +985,12 @@ class ImageGenerationService:
             }
 
         except Exception as e:
-            logger.error(f"Image-to-Image failed: {e}")
+            logger.error(f"Image-to-Image failed: {e}", exc_info=True)
             if hasattr(self, "device") and self.device == "cuda":
                 _cleanup_gpu_memory()
             return {
                 "success": False,
-                "error": str(e),
+                "error": f"Image-to-Image failed: {str(e)}",
                 "generation_time_ms": int((time.time() - start_time) * 1000),
             }
 
@@ -1021,10 +1047,12 @@ class ImageGenerationService:
                     _inpaint_pipeline.enable_attention_slicing()
 
             # Decode images
-            image = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert(
-                "RGB"
-            )
-            mask = Image.open(io.BytesIO(base64.b64decode(mask_base64))).convert("L")
+            try:
+                image = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB")
+                mask = Image.open(io.BytesIO(base64.b64decode(mask_base64))).convert("L")
+            except Exception as decode_err:
+                logger.error(f"Failed to decode images for inpainting: {decode_err}")
+                return {"success": False, "error": f"Invalid input image or mask: {str(decode_err)}"}
 
             # Ensure same size
             if mask.size != image.size:
@@ -1056,10 +1084,10 @@ class ImageGenerationService:
             }
 
         except Exception as e:
-            logger.error(f"Inpainting failed: {e}")
+            logger.error(f"Inpainting failed: {e}", exc_info=True)
             return {
                 "success": False,
-                "error": str(e),
+                "error": f"Inpainting failed: {str(e)}",
                 "generation_time_ms": int((time.time() - start_time) * 1000),
             }
 
@@ -1102,8 +1130,12 @@ class BackgroundRemovalService:
             from rembg import remove
 
             # Decode input image
-            input_bytes = base64.b64decode(image_base64)
-            input_image = Image.open(io.BytesIO(input_bytes))
+            try:
+                input_bytes = base64.b64decode(image_base64)
+                input_image = Image.open(io.BytesIO(input_bytes))
+            except Exception as decode_err:
+                logger.error(f"Failed to decode image for background removal: {decode_err}")
+                return {"success": False, "error": f"Invalid input image: {str(decode_err)}"}
 
             # Remove background
             session = self._get_session()
@@ -1127,10 +1159,10 @@ class BackgroundRemovalService:
             }
 
         except Exception as e:
-            logger.error(f"Background removal failed: {e}")
+            logger.error(f"Background removal failed: {e}", exc_info=True)
             return {
                 "success": False,
-                "error": str(e),
+                "error": f"Background removal failed: {str(e)}",
                 "processing_time_ms": int((time.time() - start_time) * 1000),
             }
 
@@ -1291,7 +1323,7 @@ def _batch_worker():
             logger.info(f"Batch job {job_id} finished: {job.completed_count} success, {job.failed_count} failed")
 
         except Exception as e:
-            logger.error(f"Batch worker error: {e}")
+            logger.error(f"Batch worker error: {e}", exc_info=True)
             with _batch_lock:
                 if job_id in _batch_jobs:
                     _batch_jobs[job_id].state = BatchJobState.FAILED

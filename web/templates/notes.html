@@ -201,7 +201,15 @@ function openNoteInModal(noteId, title, event) {
     document.getElementById('modal-title').textContent = title;
 
     if (typeof marked !== 'undefined') {
-        document.getElementById('modal-content').innerHTML = marked.parse(content);
+        // Sanitize markdown output to prevent XSS
+        const rawHtml = marked.parse(content);
+        if (typeof DOMPurify !== 'undefined') {
+            document.getElementById('modal-content').innerHTML = DOMPurify.sanitize(rawHtml);
+        } else {
+            const sanitized = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+            document.getElementById('modal-content').innerHTML = sanitized;
+        }
     } else {
         document.getElementById('modal-content').innerHTML = '<pre>' + escapeHtml(content) + '</pre>';
     }
@@ -307,7 +315,9 @@ function renderNoteContentInline(noteId, content) {
 
     // Render as markdown if marked library is available
     if (typeof marked !== 'undefined') {
-        contentInner.innerHTML = '<div class="markdown-body">' + marked.parse(content) + '</div>';
+        const rawHtml = marked.parse(content);
+        const safeHtml = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '').replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+        contentInner.innerHTML = '<div class="markdown-body">' + safeHtml + '</div>';
     } else {
         // Fallback: render as preformatted text
         contentInner.innerHTML = '<pre class="note-text">' + escapeHtml(content) + '</pre>';
@@ -651,7 +661,7 @@ async function removeShare(targetDevice) {
 
 .note-content-inner {
     padding: 16px;
-    max-height: 400px;
+    max-height: min(80vh, 800px);
     overflow-y: auto;
 }
 

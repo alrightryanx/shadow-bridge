@@ -1,8 +1,40 @@
 $ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
 
-# 0. Cleanup
-Write-Host "Killing any running ShadowBridge instances..."
-try { Stop-Process -Name "ShadowBridge" -Force -ErrorAction SilentlyContinue } catch {}
+function Stop-ShadowBridge {
+    Write-Host "Checking for running ShadowBridge instances..."
+    $processes = Get-Process -Name "ShadowBridge" -ErrorAction SilentlyContinue
+    if ($processes) {
+        Write-Host "Stopping $($processes.Count) instance(s) of ShadowBridge..."
+        Stop-Process -Name "ShadowBridge" -Force -ErrorAction SilentlyContinue
+        # Wait for processes to actually exit
+        $timeout = 10 # seconds
+        $elapsed = 0
+        while ((Get-Process -Name "ShadowBridge" -ErrorAction SilentlyContinue) -and ($elapsed -lt $timeout)) {
+            Start-Sleep -Seconds 1
+            $elapsed++
+        }
+        if (Get-Process -Name "ShadowBridge" -ErrorAction SilentlyContinue) {
+            Write-Warning "ShadowBridge failed to stop within $timeout seconds."
+        } else {
+            Write-Host "ShadowBridge stopped successfully."
+        }
+    }
+}
+
+# 0. Ensure singleton execution
+Stop-ShadowBridge
+
+# 0. Auto-Increment Version
+Write-Host "Auto-incrementing ShadowBridge version..."
+try {
+    py update_version.py
+} catch {
+    Write-Warning "Version auto-increment failed: $_"
+}
+
+# 1. Cleanup
+Stop-ShadowBridge
 
 Write-Host "Cleaning up previous builds and logs..."
 if (Test-Path "build") { Remove-Item -Path "build" -Recurse -Force }
@@ -25,9 +57,8 @@ if (-not $msiFile) {
 }
 Write-Host "Found MSI: $($msiFile.FullName)"
 
-# 3. Kill running instances
-Write-Host "Stopping ShadowBridge..."
-Stop-Process -Name "ShadowBridge" -ErrorAction SilentlyContinue
+# 3. Kill running instances again before install
+Stop-ShadowBridge
 Start-Sleep -Seconds 2
 
 # 4. Uninstall old version (Optional, but clean)
@@ -45,9 +76,9 @@ if ($installProcess.ExitCode -ne 0) {
     $buildExe = "build\exe.win-amd64-3.13\ShadowBridge.exe"
     if (Test-Path $buildExe) {
         Write-Host "Falling back to running from build directory: $buildExe"
+        Stop-ShadowBridge # One last check
         Start-Process $buildExe
         Start-Sleep -Seconds 10
-        Stop-Process -Name "ShadowBridge" -ErrorAction SilentlyContinue
     }
 } else {
     Write-Host "Installation complete."
@@ -65,14 +96,12 @@ if ($installProcess.ExitCode -ne 0) {
 
     if (Test-Path $installedPath) {
         Write-Host "Launching installed app..."
-        Start-Process $installedPath
+        Stop-ShadowBridge # Ensure no zombie process
+        Start-Process $installedPath -ArgumentList "--aidev"
         
         # 7. Wait and Collect Logs
         Write-Host "Waiting 10 seconds for app to initialize..."
         Start-Sleep -Seconds 10
-        
-        Write-Host "Stopping app..."
-        Stop-Process -Name "ShadowBridge" -ErrorAction SilentlyContinue
     } else {
         Write-Error "Installed executable not found at $installedPath"
     }

@@ -1458,7 +1458,12 @@ async function openNoteModal(noteId, title) {
     document.getElementById('modal-title').textContent = title;
 
     if (typeof marked !== 'undefined') {
-        document.getElementById('modal-content').innerHTML = marked.parse(currentNoteContent);
+        const rawHtml = marked.parse(currentNoteContent);
+        if (typeof DOMPurify !== 'undefined') {
+            document.getElementById('modal-content').innerHTML = DOMPurify.sanitize(rawHtml);
+        } else {
+            document.getElementById('modal-content').innerHTML = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '').replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+        }
     } else {
         document.getElementById('modal-content').innerHTML = '<pre>' + escapeHtml(currentNoteContent) + '</pre>';
     }

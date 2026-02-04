@@ -37,7 +37,7 @@ class ThreadWatchdog:
         thread: threading.Thread,
         restart_callback: Callable[[], threading.Thread],
         max_restarts: int = 5,
-        restart_window: int = 300
+        restart_window: int = 300,
     ):
         """Register a thread for monitoring.
 
@@ -56,9 +56,9 @@ class ThreadWatchdog:
                 "last_restart": 0,
                 "max_restarts": max_restarts,
                 "restart_window": restart_window,
-                "given_up": False
+                "given_up": False,
             }
-        log.info(f"Watchdog: Registered {name} for monitoring")
+        log.debug(f"Watchdog: Registered {name} for monitoring")
 
     def unregister(self, name: str):
         """Stop monitoring a thread.
@@ -69,7 +69,7 @@ class ThreadWatchdog:
         with self._lock:
             if name in self.monitored:
                 del self.monitored[name]
-                log.info(f"Watchdog: Unregistered {name}")
+                log.debug(f"Watchdog: Unregistered {name}")
 
     def start(self):
         """Start watchdog monitoring thread."""
@@ -78,7 +78,9 @@ class ThreadWatchdog:
             return
 
         self.running = True
-        self.thread = threading.Thread(target=self._monitor_loop, daemon=True, name="Watchdog")
+        self.thread = threading.Thread(
+            target=self._monitor_loop, daemon=True, name="Watchdog"
+        )
         self.thread.start()
         log.info(f"Watchdog started (check interval: {self.check_interval}s)")
 
@@ -87,7 +89,7 @@ class ThreadWatchdog:
         self.running = False
         if self.thread:
             self.thread.join(timeout=self.check_interval + 1)
-        log.info("Watchdog stopped")
+        log.debug("Watchdog stopped")
 
     def get_status(self) -> Dict[str, Dict]:
         """Get status of all monitored threads.
@@ -102,7 +104,7 @@ class ThreadWatchdog:
                     "alive": info["thread"].is_alive() if info["thread"] else False,
                     "restart_count": info["restart_count"],
                     "last_restart": info["last_restart"],
-                    "given_up": info["given_up"]
+                    "given_up": info["given_up"],
                 }
             return status
 
@@ -135,10 +137,12 @@ class ThreadWatchdog:
                 # Check if thread is alive
                 if thread and thread.is_alive():
                     # Thread is healthy
-                    # Reset restart count if outside the restart window
+                    # Reset restart count if outside restart window
                     if now - info["last_restart"] > info["restart_window"]:
                         if info["restart_count"] > 0:
-                            log.info(f"Watchdog: {name} stable, resetting restart counter")
+                            log.debug(
+                                f"Watchdog: {name} stable, resetting restart counter"
+                            )
                         info["restart_count"] = 0
                     continue
 
@@ -169,7 +173,9 @@ class ThreadWatchdog:
             return
 
         # Attempt restart
-        log.warning(f"Watchdog: ⚠️  {name} died, attempting restart #{info['restart_count'] + 1}")
+        log.warning(
+            f"Watchdog: {name} died, attempting restart #{info['restart_count'] + 1}"
+        )
 
         try:
             new_thread = info["restart_fn"]()
@@ -177,12 +183,12 @@ class ThreadWatchdog:
                 info["thread"] = new_thread
                 info["restart_count"] += 1
                 info["last_restart"] = now
-                log.info(f"Watchdog: ✓ {name} restarted successfully")
+                log.info(f"Watchdog: {name} restarted successfully")
             else:
-                log.error(f"Watchdog: ❌ {name} restart failed - thread not alive")
+                log.error(f"Watchdog: {name} restart failed - thread not alive")
                 info["restart_count"] += 1
                 info["last_restart"] = now
         except Exception as e:
-            log.error(f"Watchdog: ❌ {name} restart exception: {e}")
+            log.error(f"Watchdog: {name} restart exception: {e}")
             info["restart_count"] += 1
             info["last_restart"] = now

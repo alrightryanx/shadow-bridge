@@ -221,7 +221,7 @@ class PermissionPolicy:
         """Load policies from disk."""
         try:
             if POLICY_FILE.exists():
-                with open(POLICY_FILE, 'r') as f:
+                with open(POLICY_FILE, 'r', encoding="utf-8") as f:
                     data = json.load(f)
 
                 for rule_data in data.get('rules', []):
@@ -239,7 +239,7 @@ class PermissionPolicy:
         """Save policies to disk."""
         try:
             POLICY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(POLICY_FILE, 'w') as f:
+            with open(POLICY_FILE, 'w', encoding="utf-8") as f:
                 json.dump({
                     'rules': [r.to_dict() for r in self._rules.values()],
                     'trust_levels': {k: v.value for k, v in self._trust_levels.items()},

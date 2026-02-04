@@ -36,13 +36,13 @@ _setup_status: Dict[str, Any] = {
 IS_FROZEN = getattr(sys, 'frozen', False)
 
 AUDIO_INSTALL_COMMANDS = [
-    "pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121",
-    "pip install audiocraft",
+    "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121",
+    "pip install audiocraft diffusers transformers accelerate rembg",
 ]
 AUDIO_INSTALL_GUIDE_URL = (
     "https://github.com/ryancartwright/shadow-bridge/blob/main/docs/windows-installer.md#audio-dependencies"
 )
-AUDIO_INSTALL_SIZE_GB = 2.5
+AUDIO_INSTALL_SIZE_GB = 3.0
 
 try:
     from audiocraft.models import MusicGen, AudioGen
@@ -62,12 +62,36 @@ except Exception:
 
 DEFAULT_MODELS = {
     "music": [
-        {"id": "musicgen-small", "name": "MusicGen Small", "max_duration": 30},
-        {"id": "musicgen-medium", "name": "MusicGen Medium", "max_duration": 30},
-        {"id": "musicgen-large", "name": "MusicGen Large", "max_duration": 30},
+        {
+            "id": "musicgen-small",
+            "name": "MusicGen Small",
+            "max_duration": 30,
+            "description": "Fast generation, good for melodies and ideas.",
+            "estimated_multiplier": 4
+        },
+        {
+            "id": "musicgen-medium",
+            "name": "MusicGen Medium",
+            "max_duration": 30,
+            "description": "Balanced speed and quality for full tracks.",
+            "estimated_multiplier": 6
+        },
+        {
+            "id": "musicgen-large",
+            "name": "MusicGen Large",
+            "max_duration": 30,
+            "description": "Highest quality, slower generation.",
+            "estimated_multiplier": 10
+        },
     ],
     "sfx": [
-        {"id": "audiogen-medium", "name": "AudioGen Medium (SFX)", "max_duration": 10},
+        {
+            "id": "audiogen-medium",
+            "name": "AudioGen Medium (SFX)",
+            "max_duration": 10,
+            "description": "High fidelity sound effects and foley.",
+            "estimated_multiplier": 5
+        },
     ],
 }
 
@@ -117,6 +141,18 @@ class AudioGenerationService:
             return self._sfx_model
         raise ValueError(f"Unknown mode: {mode}")
 
+    def unload_all_models(self):
+        """Unload all loaded models to free GPU memory."""
+        self._music_model = None
+        self._music_model_id = None
+        self._sfx_model = None
+        self._sfx_model_id = None
+        
+        if TORCH_AVAILABLE and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        return {"success": True, "message": "All audio models unloaded and VRAM cleared."}
+
     def generate_audio(
         self,
         prompt: str,
@@ -128,6 +164,7 @@ class AudioGenerationService:
         temperature: float = 1.0,
         top_k: int = 250,
         top_p: float = 0.0,
+        progress_callback: Optional[callable] = None,
     ) -> AudioGenerationResult:
         if not prompt:
             return AudioGenerationResult(success=False, error="Prompt is required.")
@@ -138,8 +175,14 @@ class AudioGenerationService:
             )
 
         try:
+            if progress_callback:
+                progress_callback(5, "Initializing...")
+
             if TORCH_AVAILABLE and seed is not None:
                 torch.manual_seed(seed)
+
+            if progress_callback:
+                progress_callback(10, "Loading model...")
 
             model = self._load_model(model_id, mode)
             model.set_generation_params(
@@ -149,7 +192,14 @@ class AudioGenerationService:
                 temperature=temperature,
             )
 
-            wav = model.generate([prompt])[0]
+            if progress_callback:
+                progress_callback(30, "Generating audio (this may take a while)...")
+
+            wav = model.generate([prompt], progress=True)[0]
+            
+            if progress_callback:
+                progress_callback(90, "Processing output...")
+
             sample_rate = getattr(model, "sample_rate", 32000)
 
             output_base = OUTPUT_DIR / output_name
@@ -160,6 +210,9 @@ class AudioGenerationService:
                 strategy="loudness",
             )
             final_path = str(output_base) + ".wav"
+            
+            if progress_callback:
+                progress_callback(100, "Complete!")
 
             return AudioGenerationResult(
                 success=True,
@@ -204,18 +257,34 @@ def get_audio_service_status() -> Dict[str, Any]:
     
     # Add helpful message if not ready
     if not status["ready"]:
+        # Check if we can actually install (need system python if frozen)
+        has_python = True
+        if IS_FROZEN:
+            import shutil
+            has_python = any(shutil.which(cmd) for cmd in ["python", "python3", "py"])
+        
         status["install_commands"] = list(AUDIO_INSTALL_COMMANDS)
         status["install_manual_url"] = AUDIO_INSTALL_GUIDE_URL
+        
         if IS_FROZEN:
-            status["install_note"] = (
-                "Running from portable EXE. Install PyTorch + AudioCraft manually "
-                "(see commands below) or install via the MSI setup."
-            )
+            if has_python:
+                status["install_note"] = (
+                    "AI dependencies were not installed during setup. "
+                    "You can install them now using the system Python."
+                )
+                status["can_install"] = True
+            else:
+                status["install_note"] = (
+                    "AI dependencies missing. System Python not found. "
+                    "Please install Python 3.10+ manually to use these features."
+                )
+                status["can_install"] = False
         else:
             status["install_note"] = (
-                "Click 'Install Audio' to download PyTorch + AudioCraft "
+                "Click 'Install' to download AI dependencies "
                 f"(~{AUDIO_INSTALL_SIZE_GB}GB) or run the commands below."
             )
+            status["can_install"] = True
     
     return status
 
@@ -237,48 +306,60 @@ def _run_audio_setup() -> None:
     try:
         _set_setup_status("running", "checking", 5, "Checking disk space and dependencies...")
 
-        # Check disk space (need ~2.5GB + some buffer = 3GB)
+        # Check disk space (need ~3.0GB + some buffer = 4GB)
         import shutil
         total, used, free = shutil.disk_usage(Path.home())
         free_gb = free / (1024**3)
-        if free_gb < 3.0:
-            raise RuntimeError(f"Insufficient disk space. Need at least 3GB, but only {free_gb:.1f}GB available.")
+        if free_gb < 4.0:
+            raise RuntimeError(f"Insufficient disk space. Need at least 4GB, but only {free_gb:.1f}GB available.")
 
         if AUDIOCRAFT_AVAILABLE and TORCH_AVAILABLE:
-            _set_setup_status("ready", "ready", 100, "Audio generation ready")
+            _set_setup_status("ready", "ready", 100, "AI generation dependencies ready")
             return
 
-        # Cannot pip install when running from frozen EXE
+        # When frozen, we need to find a system python to run pip
+        python_exe = sys.executable
         if IS_FROZEN:
-            _set_setup_status(
-                "error",
-                "frozen",
-                100,
-                (
-                    "Cannot install dependencies in portable EXE mode. "
-                    "Install PyTorch + AudioCraft manually (see commands below) "
-                    "or use the MSI installer."
-                ),
-                error="Running from frozen executable"
-            )
-            return
+            import shutil
+            for cmd in ["python", "python3", "py"]:
+                path = shutil.which(cmd)
+                if path:
+                    python_exe = path
+                    # Check if pip is available
+                    try:
+                        subprocess.run([path, "-m", "pip", "--version"], capture_output=True, check=True)
+                        break
+                    except Exception:
+                        continue
+            else:
+                _set_setup_status(
+                    "error",
+                    "python_not_found",
+                    100,
+                    (
+                        "System Python not found or pip is missing. "
+                        "Please install Python 3.10+ to use AI generation features."
+                    ),
+                    error="Python not found"
+                )
+                return
 
-        _set_setup_status("running", "installing", 20, "Installing PyTorch + AudioCraft (~2.5GB download)...")
+        _set_setup_status("running", "installing", 20, "Installing AI dependencies (~3.0GB download)...")
 
         # Install PyTorch with CUDA support first
-        _set_setup_status("running", "installing_torch", 30, "Installing PyTorch with CUDA support (~2GB)...")
-        torch_cmd = [sys.executable, "-m", "pip", "install", "torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu121"]
+        _set_setup_status("running", "installing_torch", 30, "Installing PyTorch + Vision/Audio (~2GB)...")
+        torch_cmd = [python_exe, "-m", "pip", "install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu121"]
         result = subprocess.run(torch_cmd, capture_output=True, text=True, timeout=1800)  # 30 min timeout
         if result.returncode != 0:
             raise RuntimeError(f"PyTorch install failed: {result.stderr.strip()}")
 
-        _set_setup_status("running", "installing_audiocraft", 70, "Installing AudioCraft (~500MB)...")
-        ac_cmd = [sys.executable, "-m", "pip", "install", "audiocraft"]
-        result = subprocess.run(ac_cmd, capture_output=True, text=True, timeout=600)  # 10 min timeout
+        _set_setup_status("running", "installing_ai_libs", 70, "Installing AudioCraft, Diffusers, etc (~1GB)...")
+        ac_cmd = [python_exe, "-m", "pip", "install", "audiocraft", "diffusers", "transformers", "accelerate", "rembg"]
+        result = subprocess.run(ac_cmd, capture_output=True, text=True, timeout=900)  # 15 min timeout
         if result.returncode != 0:
-            raise RuntimeError(f"AudioCraft install failed: {result.stderr.strip()}")
+            raise RuntimeError(f"AI libraries install failed: {result.stderr.strip()}")
 
-        _set_setup_status("ready", "ready", 100, "Audio generation ready! Please restart ShadowBridge to use audio generation.")
+        _set_setup_status("ready", "ready", 100, "AI dependencies installed! Please restart ShadowBridge to use them.")
     except subprocess.TimeoutExpired:
         logger.error("Audio setup timed out")
         _set_setup_status("error", "timeout", 100, "Installation timed out. Try running manually: pip install torch torchaudio audiocraft", error="Timeout")

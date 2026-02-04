@@ -1,11 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+from PyInstaller.utils.hooks import collect_data_files
+
+datas = [('web', 'web'), ('logo.png', '.')]
+datas += collect_data_files('sv_ttk')
+
 a = Analysis(
     ['shadow_bridge_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('web', 'web'), ('logo.png', '.')],
+    datas=datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -25,8 +25,112 @@
 <div class="projects-grid" id="projects-container">
     <div class="loading">Loading projects...</div>
 </div>
+
+<!-- Edit Project Modal -->
+<div id="edit-project-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2>Edit Project</h2>
+            <button class="modal-close" onclick="closeEditProjectModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="edit-project-name">Project name</label>
+                <input type="text" id="edit-project-name" class="form-input" placeholder="Project name">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeEditProjectModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveProject()">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Create Project Modal -->
+<div id="create-project-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2>Create Project</h2>
+            <button class="modal-close" onclick="closeCreateProjectModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="create-project-name">Name *</label>
+                    <input type="text" id="create-project-name" class="form-input" placeholder="Project name">
+                </div>
+                <div class="form-group">
+                    <label for="create-project-path">Path</label>
+                    <input type="text" id="create-project-path" class="form-input" placeholder="Full path to project">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="create-project-description">Description</label>
+                <textarea id="create-project-description" class="form-input" rows="3" placeholder="Short description"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="create-project-group">Group</label>
+                    <input type="text" id="create-project-group" class="form-input" placeholder="Team, repo, or area">
+                </div>
+                <div class="form-group">
+                    <label for="create-project-color">Accent color</label>
+                    <input type="color" id="create-project-color" class="form-input form-color" value="#6750A4">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="create-project-github">GitHub repo URL</label>
+                <input type="url" id="create-project-github" class="form-input" placeholder="https://github.com/owner/repo">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateProjectModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createProject()">Create</button>
+        </div>
+    </div>
+</div>
+
+<!-- Share Project Modal -->
+<div id="share-project-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">share</span> Share Project</h2>
+            <button class="modal-close" onclick="closeShareModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p id="share-project-title-display" class="share-item-title"></p>
+            <div class="share-section">
+                <h3>Current shares</h3>
+                <div id="current-shares" class="share-list">
+                    <div class="empty-state">Not shared with anyone</div>
+                </div>
+            </div>
+            <div class="share-section">
+                <h3>Share with another device</h3>
+                <div class="share-add-form">
+                    <select id="share-device-select" class="form-input">
+                        <option value="">Select a device...</option>
+                    </select>
+                    <select id="share-permission-select" class="form-input">
+                        <option value="view">View only</option>
+                        <option value="edit">Can edit</option>
+                        <option value="full">Full access</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="addShare()">Share</button>
+                </div>
+            </div>
+            <div class="share-info">
+                <p>Shared projects stay synced automatically between devices. Remove access anytime.</p>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeShareModal()">Close</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
+{% block scripts %}
 <script>
 let allProjects = [];
 let currentView = 'list';
@@ -95,15 +199,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
 async function loadProjects() {
     const deviceId = getDeviceIdParam();
-    const result = await api.getProjects(deviceId);
-    
-    if (Array.isArray(result)) {
-        allProjects = result;
-        filterProjects();
-    } else {
-        console.error('Failed to load projects:', result);
-        allProjects = [];
-        showToast('Failed to load projects: ' + (result.error || 'Unknown error'), 'error');
+    try {
+        const result = await api.getProjects(deviceId);
+
+        if (Array.isArray(result)) {
+            allProjects = result;
+            filterProjects();
+        } else {
+            console.error('Failed to load projects:', result);
+            allProjects = [];
+            showToast('Failed to load projects: ' + (result.error || 'Unknown error'), 'error');
+            document.getElementById('projects-container').innerHTML = '<div class="empty-state">Error loading projects</div>';
+        }
+    } catch (e) {
+        console.error('Failed to load projects:', e);
+        showToast('Failed to load projects: ' + (e.message || 'Unknown error'), 'error');
         document.getElementById('projects-container').innerHTML = '<div class="empty-state">Error loading projects</div>';
     }
 }
@@ -117,10 +227,11 @@ function togglePinnedFilter() {
 function filterProjects() {
     const search = document.getElementById('search-input').value.toLowerCase();
 
-    let filtered = allProjects.filter(p =>
-        p.name.toLowerCase().includes(search) ||
-        p.path.toLowerCase().includes(search)
-    );
+    let filtered = allProjects.filter(p => {
+        const name = (p.name || '').toLowerCase();
+        const path = (p.path || '').toLowerCase();
+        return name.includes(search) || path.includes(search);
+    });
 
     // Filter to pinned only if enabled
     if (showPinnedOnly) {
@@ -251,6 +362,21 @@ async function createProject() {
     }
 }
 
+function getProjectDisplayValues(project) {
+    const name = project.name || 'Untitled Project';
+    const path = project.path || 'Unknown path';
+    const deviceName = project.device_name || 'Unknown device';
+    const timeAgo = project.time_ago || project.updated_at_formatted || 'Unknown';
+    const slug = name.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-_]/g, '').toLowerCase() || 'project';
+    return {
+        safeName: escapeHtml(name),
+        safePath: escapeHtml(path),
+        safeDevice: escapeHtml(deviceName),
+        timeAgo,
+        slug,
+    };
+}
+
 function renderProjects(projects) {
     const container = document.getElementById('projects-container');
     container.className = currentView === 'grid' ? 'projects-grid' : 'projects-list';
@@ -261,25 +387,27 @@ function renderProjects(projects) {
     }
 
     if (currentView === 'grid') {
-        container.innerHTML = projects.map(p => `
+        container.innerHTML = projects.map(p => {
+            const display = getProjectDisplayValues(p);
+            return `
             <div class="project-card">
                 <div class="project-card-header">
                     <button class="pin-btn ${p.is_pinned ? 'pinned' : ''}" onclick="togglePin('${p.id}', event)" title="Pin project"><span class="material-symbols-outlined">push_pin</span></button>
                     <div class="project-card-actions">
-                        <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
-                        <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
-                        <button class="btn-icon-small btn-danger" onclick="deleteProject('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Delete"><span class="material-symbols-outlined">delete</span></button>
+                        <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name || '').replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
+                        <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name || '').replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
+                        <button class="btn-icon-small btn-danger" onclick="deleteProject('${p.id}', '${escapeHtml(p.name || '').replace(/'/g, "\\'")}', event)" title="Delete"><span class="material-symbols-outlined">delete</span></button>
                     </div>
                 </div>
-                <div class="project-name">${escapeHtml(p.name)}</div>
-                <div class="project-path">${escapeHtml(p.path)}</div>
+                <div class="project-name">${display.safeName}</div>
+                <div class="project-path">${display.safePath}</div>
                 <div class="project-meta">
-                    <span>${p.device_name}</span>
-                    <span>${p.time_ago}</span>
+                    <span>${display.safeDevice}</span>
+                    <span>${display.timeAgo}</span>
                 </div>
-                <a href="/projects/${p.id}" class="btn btn-small btn-primary">Open</a>
+                <a href="/projects/${p.id || display.slug}" class="btn btn-small btn-primary">Open</a>
             </div>
-        `).join('');
+        `}).join('');
     } else {
         container.innerHTML = `
             <table class="data-table">
@@ -294,23 +422,26 @@ function renderProjects(projects) {
                     </tr>
                 </thead>
                 <tbody>
-                    ${projects.map(p => `
+                    ${projects.map(p => {
+                        const display = getProjectDisplayValues(p);
+                        return `
                         <tr>
                             <td><button class="pin-btn ${p.is_pinned ? 'pinned' : ''}" onclick="togglePin('${p.id}', event)" title="Pin project"><span class="material-symbols-outlined">push_pin</span></button></td>
-                            <td>${escapeHtml(p.name)}</td>
-                            <td class="path-cell">${escapeHtml(p.path)}</td>
-                            <td>${escapeHtml(p.device_name)}</td>
-                            <td>${p.time_ago}</td>
+                            <td>${display.safeName}</td>
+                            <td class="path-cell">${display.safePath}</td>
+                            <td>${display.safeDevice}</td>
+                            <td>${display.timeAgo}</td>
                             <td>
                                 <div class="action-buttons">
-                                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
-                                    <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
-                                    <button class="btn-icon-small btn-danger" onclick="deleteProject('${p.id}', '${escapeHtml(p.name).replace(/'/g, "\\'")}', event)" title="Delete"><span class="material-symbols-outlined">delete</span></button>
-                                    <a href="/projects/${p.id}" class="btn btn-small btn-primary">Open</a>
+                                    <button class="btn-icon-small" onclick="showEditProjectModal('${p.id}', '${escapeHtml(p.name || '').replace(/'/g, "\\'")}', event)" title="Edit"><span class="material-symbols-outlined">edit</span></button>
+                                    <button class="btn-icon-small" onclick="openShareModal('${p.id}', '${escapeHtml(p.name || '').replace(/'/g, "\\'")}', '${p.device_id || ''}', event)" title="Share"><span class="material-symbols-outlined">share</span></button>
+                                    <button class="btn-icon-small btn-danger" onclick="deleteProject('${p.id}', '${escapeHtml(p.name || '').replace(/'/g, "\\'")}', event)" title="Delete"><span class="material-symbols-outlined">delete</span></button>
+                                    <a href="/projects/${p.id || display.slug}" class="btn btn-small btn-primary">Open</a>
                                 </div>
                             </td>
                         </tr>
-                    `).join('')}
+                    `;
+                    }).join('')}
                 </tbody>
             </table>
         `;
@@ -478,7 +609,9 @@ async function removeShare(targetDevice) {
     }
 }
 </script>
+{% endblock %}
 
+{% block head %}
 <style>
 .filter-btn {
     display: flex;
@@ -694,6 +827,45 @@ async function removeShare(targetDevice) {
 
 .btn-autonomous .material-symbols-outlined {
     font-size: 18px;
+}
+
+/* Ensure grid/list layout stays stable */
+.projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--spacing-md);
+    align-items: stretch;
+}
+
+.projects-grid .project-card {
+    min-height: 220px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.projects-list .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-spacing: 0;
+}
+
+.projects-list th,
+.projects-list td {
+    padding: var(--spacing-sm) var(--spacing-md);
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.projects-list tbody tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.projects-list .path-cell {
+    max-width: 400px;
+    overflow-wrap: break-word;
+    word-break: break-all;
+    font-size: 12px;
 }
 </style>
 {% endblock %}

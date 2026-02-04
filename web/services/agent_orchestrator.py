@@ -22,6 +22,7 @@ from datetime import datetime
 from collections import defaultdict
 
 from .lock_manager import get_lock_manager
+from .subagent_loop import get_subagent_loop_controller
 
 logger = logging.getLogger(__name__)
 
@@ -746,6 +747,16 @@ def monitor_agent_output(agent_id: str, stdout, stderr):
                 parsed_marker = parse_task_marker(line)
                 if parsed_marker:
                     update_task_status(agent_id, parsed_marker)
+
+                # Parse subagent loop markers
+                try:
+                    loop_controller = get_subagent_loop_controller()
+                    loop_event = loop_controller.detect_loop_trigger(line)
+                    if loop_event:
+                        task_id = active_agents.get(agent_id, {}).get("current_task_id")
+                        loop_controller.handle_loop_event(agent_id, loop_event, task_id=task_id)
+                except Exception as e:
+                    logger.debug(f"Error handling loop marker: {e}")
 
                 # Broadcast output line
                 broadcast_agent_event("agent_output_line", {

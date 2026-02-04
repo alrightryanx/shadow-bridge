@@ -59,7 +59,7 @@ class AgentRegistry:
         """Load registry from disk."""
         try:
             if REGISTRY_FILE.exists():
-                with open(REGISTRY_FILE, 'r') as f:
+                with open(REGISTRY_FILE, 'r', encoding="utf-8") as f:
                     data = json.load(f)
 
                 for agent_data in data.get('agents', []):
@@ -75,7 +75,7 @@ class AgentRegistry:
         """Save registry to disk."""
         try:
             REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(REGISTRY_FILE, 'w') as f:
+            with open(REGISTRY_FILE, 'w', encoding="utf-8") as f:
                 json.dump({
                     'agents': [a.to_dict() for a in self._agents.values()],
                     'saved_at': datetime.now().isoformat()

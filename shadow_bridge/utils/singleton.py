@@ -57,6 +57,7 @@ class SingleInstance:
         self._lock_file = None
         self._listener_thread = None
         self._activation_callback: Optional[Callable[[], None]] = None
+        self._ping_callback: Optional[Callable[[], None]] = None
         self._stop_event = threading.Event()
         self._acquired = False
         
@@ -74,14 +75,35 @@ class SingleInstance:
         if self._acquired:
             return True
         
-        # Try methods in order of reliability
+        # Try to acquire socket first (needed for IPC/Activation)
+        socket_acquired = self._acquire_socket()
+
+        # On Windows, use Mutex as the authoritative source of truth for "Single Instance"
         if IS_WINDOWS:
-            if self._acquire_mutex():
+            mutex_acquired = self._acquire_mutex()
+            
+            if mutex_acquired:
+                # We are the one true instance
                 self._acquired = True
-                self._start_listener()
+                
+                # We should have the socket for IPC. If not, something else is blocking port
+                # but we still own the "app instance" lock.
+                if socket_acquired:
+                    self._start_listener()
+                else:
+                    logger.warning("Acquired Mutex but Socket was busy. Activation features may fail.")
+                    
                 return True
-        
-        if self._acquire_socket():
+            else:
+                # We failed to get mutex, so we are a second instance.
+                # If we grabbed the socket by accident (race?), release it so primary can have it
+                # (though primary likely already failed to get it if we got it)
+                if socket_acquired:
+                    self._release_socket()
+                return False
+
+        # Non-Windows logic
+        if socket_acquired:
             self._acquired = True
             self._start_listener()
             return True
@@ -143,6 +165,25 @@ class SingleInstance:
         logger.warning(f"Could not send activation message after {retries} attempts")
         return False
     
+    
+
+    def send_ping(self, retries: int = 3, backoff: float = 0.5) -> bool:
+        for attempt in range(retries):
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                sock.connect(("127.0.0.1", self.port))
+                sock.sendall(b"PING")
+                return True
+            except socket.error:
+                time.sleep(backoff * (2 ** attempt))
+            finally:
+                if sock: sock.close()
+        return False
+
+    def set_ping_callback(self, callback: Callable[[], None]):
+        self._ping_callback = callback
     def set_activation_callback(self, callback: Callable[[], None]):
         """
         Set callback to be called when another instance requests activation.
@@ -314,11 +355,16 @@ class SingleInstance:
                     
                     if data == "ACTIVATE" and self._activation_callback:
                         logger.info("Received activation request from another instance")
-                        # Schedule callback on main thread if possible
                         try:
                             self._activation_callback()
                         except Exception as e:
                             logger.error(f"Activation callback failed: {e}")
+                    elif data == "PING" and self._ping_callback:
+                        logger.info("Received ping request from another instance")
+                        try:
+                            self._ping_callback()
+                        except Exception as e:
+                            logger.error(f"Ping callback failed: {e}")
                             
                 except socket.timeout:
                     continue

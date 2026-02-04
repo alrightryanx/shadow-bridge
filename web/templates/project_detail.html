@@ -15,6 +15,17 @@
     </div>
 </div>
 
+<div class="cli-config">
+    <label for="custom-cli-command" class="cli-config-label">Custom CLI command</label>
+    <div class="cli-config-row">
+        <input type="text" id="custom-cli-command" class="form-input" placeholder="e.g. claude --model claude-3">
+        <button class="btn btn-secondary btn-small" onclick="saveCustomCLICommand()">
+            Save
+        </button>
+    </div>
+    <p class="cli-config-note">Saved command is reused when launching the CLI.</p>
+</div>
+
 <div class="project-info-card">
     <div class="project-path" id="project-path"></div>
     <div class="project-meta-row">
@@ -76,13 +87,40 @@
 {% block scripts %}
 <script>
 const projectId = '{{ project_id }}';
+const CUSTOM_CLI_KEY = 'shadow_custom_cli_command';
 let allTodos = [];
 let currentFilter = 'all';
 let editingTodoId = null;
 
+function loadCustomCLICommand() {
+    const stored = localStorage.getItem(CUSTOM_CLI_KEY) || 'claude';
+    const input = document.getElementById('custom-cli-command');
+    if (input) {
+        input.value = stored;
+    }
+}
+
+function getCustomCLICommand() {
+    const input = document.getElementById('custom-cli-command');
+    return (input && input.value.trim()) || 'claude';
+}
+
+function saveCustomCLICommand() {
+    const input = document.getElementById('custom-cli-command');
+    if (!input) return;
+    const command = input.value.trim();
+    if (!command) {
+        showToast('Custom CLI command cannot be empty', 'error');
+        return;
+    }
+    localStorage.setItem(CUSTOM_CLI_KEY, command);
+    showToast('Custom CLI command saved', 'success');
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     loadProject();
     loadTodos();
+    loadCustomCLICommand();
 });
 
 async function loadProject() {
@@ -234,7 +272,7 @@ async function deleteTodo(todoId) {
 }
 
 async function launchCLI() {
-    const result = await api.launchCLI(projectId);
+    const result = await api.launchCLI(projectId, getCustomCLICommand());
     if (result.success) {
         showToast(`Launched Claude in ${result.path}`, 'success');
     } else {
@@ -244,6 +282,30 @@ async function launchCLI() {
 </script>
 
 <style>
+.cli-config {
+    padding: 12px;
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    margin-bottom: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.cli-config-row {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.cli-config-note {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin: 0;
+}
+
 .project-detail-header {
     display: flex;
     justify-content: space-between;

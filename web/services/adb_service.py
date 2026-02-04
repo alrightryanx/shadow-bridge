@@ -55,37 +55,39 @@ class AdbService:
         return devices
 
     def push_file(self, local_path, remote_path, device_id=None):
-        """Push a file to the device."""
+        """Push a file to the device. Returns (output, success)."""
         cmd = []
         if device_id:
             cmd += ["-s", device_id]
         cmd += ["push", local_path, remote_path]
-        
-        output, success = self._run_command(cmd)
-        return output if success else f"Error: {output}"
 
-    def install_apk(self, apk_path, device_id=None, reinstall=True):
-        """Install an APK on the device."""
+        output, success = self._run_command(cmd)
+        return output, success
+
+    def install_apk(self, apk_path, device_id=None, reinstall=True, downgrade=False):
+        """Install an APK on the device. Returns (output, success)."""
         cmd = []
         if device_id:
             cmd += ["-s", device_id]
         cmd += ["install"]
         if reinstall:
             cmd.append("-r")
+        if downgrade:
+            cmd.append("-d")
         cmd.append(apk_path)
-        
+
         output, success = self._run_command(cmd)
-        return output if success else f"Error: {output}"
+        return output, success
 
     def shell(self, command, device_id=None):
-        """Run a shell command on the device."""
+        """Run a shell command on the device. Returns (output, success)."""
         cmd = []
         if device_id:
             cmd += ["-s", device_id]
         cmd += ["shell", command]
-        
+
         output, success = self._run_command(cmd)
-        return output if success else f"Error: {output}"
+        return output, success
 
 def get_adb_service():
     return AdbService()

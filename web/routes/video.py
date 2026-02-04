@@ -17,6 +17,7 @@ import ctypes
 # Try to import advanced services
 try:
     from web.services.video_progress import get_progress_tracker, ProgressStage
+
     PROGRESS_AVAILABLE = True
 except ImportError:
     PROGRESS_AVAILABLE = False
@@ -24,7 +25,11 @@ except ImportError:
     logger.warning("Video progress monitoring not available")
 
 try:
-    from web.services.video_error_handling import get_robust_generator, RobustVideoGenerator
+    from web.services.video_error_handling import (
+        get_robust_generator,
+        RobustVideoGenerator,
+    )
+
     ROBUST_GENERATOR_AVAILABLE = True
 except ImportError:
     ROBUST_GENERATOR_AVAILABLE = False
@@ -34,6 +39,7 @@ except ImportError:
 # Try to import metrics service
 try:
     from web.services.metrics_service import get_metrics_service
+
     METRICS_AVAILABLE = True
 except ImportError:
     METRICS_AVAILABLE = False
@@ -43,6 +49,7 @@ except ImportError:
 # Try to import downloader service
 try:
     from web.services.downloader_service import get_downloader_service
+
     DOWNLOADER_AVAILABLE = True
 except ImportError:
     DOWNLOADER_AVAILABLE = False
@@ -52,6 +59,7 @@ except ImportError:
 # Try to import ComfyUI executor
 try:
     from web.services.comfyui_executor import get_comfyui_executor, ComfyUIExecutor
+
     COMFYUI_AVAILABLE = True
 except ImportError:
     COMFYUI_AVAILABLE = False
@@ -62,7 +70,7 @@ logger = logging.getLogger(__name__)
 
 video_bp = Blueprint("video", __name__)
 
-# ============ Configuration ============ 
+# ============ Configuration ============
 
 # Base models directory
 MODELS_DIR = os.path.join(os.path.expanduser("~"), ".shadowai", "video_models")
@@ -74,8 +82,10 @@ generation_lock = threading.Semaphore(1)
 active_processes = {}  # generation_id -> subprocess.Popen
 active_processes_lock = threading.Lock()
 
+
 def start_artifact_cleanup_thread():
     """Start a background thread to clean up old video files."""
+
     def cleanup_loop():
         while True:
             try:
@@ -84,7 +94,7 @@ def start_artifact_cleanup_thread():
                     now = time.time()
                     # 24 hours in seconds
                     retention_period = 24 * 3600
-                    
+
                     for f in os.listdir(output_dir):
                         file_path = os.path.join(output_dir, f)
                         if os.path.isfile(file_path):
@@ -96,13 +106,15 @@ def start_artifact_cleanup_thread():
                                     logger.warning(f"Failed to delete {f}: {e}")
             except Exception as e:
                 logger.error(f"Error in artifact cleanup loop: {e}")
-            
-            # Run every hour
-            time.sleep(3600)
+
+            # Run every hour - use smaller chunks for better responsiveness
+            for _ in range(60):  # 60 x 60 seconds = 1 hour
+                time.sleep(60)  # Sleep 1 minute at a time to stay responsive
 
     thread = threading.Thread(target=cleanup_loop, daemon=True)
     thread.start()
     logger.info("Artifact cleanup thread started")
+
 
 # Initialize cleanup
 start_artifact_cleanup_thread()
@@ -186,43 +198,47 @@ GENERATIONS_FILE = os.path.join(
 )
 
 # Cache mapping for prompts
-CACHE_FILE = os.path.join(
-    os.path.expanduser("~"), ".shadowai", "video_cache.json"
-)
+CACHE_FILE = os.path.join(os.path.expanduser("~"), ".shadowai", "video_cache.json")
 
 # Process registry for recovery
 PROCESS_REGISTRY_FILE = os.path.join(
-    os.environ.get("USERPROFILE", os.path.expanduser("~")), ".shadowai", "active_video_processes.json"
+    os.environ.get("USERPROFILE", os.path.expanduser("~")),
+    ".shadowai",
+    "active_video_processes.json",
 )
+
 
 def _save_process_registry(registry):
     """Save active process IDs to disk for recovery."""
     try:
         # Popen objects aren't JSON serializable, so we only save PIDs
         serializable = {gid: p.pid for gid, p in registry.items() if p.poll() is None}
-        with open(PROCESS_REGISTRY_FILE, "w") as f:
+        with open(PROCESS_REGISTRY_FILE, "w", encoding="utf-8") as f:
             json.dump(serializable, f)
     except Exception as e:
         logger.warning(f"Failed to save process registry: {e}")
+
 
 def _load_process_registry():
     """Load process registry from disk."""
     try:
         if os.path.exists(PROCESS_REGISTRY_FILE):
-            with open(PROCESS_REGISTRY_FILE, "r") as f:
+            with open(PROCESS_REGISTRY_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
     except Exception as e:
         logger.warning(f"Failed to load process registry: {e}")
     return {}
 
+
 class WindowsKeepAwake:
     """Context manager to prevent Windows from sleeping during long operations."""
+
     ES_CONTINUOUS = 0x80000000
     ES_SYSTEM_REQUIRED = 0x00000001
     ES_DISPLAY_REQUIRED = 0x00000002
 
     def __enter__(self):
-        if os.name == 'nt':
+        if os.name == "nt":
             try:
                 ctypes.windll.kernel32.SetThreadExecutionState(
                     self.ES_CONTINUOUS | self.ES_SYSTEM_REQUIRED
@@ -233,12 +249,13 @@ class WindowsKeepAwake:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if os.name == 'nt':
+        if os.name == "nt":
             try:
                 ctypes.windll.kernel32.SetThreadExecutionState(self.ES_CONTINUOUS)
                 logger.info("Windows Keep-Awake disabled")
             except Exception as e:
                 logger.warning(f"Failed to reset thread execution state: {e}")
+
 
 def generate_request_hash(options):
     """Generate a stable MD5 hash for a video generation request."""
@@ -250,10 +267,11 @@ def generate_request_hash(options):
         "aspect_ratio": options.get("aspect_ratio"),
         "negative_prompt": options.get("negative_prompt"),
         "seed": options.get("seed"),
-        "precision": options.get("precision")
+        "precision": options.get("precision"),
     }
     dump = json.dumps(key_params, sort_keys=True)
-    return hashlib.md5(dump.encode('utf-8')).hexdigest()
+    return hashlib.md5(dump.encode("utf-8")).hexdigest()
+
 
 def _load_cache():
     """Load prompt cache from file."""
@@ -265,6 +283,7 @@ def _load_cache():
         logger.warning(f"Failed to load cache: {e}")
     return {}
 
+
 def _save_cache(cache):
     """Save prompt cache to file."""
     try:
@@ -273,6 +292,7 @@ def _save_cache(cache):
             json.dump(cache, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save cache: {e}")
+
 
 def _load_generations():
     """Load video generations from file."""
@@ -313,7 +333,7 @@ def _attach_stream_url(generation):
     return generation
 
 
-# ============ Helper Functions ============ 
+# ============ Helper Functions ============
 
 
 def build_model_command(
@@ -415,13 +435,16 @@ def get_resolution_for_aspect_ratio(aspect_ratio, model):
         else:  # 1:1
             return 1024, 1024
 
+
 def execute_video_generation_enhanced(cmd, monitor, model_type, generation_id):
     """Execute video generation with enhanced progress monitoring."""
-    
+
     process = None
     try:
-        monitor.update_progress(ProgressStage.PROCESSING_FRAMES, 'Starting generation process...', 25)
-        
+        monitor.update_progress(
+            ProgressStage.PROCESSING_FRAMES, "Starting generation process...", 25
+        )
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -439,7 +462,7 @@ def execute_video_generation_enhanced(cmd, monitor, model_type, generation_id):
             logger.info(f"Registered process for generation {generation_id}")
 
         output_lines = []
-        
+
         # Monitor process output with enhanced parsing
         if process.stdout:
             for line in iter(process.stdout.readline, ""):
@@ -449,21 +472,21 @@ def execute_video_generation_enhanced(cmd, monitor, model_type, generation_id):
                 line = line.strip()
                 if line:
                     output_lines.append(line)
-                    
+
                     # Use enhanced progress parsing
                     progress_info = monitor.parse_model_output(line, model_type)
                     if progress_info:
                         info_type = progress_info.get("type")
-                        
+
                         if info_type == "progress":
                             progress_value = progress_info.get("value", 0)
                             stage = ProgressStage.PROCESSING_FRAMES
                             monitor.update_progress(
-                                stage, 
-                                progress_info.get("message", "Processing..."), 
-                                progress_value
+                                stage,
+                                progress_info.get("message", "Processing..."),
+                                progress_value,
                             )
-                            
+
                         elif info_type == "stage_update":
                             stage_name = progress_info.get("stage")
                             stage_map = {
@@ -471,33 +494,37 @@ def execute_video_generation_enhanced(cmd, monitor, model_type, generation_id):
                                 "processing_frames": ProgressStage.PROCESSING_FRAMES,
                                 "encoding": ProgressStage.ENCODING,
                                 "finalizing": ProgressStage.FINALIZING,
-                                "completed": ProgressStage.COMPLETED
+                                "completed": ProgressStage.COMPLETED,
                             }
-                            stage = stage_map.get(stage_name, ProgressStage.PROCESSING_FRAMES)
+                            stage = stage_map.get(
+                                stage_name, ProgressStage.PROCESSING_FRAMES
+                            )
                             progress_value = progress_info.get("value", 0)
                             monitor.update_progress(
                                 stage,
                                 progress_info.get("message", "Processing..."),
-                                progress_value
+                                progress_value,
                             )
-                            
+
                         elif info_type == "performance":
                             # Performance update (FPS, etc.)
                             message = progress_info.get("message", "Processing...")
                             monitor.update_progress(
                                 ProgressStage.PROCESSING_FRAMES,
                                 message,
-                                monitor.last_progress
+                                monitor.last_progress,
                             )
 
         # Wait for completion
         return_code = process.wait()
 
         if return_code == 0:
-            monitor.update_progress(ProgressStage.FINALIZING, 'Finalizing video...', 95)
+            monitor.update_progress(ProgressStage.FINALIZING, "Finalizing video...", 95)
             return {"success": True, "output": "\n".join(output_lines)}
         else:
-            error_output = "\n".join(output_lines[-10:])  # Last 10 lines for error context
+            error_output = "\n".join(
+                output_lines[-10:]
+            )  # Last 10 lines for error context
             monitor.error(f"Process failed with code {return_code}: {error_output}")
             return {
                 "success": False,
@@ -708,17 +735,17 @@ def install_model(model_key, progress_callback):
 
 def _run_generation_internal(context, progress_callback):
     """Internal generation function used by robust generator."""
-    prompt = context.get('prompt', '')
-    model = context.get('model', 'hunyuan-15')
-    duration = context.get('duration', 10)
-    aspect_ratio = context.get('aspect_ratio', '16:9')
-    negative_prompt = context.get('negative_prompt', '')
-    seed = context.get('seed')
-    precision = context.get('precision', 'bf16')
-    generation_id = context.get('generation_id', f"gen_{int(time.time())}")
-    input_type = context.get('input_type', 'text')
-    input_path = context.get('input_path')
-    motion_strength = context.get('motion_strength', 0.7)
+    prompt = context.get("prompt", "")
+    model = context.get("model", "hunyuan-15")
+    duration = context.get("duration", 10)
+    aspect_ratio = context.get("aspect_ratio", "16:9")
+    negative_prompt = context.get("negative_prompt", "")
+    seed = context.get("seed")
+    precision = context.get("precision", "bf16")
+    generation_id = context.get("generation_id", f"gen_{int(time.time())}")
+    input_type = context.get("input_type", "text")
+    input_path = context.get("input_path")
+    motion_strength = context.get("motion_strength", 0.7)
 
     # Use tracker if available
     tracker = get_progress_tracker()
@@ -727,19 +754,29 @@ def _run_generation_internal(context, progress_callback):
         monitor = tracker.create_monitor(generation_id, progress_callback)
 
     try:
-        monitor.update_progress(ProgressStage.INITIALIZING, 'Starting video generation...', 0)
+        monitor.update_progress(
+            ProgressStage.INITIALIZING, "Starting video generation...", 0
+        )
 
         # Use ComfyUI for SVI Pro or I2V/V2V workflows
-        if model == 'svi-pro-wan22' or input_type in ('image', 'video'):
+        if model == "svi-pro-wan22" or input_type in ("image", "video"):
             if COMFYUI_AVAILABLE:
-                monitor.update_progress(ProgressStage.LOADING_MODEL, 'Using ComfyUI for generation...', 10)
+                monitor.update_progress(
+                    ProgressStage.LOADING_MODEL, "Using ComfyUI for generation...", 10
+                )
 
                 executor = get_comfyui_executor()
 
                 # Progress adapter
                 def comfyui_progress(percent, message):
                     if percent >= 0:
-                        stage = ProgressStage.LOADING_MODEL if percent < 20 else ProgressStage.PROCESSING_FRAMES if percent < 90 else ProgressStage.ENCODING
+                        stage = (
+                            ProgressStage.LOADING_MODEL
+                            if percent < 20
+                            else ProgressStage.PROCESSING_FRAMES
+                            if percent < 90
+                            else ProgressStage.ENCODING
+                        )
                         monitor.update_progress(stage, message, percent)
 
                 result = executor.generate_video(
@@ -750,30 +787,30 @@ def _run_generation_internal(context, progress_callback):
                     input_path=input_path,
                     progress_callback=comfyui_progress,
                     motion_strength=motion_strength,
-                    seed=seed if seed else -1
+                    seed=seed if seed else -1,
                 )
 
-                if result.get('success'):
-                    video_path = result.get('video_path')
+                if result.get("success"):
+                    video_path = result.get("video_path")
                     if video_path and os.path.exists(video_path):
                         file_size = os.path.getsize(video_path)
                         actual_duration = get_video_duration(video_path)
 
-                        monitor.complete('Video generation complete!')
+                        monitor.complete("Video generation complete!")
 
                         return {
-                            'success': True,
-                            'videoUrl': f"file://{video_path}",
-                            'videoPath': video_path,
-                            'model': MODELS.get(model, {}).get('name', 'ComfyUI'),
-                            'duration': actual_duration,
-                            'fileSize': file_size,
-                            'seed': seed,
-                            'error': None,
-                            'generation_id': generation_id
+                            "success": True,
+                            "videoUrl": f"file://{video_path}",
+                            "videoPath": video_path,
+                            "model": MODELS.get(model, {}).get("name", "ComfyUI"),
+                            "duration": actual_duration,
+                            "fileSize": file_size,
+                            "seed": seed,
+                            "error": None,
+                            "generation_id": generation_id,
                         }
                 else:
-                    raise Exception(result.get('error', 'ComfyUI generation failed'))
+                    raise Exception(result.get("error", "ComfyUI generation failed"))
             else:
                 raise Exception("ComfyUI not available. Please install dependencies.")
 
@@ -781,7 +818,11 @@ def _run_generation_internal(context, progress_callback):
         installed = is_model_installed(model)
 
         if not installed:
-            monitor.update_progress(ProgressStage.LOADING_MODEL, 'Model not installed. Installing now...', 10)
+            monitor.update_progress(
+                ProgressStage.LOADING_MODEL,
+                "Model not installed. Installing now...",
+                10,
+            )
             try:
                 install_model(model, progress_callback)
             except Exception as install_error:
@@ -790,8 +831,8 @@ def _run_generation_internal(context, progress_callback):
 
         # Get model configuration
         model_config = MODELS[model]
-        model_path = model_config['path']
-        script_path = os.path.join(model_path, model_config['script'])
+        model_path = model_config["path"]
+        script_path = os.path.join(model_path, model_config["script"])
 
         # Check if script exists
         if not os.path.exists(script_path):
@@ -802,39 +843,51 @@ def _run_generation_internal(context, progress_callback):
         timestamp = int(time.time())
         output_filename = f"{model}_{timestamp}.mp4"
         output_path = os.path.join(MODELS_DIR, "outputs", output_filename)
-        
+
         # Create output directory
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         # Build model-specific command
-        cmd = build_model_command(model, script_path, prompt, duration, aspect_ratio, 
-                               negative_prompt, seed, output_path, progress_callback, precision)
+        cmd = build_model_command(
+            model,
+            script_path,
+            prompt,
+            duration,
+            aspect_ratio,
+            negative_prompt,
+            seed,
+            output_path,
+            progress_callback,
+            precision,
+        )
 
-        monitor.update_progress(ProgressStage.LOADING_MODEL, 'Initializing model...', 20)
+        monitor.update_progress(
+            ProgressStage.LOADING_MODEL, "Initializing model...", 20
+        )
 
         # Execute generation with enhanced progress monitoring
         result = execute_video_generation_enhanced(cmd, monitor, model, generation_id)
 
-        if result['success']:
+        if result["success"]:
             # Verify output file
             if os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
                 if file_size > 0:
                     # Get video duration from file
                     actual_duration = get_video_duration(output_path)
-                    
-                    monitor.complete('Video generation complete!')
-                    
+
+                    monitor.complete("Video generation complete!")
+
                     return {
-                        'success': True,
-                        'videoUrl': f"file://{output_path}",
-                        'videoPath': output_path,
-                        'model': model_config['name'],
-                        'duration': actual_duration,
-                        'fileSize': file_size,
-                        'seed': seed,
-                        'error': None,
-                        'generation_id': generation_id
+                        "success": True,
+                        "videoUrl": f"file://{output_path}",
+                        "videoPath": output_path,
+                        "model": model_config["name"],
+                        "duration": actual_duration,
+                        "fileSize": file_size,
+                        "seed": seed,
+                        "error": None,
+                        "generation_id": generation_id,
                     }
                 else:
                     monitor.error("Generated video file is empty")
@@ -843,49 +896,71 @@ def _run_generation_internal(context, progress_callback):
                 monitor.error("Video generation completed but output file not found")
                 raise Exception("Video generation completed but output file not found")
         else:
-            monitor.error(result.get('error', 'Video generation failed'))
-            raise Exception(result.get('error', 'Video generation failed'))
-            
+            monitor.error(result.get("error", "Video generation failed"))
+            raise Exception(result.get("error", "Video generation failed"))
+
     finally:
         # Don't clean up monitor here, let caller handle it or let it persist for status checks
         pass
 
 
+def unload_all_models():
+    """Unload all video models and stop backend servers to free VRAM."""
+    success = True
+    messages = []
+
+    # Stop ComfyUI
+    if COMFYUI_AVAILABLE:
+        try:
+            executor = get_comfyui_executor()
+            if executor.stop_server():
+                messages.append("ComfyUI server stopped")
+            else:
+                success = False
+                messages.append("Failed to stop ComfyUI server")
+        except Exception as e:
+            success = False
+            messages.append(f"ComfyUI cleanup error: {e}")
+
+    # No specific cleanup needed for script-based models (run in subprocess)
+    # But clean up any tracked processes if we want to be aggressive?
+    # For now, just ComfyUI is the big memory hog.
+
+    return {
+        "success": success,
+        "message": "; ".join(messages) or "No active models to unload",
+    }
+
+
 def generate_video_local(options, progress_callback):
     """Generate video locally with enhanced progress monitoring and error recovery."""
-    
+
     generation_id = f"gen_{int(time.time())}"
-    options['generation_id'] = generation_id
-    
+    options["generation_id"] = generation_id
+
     # Use robust generator if available
     if ROBUST_GENERATOR_AVAILABLE:
         robust_gen = get_robust_generator()
         result_wrapper = robust_gen.generate_with_retry(
-            _run_generation_internal,
-            options,
-            progress_callback
+            _run_generation_internal, options, progress_callback
         )
-        
-        if result_wrapper['success']:
-            return result_wrapper['result']
+
+        if result_wrapper["success"]:
+            return result_wrapper["result"]
         else:
             return {
-                'success': False,
-                'error': result_wrapper.get('error', 'Unknown error'),
-                'videoUrl': None,
-                'attempts': result_wrapper.get('attempts', 1),
-                'recovery_suggestions': result_wrapper.get('recovery_suggestions', {})
+                "success": False,
+                "error": result_wrapper.get("error", "Unknown error"),
+                "videoUrl": None,
+                "attempts": result_wrapper.get("attempts", 1),
+                "recovery_suggestions": result_wrapper.get("recovery_suggestions", {}),
             }
     else:
         # Fallback to direct execution without robust features
         try:
             return _run_generation_internal(options, progress_callback)
         except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'videoUrl': None
-            }
+            return {"success": False, "error": str(e), "videoUrl": None}
 
 
 def get_time_ago(timestamp):
@@ -929,7 +1004,7 @@ def is_model_installed_sync(model_key):
         return False
 
 
-# ============ Routes ============ 
+# ============ Routes ============
 
 
 @video_bp.route("/models")
@@ -1085,37 +1160,47 @@ def api_generate():
             start_time = time.time()
             success = False
             error_msg = None
-            
+
             # 1. Check Cache first (Optimization)
             req_hash = generate_request_hash(data)
             cache = _load_cache()
-            
+
             if req_hash in cache:
                 cached_result = cache[req_hash]
                 cached_path = cached_result.get("video_path")
                 if cached_path and os.path.exists(cached_path):
                     logger.info(f"Returning cached video for hash {req_hash}")
-                    progress_callback({"status": "Complete", "message": "Using cached result", "progress": 100})
-                    
+                    progress_callback(
+                        {
+                            "status": "Complete",
+                            "message": "Using cached result",
+                            "progress": 100,
+                        }
+                    )
+
                     # Update generations record
                     gens = _load_generations()
                     for gen in gens["generations"]:
                         if gen.get("id") == generation_id:
-                            gen.update({
-                                "status": "completed",
-                                "video_url": cached_result.get("video_url"),
-                                "video_path": cached_path,
-                                "duration": cached_result.get("duration"),
-                                "completed_at": datetime.now().isoformat(),
-                                "cached": True
-                            })
+                            gen.update(
+                                {
+                                    "status": "completed",
+                                    "video_url": cached_result.get("video_url"),
+                                    "video_path": cached_path,
+                                    "duration": cached_result.get("duration"),
+                                    "completed_at": datetime.now().isoformat(),
+                                    "cached": True,
+                                }
+                            )
                     _save_generations(gens)
                     return
 
             # 2. Optimization: Acquire lock to prevent concurrent generations
-            progress_callback({"status": "Queued", "message": "Waiting for GPU...", "progress": 0})
-            
-            with WindowsKeepAwake(): # Prevent sleep during generation
+            progress_callback(
+                {"status": "Queued", "message": "Waiting for GPU...", "progress": 0}
+            )
+
+            with WindowsKeepAwake():  # Prevent sleep during generation
                 with generation_lock:
                     try:
                         result = generate_video_local(
@@ -1141,7 +1226,7 @@ def api_generate():
                                 "video_url": result.get("videoUrl"),
                                 "video_path": result.get("videoPath"),
                                 "duration": result.get("duration"),
-                                "timestamp": time.time()
+                                "timestamp": time.time(),
                             }
                             _save_cache(cache)
 
@@ -1150,18 +1235,14 @@ def api_generate():
                         if generations and "generations" in generations:
                             for gen in generations["generations"]:
                                 if gen.get("id") == generation_id:
-                                    gen["status"] = (
-                                        "completed" if success else "failed"
-                                    )
+                                    gen["status"] = "completed" if success else "failed"
                                     gen["video_url"] = result.get("videoUrl")
                                     gen["video_path"] = result.get("videoPath")
                                     gen["duration"] = result.get("duration")
                                     gen["cost"] = 0
                                     gen["error"] = error_msg
                                     gen["completed_at"] = (
-                                        datetime.now().isoformat()
-                                        if success
-                                        else None
+                                        datetime.now().isoformat() if success else None
                                     )
 
                             _save_generations(generations)
@@ -1179,13 +1260,15 @@ def api_generate():
 
         # Run in thread to not block
         threading.Thread(target=run_generation).start()
-        
-        return jsonify({
-            "success": True, 
-            "generation_id": generation_id,
-            "status": "pending",
-            "message": "Video generation started"
-        })
+
+        return jsonify(
+            {
+                "success": True,
+                "generation_id": generation_id,
+                "status": "pending",
+                "message": "Video generation started",
+            }
+        )
 
     except Exception as e:
         logger.error(f"Generate video error: {e}")
@@ -1224,6 +1307,7 @@ def api_image_to_video():
         input_path = None
         if image_data.startswith("data:image"):
             import base64
+
             # Extract base64 data
             header, encoded = image_data.split(",", 1)
             image_bytes = base64.b64decode(encoded)
@@ -1238,7 +1322,9 @@ def api_image_to_video():
         elif os.path.exists(image_data):
             input_path = image_data
         else:
-            return jsonify({"error": "Invalid image: must be base64 data URL or file path"}), 400
+            return jsonify(
+                {"error": "Invalid image: must be base64 data URL or file path"}
+            ), 400
 
         generation_id = f"i2v_{int(time.time())}"
 
@@ -1247,18 +1333,20 @@ def api_image_to_video():
         if not generations or "generations" not in generations:
             generations = {"generations": []}
 
-        generations["generations"].append({
-            "id": generation_id,
-            "prompt": prompt,
-            "mode": "free",
-            "model": model,
-            "input_type": "image",
-            "input_path": input_path,
-            "status": "pending",
-            "progress": 0,
-            "created_at": datetime.now().isoformat(),
-            "video_url": None,
-        })
+        generations["generations"].append(
+            {
+                "id": generation_id,
+                "prompt": prompt,
+                "mode": "free",
+                "model": model,
+                "input_type": "image",
+                "input_path": input_path,
+                "status": "pending",
+                "progress": 0,
+                "created_at": datetime.now().isoformat(),
+                "video_url": None,
+            }
+        )
         _save_generations(generations)
 
         def progress_callback(progress_data):
@@ -1290,11 +1378,19 @@ def api_image_to_video():
                         if generations and "generations" in generations:
                             for gen in generations["generations"]:
                                 if gen.get("id") == generation_id:
-                                    gen["status"] = "completed" if result.get("success") else "failed"
+                                    gen["status"] = (
+                                        "completed"
+                                        if result.get("success")
+                                        else "failed"
+                                    )
                                     gen["video_url"] = result.get("videoUrl")
                                     gen["video_path"] = result.get("videoPath")
                                     gen["error"] = result.get("error")
-                                    gen["completed_at"] = datetime.now().isoformat() if result.get("success") else None
+                                    gen["completed_at"] = (
+                                        datetime.now().isoformat()
+                                        if result.get("success")
+                                        else None
+                                    )
                             _save_generations(generations)
 
             except Exception as e:
@@ -1302,12 +1398,14 @@ def api_image_to_video():
 
         threading.Thread(target=run_i2v_generation).start()
 
-        return jsonify({
-            "success": True,
-            "generation_id": generation_id,
-            "status": "pending",
-            "message": "Image-to-video generation started"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "generation_id": generation_id,
+                "status": "pending",
+                "message": "Image-to-video generation started",
+            }
+        )
 
     except Exception as e:
         logger.error(f"I2V error: {e}")
@@ -1352,18 +1450,20 @@ def api_video_to_video():
         if not generations or "generations" not in generations:
             generations = {"generations": []}
 
-        generations["generations"].append({
-            "id": generation_id,
-            "prompt": prompt,
-            "mode": "free",
-            "model": model,
-            "input_type": "video",
-            "input_path": video_path,
-            "status": "pending",
-            "progress": 0,
-            "created_at": datetime.now().isoformat(),
-            "video_url": None,
-        })
+        generations["generations"].append(
+            {
+                "id": generation_id,
+                "prompt": prompt,
+                "mode": "free",
+                "model": model,
+                "input_type": "video",
+                "input_path": video_path,
+                "status": "pending",
+                "progress": 0,
+                "created_at": datetime.now().isoformat(),
+                "video_url": None,
+            }
+        )
         _save_generations(generations)
 
         def progress_callback(progress_data):
@@ -1395,11 +1495,19 @@ def api_video_to_video():
                         if generations and "generations" in generations:
                             for gen in generations["generations"]:
                                 if gen.get("id") == generation_id:
-                                    gen["status"] = "completed" if result.get("success") else "failed"
+                                    gen["status"] = (
+                                        "completed"
+                                        if result.get("success")
+                                        else "failed"
+                                    )
                                     gen["video_url"] = result.get("videoUrl")
                                     gen["video_path"] = result.get("videoPath")
                                     gen["error"] = result.get("error")
-                                    gen["completed_at"] = datetime.now().isoformat() if result.get("success") else None
+                                    gen["completed_at"] = (
+                                        datetime.now().isoformat()
+                                        if result.get("success")
+                                        else None
+                                    )
                             _save_generations(generations)
 
             except Exception as e:
@@ -1407,12 +1515,14 @@ def api_video_to_video():
 
         threading.Thread(target=run_v2v_generation).start()
 
-        return jsonify({
-            "success": True,
-            "generation_id": generation_id,
-            "status": "pending",
-            "message": "Video-to-video generation started"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "generation_id": generation_id,
+                "status": "pending",
+                "message": "Video-to-video generation started",
+            }
+        )
 
     except Exception as e:
         logger.error(f"V2V error: {e}")
@@ -1523,6 +1633,7 @@ def api_cancel_generation(generation_id):
                 process = active_processes[generation_id]
                 try:
                     import psutil
+
                     parent = psutil.Process(process.pid)
                     # Kill children first (important for GPU worker processes)
                     for child in parent.children(recursive=True):
@@ -1533,7 +1644,7 @@ def api_cancel_generation(generation_id):
                     logger.warning(f"Failed to kill process tree via psutil: {e}")
                     # Fallback to simple kill
                     process.kill()
-                
+
                 del active_processes[generation_id]
 
         # 2. Stop monitoring
@@ -1550,7 +1661,12 @@ def api_cancel_generation(generation_id):
                     gen["completed_at"] = datetime.now().isoformat()
                     _save_generations(generations)
 
-                    return jsonify({"success": True, "message": "Generation cancelled and process terminated"})
+                    return jsonify(
+                        {
+                            "success": True,
+                            "message": "Generation cancelled and process terminated",
+                        }
+                    )
 
         return jsonify({"error": "Generation not found"}), 404
 
@@ -1615,6 +1731,7 @@ def api_clear_history():
         logger.error(f"Clear history error: {e}")
         return jsonify({"error": str(e)}), 500
 
+
 @video_bp.route("/metrics")
 def api_get_metrics():
     """Get performance metrics."""
@@ -1637,7 +1754,7 @@ def api_gpu_info():
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
 
         if result.returncode == 0 and result.stdout.strip():
@@ -1673,45 +1790,53 @@ def api_gpu_info():
                     can_run_local = False
                     estimated_time = "Use cloud (30-60 sec)"
 
-                return jsonify({
-                    "gpu_name": gpu_name,
-                    "vram_gb": vram_gb,
-                    "tier": tier,
-                    "recommended_model": recommended_model,
-                    "can_run_local": can_run_local,
-                    "estimated_time_10s": estimated_time
-                })
+                return jsonify(
+                    {
+                        "gpu_name": gpu_name,
+                        "vram_gb": vram_gb,
+                        "tier": tier,
+                        "recommended_model": recommended_model,
+                        "can_run_local": can_run_local,
+                        "estimated_time_10s": estimated_time,
+                    }
+                )
 
         # No NVIDIA GPU detected
-        return jsonify({
-            "gpu_name": "None (CPU only)",
-            "vram_gb": 0,
-            "tier": "no_gpu",
-            "recommended_model": "cloud-fal",
-            "can_run_local": False,
-            "estimated_time_10s": "Cloud generation recommended"
-        })
+        return jsonify(
+            {
+                "gpu_name": "None (CPU only)",
+                "vram_gb": 0,
+                "tier": "no_gpu",
+                "recommended_model": "cloud-fal",
+                "can_run_local": False,
+                "estimated_time_10s": "Cloud generation recommended",
+            }
+        )
 
     except FileNotFoundError:
         # nvidia-smi not found
-        return jsonify({
-            "gpu_name": "None (nvidia-smi not found)",
-            "vram_gb": 0,
-            "tier": "no_gpu",
-            "recommended_model": "cloud-fal",
-            "can_run_local": False,
-            "estimated_time_10s": "Cloud generation recommended"
-        })
+        return jsonify(
+            {
+                "gpu_name": "None (nvidia-smi not found)",
+                "vram_gb": 0,
+                "tier": "no_gpu",
+                "recommended_model": "cloud-fal",
+                "can_run_local": False,
+                "estimated_time_10s": "Cloud generation recommended",
+            }
+        )
     except Exception as e:
         logger.error(f"GPU detection error: {e}")
-        return jsonify({
-            "gpu_name": "Unknown",
-            "vram_gb": 0,
-            "tier": "unknown",
-            "recommended_model": "cloud-fal",
-            "can_run_local": False,
-            "error": str(e)
-        })
+        return jsonify(
+            {
+                "gpu_name": "Unknown",
+                "vram_gb": 0,
+                "tier": "unknown",
+                "recommended_model": "cloud-fal",
+                "can_run_local": False,
+                "error": str(e),
+            }
+        )
 
 
 @video_bp.route("/installation-status")
@@ -1735,11 +1860,9 @@ def api_installation_status():
         # Check if any local model is installed
         any_installed = any(installed_models.values())
 
-        return jsonify({
-            "installed": any_installed,
-            "models": installed_models,
-            "status": "idle"
-        })
+        return jsonify(
+            {"installed": any_installed, "models": installed_models, "status": "idle"}
+        )
 
     except Exception as e:
         logger.error(f"Installation status error: {e}")
@@ -1775,57 +1898,71 @@ def api_cloud_generate():
             "duration": duration,
             "aspect_ratio": aspect_ratio,
             "created_at": datetime.now().isoformat(),
-            "stage": "cloud_init"
+            "stage": "cloud_init",
         }
 
         # Start cloud generation in background thread
         def run_cloud_generation():
             try:
                 if provider == "cloud-fal":
-                    result = generate_video_fal(prompt, duration, aspect_ratio, generation_id)
+                    result = generate_video_fal(
+                        prompt, duration, aspect_ratio, generation_id
+                    )
                 elif provider == "cloud-runpod":
-                    result = generate_video_runpod(prompt, duration, aspect_ratio, generation_id)
+                    result = generate_video_runpod(
+                        prompt, duration, aspect_ratio, generation_id
+                    )
                 else:
                     raise ValueError(f"Unsupported provider: {provider}")
 
-                active_generations[generation_id].update({
-                    "status": "completed",
-                    "progress": 100,
-                    "video_path": result["video_path"],
-                    "completed_at": datetime.now().isoformat()
-                })
+                active_generations[generation_id].update(
+                    {
+                        "status": "completed",
+                        "progress": 100,
+                        "video_path": result["video_path"],
+                        "completed_at": datetime.now().isoformat(),
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"Cloud generation failed: {e}")
-                active_generations[generation_id].update({
-                    "status": "failed",
-                    "error": str(e),
-                    "failed_at": datetime.now().isoformat()
-                })
+                active_generations[generation_id].update(
+                    {
+                        "status": "failed",
+                        "error": str(e),
+                        "failed_at": datetime.now().isoformat(),
+                    }
+                )
 
         threading.Thread(target=run_cloud_generation, daemon=True).start()
 
-        return jsonify({
-            "success": True,
-            "generation_id": generation_id,
-            "message": f"Cloud generation started via {MODELS[provider]['name']}"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "generation_id": generation_id,
+                "message": f"Cloud generation started via {MODELS[provider]['name']}",
+            }
+        )
 
     except Exception as e:
         logger.error(f"Cloud generation error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-def generate_video_fal(prompt: str, duration: int, aspect_ratio: str, generation_id: str) -> dict:
+def generate_video_fal(
+    prompt: str, duration: int, aspect_ratio: str, generation_id: str
+) -> dict:
     """Generate video via FAL.ai API."""
     import requests
 
     # Update progress
-    active_generations[generation_id].update({
-        "stage": "cloud_submitting",
-        "progress": 10,
-        "message": "Submitting to FAL.ai..."
-    })
+    active_generations[generation_id].update(
+        {
+            "stage": "cloud_submitting",
+            "progress": 10,
+            "message": "Submitting to FAL.ai...",
+        }
+    )
 
     # FAL.ai API endpoint (using fast-svd model as example)
     api_url = "https://fal.run/fal-ai/fast-svd"
@@ -1836,10 +1973,7 @@ def generate_video_fal(prompt: str, duration: int, aspect_ratio: str, generation
         raise Exception("FAL_API_KEY not configured in environment")
 
     # Prepare request
-    headers = {
-        "Authorization": f"Key {api_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Key {api_key}", "Content-Type": "application/json"}
 
     payload = {
         "prompt": prompt,
@@ -1861,11 +1995,13 @@ def generate_video_fal(prompt: str, duration: int, aspect_ratio: str, generation
             raise Exception("No video URL in FAL.ai response")
     else:
         # Poll for completion
-        active_generations[generation_id].update({
-            "stage": "cloud_processing",
-            "progress": 30,
-            "message": "Generating video on FAL.ai..."
-        })
+        active_generations[generation_id].update(
+            {
+                "stage": "cloud_processing",
+                "progress": 30,
+                "message": "Generating video on FAL.ai...",
+            }
+        )
 
         status_url = f"https://fal.run/fal-ai/fast-svd/requests/{request_id}"
 
@@ -1887,19 +2023,23 @@ def generate_video_fal(prompt: str, duration: int, aspect_ratio: str, generation
 
             # Update progress based on status
             progress = 30 + (status_data.get("progress", 0) * 0.5)  # 30-80%
-            active_generations[generation_id].update({
-                "progress": int(progress),
-                "message": f"Processing... {status_data.get('progress', 0)}%"
-            })
+            active_generations[generation_id].update(
+                {
+                    "progress": int(progress),
+                    "message": f"Processing... {status_data.get('progress', 0)}%",
+                }
+            )
 
             time.sleep(2)
 
     # Download video
-    active_generations[generation_id].update({
-        "stage": "cloud_downloading",
-        "progress": 85,
-        "message": "Downloading video..."
-    })
+    active_generations[generation_id].update(
+        {
+            "stage": "cloud_downloading",
+            "progress": 85,
+            "message": "Downloading video...",
+        }
+    )
 
     video_response = requests.get(video_url, timeout=120)
     video_response.raise_for_status()
@@ -1913,28 +2053,30 @@ def generate_video_fal(prompt: str, duration: int, aspect_ratio: str, generation
     with open(output_path, "wb") as f:
         f.write(video_response.content)
 
-    active_generations[generation_id].update({
-        "stage": "finalizing",
-        "progress": 95,
-        "message": "Finalizing..."
-    })
+    active_generations[generation_id].update(
+        {"stage": "finalizing", "progress": 95, "message": "Finalizing..."}
+    )
 
     return {
         "video_path": output_path,
-        "cost": 0.50  # FAL.ai typical cost
+        "cost": 0.50,  # FAL.ai typical cost
     }
 
 
-def generate_video_runpod(prompt: str, duration: int, aspect_ratio: str, generation_id: str) -> dict:
+def generate_video_runpod(
+    prompt: str, duration: int, aspect_ratio: str, generation_id: str
+) -> dict:
     """Generate video via RunPod serverless API."""
     import requests
 
     # Update progress
-    active_generations[generation_id].update({
-        "stage": "cloud_submitting",
-        "progress": 10,
-        "message": "Submitting to RunPod..."
-    })
+    active_generations[generation_id].update(
+        {
+            "stage": "cloud_submitting",
+            "progress": 10,
+            "message": "Submitting to RunPod...",
+        }
+    )
 
     # Get API key and endpoint from environment
     api_key = os.environ.get("RUNPOD_API_KEY")
@@ -1946,17 +2088,14 @@ def generate_video_runpod(prompt: str, duration: int, aspect_ratio: str, generat
     # RunPod serverless endpoint
     api_url = f"https://api.runpod.ai/v2/{endpoint_id}/run"
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     payload = {
         "input": {
             "prompt": prompt,
             "duration": duration,
             "aspect_ratio": aspect_ratio,
-            "model": "svi-pro-wan22"
+            "model": "svi-pro-wan22",
         }
     }
 
@@ -1971,11 +2110,13 @@ def generate_video_runpod(prompt: str, duration: int, aspect_ratio: str, generat
         raise Exception("No job ID in RunPod response")
 
     # Poll for completion
-    active_generations[generation_id].update({
-        "stage": "cloud_processing",
-        "progress": 30,
-        "message": "Generating video on RunPod..."
-    })
+    active_generations[generation_id].update(
+        {
+            "stage": "cloud_processing",
+            "progress": 30,
+            "message": "Generating video on RunPod...",
+        }
+    )
 
     status_url = f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}"
 
@@ -1998,19 +2139,23 @@ def generate_video_runpod(prompt: str, duration: int, aspect_ratio: str, generat
 
         # Update progress
         progress = 30 + (status_data.get("progress", 0) * 0.5)  # 30-80%
-        active_generations[generation_id].update({
-            "progress": int(progress),
-            "message": f"Processing on RunPod... {status_data.get('progress', 0)}%"
-        })
+        active_generations[generation_id].update(
+            {
+                "progress": int(progress),
+                "message": f"Processing on RunPod... {status_data.get('progress', 0)}%",
+            }
+        )
 
         time.sleep(3)
 
     # Download video
-    active_generations[generation_id].update({
-        "stage": "cloud_downloading",
-        "progress": 85,
-        "message": "Downloading video..."
-    })
+    active_generations[generation_id].update(
+        {
+            "stage": "cloud_downloading",
+            "progress": 85,
+            "message": "Downloading video...",
+        }
+    )
 
     video_response = requests.get(video_url, timeout=120)
     video_response.raise_for_status()
@@ -2024,36 +2169,32 @@ def generate_video_runpod(prompt: str, duration: int, aspect_ratio: str, generat
     with open(output_path, "wb") as f:
         f.write(video_response.content)
 
-    active_generations[generation_id].update({
-        "stage": "finalizing",
-        "progress": 95,
-        "message": "Finalizing..."
-    })
+    active_generations[generation_id].update(
+        {"stage": "finalizing", "progress": 95, "message": "Finalizing..."}
+    )
 
     # Calculate cost (RunPod charges by GPU time)
     generation_time = status_data.get("executionTime", 120)  # seconds
     cost_per_second = 0.002  # ~$2/1000s for H100
     cost = generation_time * cost_per_second
 
-    return {
-        "video_path": output_path,
-        "cost": round(cost, 2)
-    }
+    return {"video_path": output_path, "cost": round(cost, 2)}
 
 
 @video_bp.route("/disk-space")
 def api_disk_space():
     """Check available disk space for model downloads."""
     try:
-        if os.name == 'nt':  # Windows
+        if os.name == "nt":  # Windows
             import ctypes
+
             free_bytes = ctypes.c_ulonglong(0)
             total_bytes = ctypes.c_ulonglong(0)
             ctypes.windll.kernel32.GetDiskFreeSpaceExW(
                 ctypes.c_wchar_p("C:\\"),
                 None,
                 ctypes.pointer(total_bytes),
-                ctypes.pointer(free_bytes)
+                ctypes.pointer(free_bytes),
             )
             free_gb = free_bytes.value / (1024**3)
             total_gb = total_bytes.value / (1024**3)
@@ -2065,13 +2206,15 @@ def api_disk_space():
         # SVI Pro 2.0 + Wan 2.2 + ComfyUI requires ~100GB
         min_required_gb = 100
 
-        return jsonify({
-            "free_gb": round(free_gb, 2),
-            "total_gb": round(total_gb, 2),
-            "sufficient": free_gb >= min_required_gb,
-            "min_required_gb": min_required_gb,
-            "message": f"{round(free_gb, 2)}GB free of {round(total_gb, 2)}GB total"
-        })
+        return jsonify(
+            {
+                "free_gb": round(free_gb, 2),
+                "total_gb": round(total_gb, 2),
+                "sufficient": free_gb >= min_required_gb,
+                "min_required_gb": min_required_gb,
+                "message": f"{round(free_gb, 2)}GB free of {round(total_gb, 2)}GB total",
+            }
+        )
 
     except Exception as e:
         logger.error(f"Disk space check error: {e}")
@@ -2099,55 +2242,65 @@ def api_install_comfyui():
 
         # Check if already installing
         if installation_status.get("status") == "installing":
-            return jsonify({
-                "success": False,
-                "message": "Installation already in progress",
-                "installation_id": installation_status.get("installation_id")
-            })
+            return jsonify(
+                {
+                    "success": False,
+                    "message": "Installation already in progress",
+                    "installation_id": installation_status.get("installation_id"),
+                }
+            )
 
         # Generate installation ID
         installation_id = str(uuid.uuid4())
 
         # Initialize installation tracking
-        installation_status.update({
-            "installation_id": installation_id,
-            "status": "installing",
-            "progress": 0,
-            "stage": "initializing",
-            "message": "Starting installation...",
-            "model": model_id,
-            "started_at": datetime.now().isoformat()
-        })
+        installation_status.update(
+            {
+                "installation_id": installation_id,
+                "status": "installing",
+                "progress": 0,
+                "stage": "initializing",
+                "message": "Starting installation...",
+                "model": model_id,
+                "started_at": datetime.now().isoformat(),
+            }
+        )
 
         # Start installation in background
         def run_installation():
             try:
                 install_comfyui_model(model_id)
-                installation_status.update({
-                    "status": "completed",
-                    "progress": 100,
-                    "stage": "complete",
-                    "message": "Installation complete!",
-                    "completed_at": datetime.now().isoformat()
-                })
+                installation_status.update(
+                    {
+                        "status": "completed",
+                        "progress": 100,
+                        "stage": "complete",
+                        "message": "Installation complete!",
+                        "completed_at": datetime.now().isoformat(),
+                    }
+                )
             except Exception as e:
                 logger.error(f"Installation failed: {e}")
-                installation_status.update({
-                    "status": "failed",
-                    "progress": 0,
-                    "stage": "failed",
-                    "error": str(e),
-                    "message": f"Installation failed: {str(e)}",
-                    "failed_at": datetime.now().isoformat()
-                })
+                installation_status.update(
+                    {
+                        "status": "failed",
+                        "progress": 0,
+                        "stage": "failed",
+                        "error": str(e),
+                        "message": f"Installation failed: {str(e)}",
+                        "failed_at": datetime.now().isoformat(),
+                    }
+                )
 
         threading.Thread(target=run_installation, daemon=True).start()
 
-        return jsonify({
-            "success": True,
-            "installation_id": installation_id,
-            "message": "Installation started"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "installation_id": installation_id,
+                "message": "Installation started",
+            }
+        )
 
     except Exception as e:
         logger.error(f"Install ComfyUI error: {e}")
@@ -2164,51 +2317,60 @@ def install_comfyui_model(model_id: str):
 
     # Stage 1: Clone ComfyUI (0-20%)
     if not os.path.exists(comfyui_path):
-        installation_status.update({
-            "stage": "cloning_comfyui",
-            "progress": 5,
-            "message": "Cloning ComfyUI repository..."
-        })
-
-        subprocess.run(
-            ["git", "clone", "--depth", "1", "https://github.com/comfyanonymous/ComfyUI.git", comfyui_path],
-            check=True,
-            timeout=300
+        installation_status.update(
+            {
+                "stage": "cloning_comfyui",
+                "progress": 5,
+                "message": "Cloning ComfyUI repository...",
+            }
         )
 
-        installation_status.update({
-            "progress": 20,
-            "message": "ComfyUI cloned successfully"
-        })
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "https://github.com/comfyanonymous/ComfyUI.git",
+                comfyui_path,
+            ],
+            check=True,
+            timeout=300,
+        )
+
+        installation_status.update(
+            {"progress": 20, "message": "ComfyUI cloned successfully"}
+        )
 
     # Stage 2: Install Python dependencies (20-35%)
-    installation_status.update({
-        "stage": "dependencies",
-        "progress": 20,
-        "message": "Installing Python dependencies..."
-    })
+    installation_status.update(
+        {
+            "stage": "dependencies",
+            "progress": 20,
+            "message": "Installing Python dependencies...",
+        }
+    )
 
     requirements_path = os.path.join(comfyui_path, "requirements.txt")
     if os.path.exists(requirements_path):
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r", requirements_path],
             check=True,
-            timeout=600
+            timeout=600,
         )
 
-    installation_status.update({
-        "progress": 35,
-        "message": "Dependencies installed"
-    })
+    installation_status.update({"progress": 35, "message": "Dependencies installed"})
 
     # Stage 3: Download model weights (35-95%)
     if model_id == "svi-pro-wan22":
         # Download SVI Pro 2.0 (35-65%)
-        installation_status.update({
-            "stage": "downloading_svi",
-            "progress": 35,
-            "message": "Downloading SVI Pro 2.0 weights (12.5GB)..."
-        })
+        installation_status.update(
+            {
+                "stage": "downloading_svi",
+                "progress": 35,
+                "message": "Downloading SVI Pro 2.0 weights (12.5GB)...",
+            }
+        )
 
         from huggingface_hub import snapshot_download
 
@@ -2217,69 +2379,57 @@ def install_comfyui_model(model_id: str):
             repo_id="vita-video-gen/svi-model",
             local_dir=svi_path,
             allow_patterns=["version-2.0/*"],
-            resume_download=True
+            resume_download=True,
         )
 
-        installation_status.update({
-            "progress": 65,
-            "message": "SVI Pro 2.0 downloaded"
-        })
+        installation_status.update(
+            {"progress": 65, "message": "SVI Pro 2.0 downloaded"}
+        )
 
         # Download Wan 2.2 (65-95%)
-        installation_status.update({
-            "stage": "downloading_wan",
-            "progress": 65,
-            "message": "Downloading Wan 2.2 weights (3.8GB)..."
-        })
+        installation_status.update(
+            {
+                "stage": "downloading_wan",
+                "progress": 65,
+                "message": "Downloading Wan 2.2 weights (3.8GB)...",
+            }
+        )
 
         wan_path = os.path.join(comfyui_path, "models", "checkpoints", "wan22")
         snapshot_download(
-            repo_id="Wan-AI/Wan2.2-T2V-A14B",
-            local_dir=wan_path,
-            resume_download=True
+            repo_id="Wan-AI/Wan2.2-T2V-A14B", local_dir=wan_path, resume_download=True
         )
 
-        installation_status.update({
-            "progress": 95,
-            "message": "Wan 2.2 downloaded"
-        })
+        installation_status.update({"progress": 95, "message": "Wan 2.2 downloaded"})
 
     elif model_id == "ltx-video":
         # Download LTX Video (35-95%)
-        installation_status.update({
-            "stage": "downloading_ltx",
-            "progress": 35,
-            "message": "Downloading LTX Video weights (8GB)..."
-        })
+        installation_status.update(
+            {
+                "stage": "downloading_ltx",
+                "progress": 35,
+                "message": "Downloading LTX Video weights (8GB)...",
+            }
+        )
 
         from huggingface_hub import snapshot_download
 
         ltx_path = os.path.join(comfyui_path, "models", "checkpoints", "ltx-video")
         snapshot_download(
-            repo_id="Lightricks/LTX-Video",
-            local_dir=ltx_path,
-            resume_download=True
+            repo_id="Lightricks/LTX-Video", local_dir=ltx_path, resume_download=True
         )
 
-        installation_status.update({
-            "progress": 95,
-            "message": "LTX Video downloaded"
-        })
+        installation_status.update({"progress": 95, "message": "LTX Video downloaded"})
 
     # Stage 4: Finalize (95-100%)
-    installation_status.update({
-        "stage": "finalizing",
-        "progress": 98,
-        "message": "Finalizing installation..."
-    })
+    installation_status.update(
+        {"stage": "finalizing", "progress": 98, "message": "Finalizing installation..."}
+    )
 
     # Mark installation complete in models config
     time.sleep(1)  # Brief pause for finalization
 
-    installation_status.update({
-        "progress": 100,
-        "message": "Installation complete!"
-    })
+    installation_status.update({"progress": 100, "message": "Installation complete!"})
 
 
 @video_bp.route("/generate-with-fallback", methods=["POST"])
@@ -2309,7 +2459,7 @@ def api_generate_with_fallback():
             "aspect_ratio": aspect_ratio,
             "created_at": datetime.now().isoformat(),
             "stage": "initializing",
-            "auto_fallback": auto_fallback
+            "auto_fallback": auto_fallback,
         }
 
         # Start generation with fallback in background
@@ -2318,24 +2468,34 @@ def api_generate_with_fallback():
                 # Try local generation first if it's a local model
                 if MODELS.get(preferred_model, {}).get("tier") != "cloud":
                     try:
-                        active_generations[generation_id].update({
-                            "stage": "local_attempt",
-                            "progress": 5,
-                            "message": f"Attempting local generation with {MODELS[preferred_model]['name']}..."
-                        })
+                        active_generations[generation_id].update(
+                            {
+                                "stage": "local_attempt",
+                                "progress": 5,
+                                "message": f"Attempting local generation with {MODELS[preferred_model]['name']}...",
+                            }
+                        )
 
                         # TODO: Call actual local generation function here
                         # For now, simulate local generation attempt
-                        result = generate_local_video(preferred_model, prompt, duration, aspect_ratio, generation_id)
+                        result = generate_local_video(
+                            preferred_model,
+                            prompt,
+                            duration,
+                            aspect_ratio,
+                            generation_id,
+                        )
 
-                        active_generations[generation_id].update({
-                            "status": "completed",
-                            "progress": 100,
-                            "video_path": result["video_path"],
-                            "model_used": preferred_model,
-                            "cost": 0,
-                            "completed_at": datetime.now().isoformat()
-                        })
+                        active_generations[generation_id].update(
+                            {
+                                "status": "completed",
+                                "progress": 100,
+                                "video_path": result["video_path"],
+                                "model_used": preferred_model,
+                                "cost": 0,
+                                "completed_at": datetime.now().isoformat(),
+                            }
+                        )
                         return
 
                     except Exception as local_error:
@@ -2346,60 +2506,76 @@ def api_generate_with_fallback():
                             raise local_error
 
                         # Fallback to cloud
-                        active_generations[generation_id].update({
-                            "stage": "cloud_fallback",
-                            "progress": 10,
-                            "message": "Local generation failed. Switching to cloud (free this time)...",
-                            "local_error": str(local_error)
-                        })
+                        active_generations[generation_id].update(
+                            {
+                                "stage": "cloud_fallback",
+                                "progress": 10,
+                                "message": "Local generation failed. Switching to cloud (free this time)...",
+                                "local_error": str(local_error),
+                            }
+                        )
 
                         # Use FAL.ai as fallback
-                        result = generate_video_fal(prompt, duration, aspect_ratio, generation_id)
+                        result = generate_video_fal(
+                            prompt, duration, aspect_ratio, generation_id
+                        )
 
-                        active_generations[generation_id].update({
-                            "status": "completed",
-                            "progress": 100,
-                            "video_path": result["video_path"],
-                            "model_used": "cloud-fal",
-                            "cost": 0,  # Free for automatic fallback
-                            "fallback_used": True,
-                            "completed_at": datetime.now().isoformat()
-                        })
+                        active_generations[generation_id].update(
+                            {
+                                "status": "completed",
+                                "progress": 100,
+                                "video_path": result["video_path"],
+                                "model_used": "cloud-fal",
+                                "cost": 0,  # Free for automatic fallback
+                                "fallback_used": True,
+                                "completed_at": datetime.now().isoformat(),
+                            }
+                        )
 
                 else:
                     # Cloud model requested directly
                     provider = preferred_model
                     if provider == "cloud-fal":
-                        result = generate_video_fal(prompt, duration, aspect_ratio, generation_id)
+                        result = generate_video_fal(
+                            prompt, duration, aspect_ratio, generation_id
+                        )
                     elif provider == "cloud-runpod":
-                        result = generate_video_runpod(prompt, duration, aspect_ratio, generation_id)
+                        result = generate_video_runpod(
+                            prompt, duration, aspect_ratio, generation_id
+                        )
                     else:
                         raise ValueError(f"Unknown cloud provider: {provider}")
 
-                    active_generations[generation_id].update({
-                        "status": "completed",
-                        "progress": 100,
-                        "video_path": result["video_path"],
-                        "model_used": provider,
-                        "cost": result["cost"],
-                        "completed_at": datetime.now().isoformat()
-                    })
+                    active_generations[generation_id].update(
+                        {
+                            "status": "completed",
+                            "progress": 100,
+                            "video_path": result["video_path"],
+                            "model_used": provider,
+                            "cost": result["cost"],
+                            "completed_at": datetime.now().isoformat(),
+                        }
+                    )
 
             except Exception as e:
                 logger.error(f"Generation with fallback failed: {e}")
-                active_generations[generation_id].update({
-                    "status": "failed",
-                    "error": str(e),
-                    "failed_at": datetime.now().isoformat()
-                })
+                active_generations[generation_id].update(
+                    {
+                        "status": "failed",
+                        "error": str(e),
+                        "failed_at": datetime.now().isoformat(),
+                    }
+                )
 
         threading.Thread(target=run_generation_with_fallback, daemon=True).start()
 
-        return jsonify({
-            "success": True,
-            "generation_id": generation_id,
-            "message": "Generation started with automatic fallback enabled"
-        })
+        return jsonify(
+            {
+                "success": True,
+                "generation_id": generation_id,
+                "message": "Generation started with automatic fallback enabled",
+            }
+        )
 
     except Exception as e:
         logger.error(f"Generate with fallback error: {e}")
@@ -2415,7 +2591,7 @@ def generate_local_video(
     input_type: str = "text",
     input_path: str = None,
     motion_strength: float = 0.7,
-    **kwargs
+    **kwargs,
 ) -> dict:
     """
     Generate video using local ComfyUI model.
@@ -2439,7 +2615,9 @@ def generate_local_video(
     comfyui_path = os.path.join(MODELS_DIR, "comfyui")
 
     if not os.path.exists(comfyui_path):
-        raise Exception("ComfyUI not installed. Please install first via /api/video/install-comfyui")
+        raise Exception(
+            "ComfyUI not installed. Please install first via /api/video/install-comfyui"
+        )
 
     # Get the executor
     executor = get_comfyui_executor()
@@ -2448,23 +2626,27 @@ def generate_local_video(
     def progress_callback(percent: int, message: str):
         if percent < 0:
             # Status message without percent
-            active_generations[generation_id].update({
-                "message": message
-            })
+            active_generations[generation_id].update({"message": message})
         else:
-            stage = "loading_model" if percent < 20 else "processing" if percent < 90 else "encoding"
-            active_generations[generation_id].update({
-                "stage": stage,
-                "progress": percent,
-                "message": message
-            })
+            stage = (
+                "loading_model"
+                if percent < 20
+                else "processing"
+                if percent < 90
+                else "encoding"
+            )
+            active_generations[generation_id].update(
+                {"stage": stage, "progress": percent, "message": message}
+            )
 
     # Update initial progress
-    active_generations[generation_id].update({
-        "stage": "initializing",
-        "progress": 5,
-        "message": f"Initializing {MODELS[model_id]['name']}..."
-    })
+    active_generations[generation_id].update(
+        {
+            "stage": "initializing",
+            "progress": 5,
+            "message": f"Initializing {MODELS[model_id]['name']}...",
+        }
+    )
 
     # Handle input upload for I2V/V2V
     uploaded_input = None
@@ -2484,7 +2666,7 @@ def generate_local_video(
         input_path=uploaded_input,
         progress_callback=progress_callback,
         motion_strength=motion_strength,
-        **kwargs
+        **kwargs,
     )
 
     if not result.get("success"):
@@ -2499,18 +2681,14 @@ def generate_local_video(
 
     if video_path and os.path.exists(video_path):
         import shutil
+
         shutil.copy2(video_path, final_output_path)
     else:
         raise Exception("Video generation completed but output file not found")
 
     # Final progress update
-    active_generations[generation_id].update({
-        "stage": "completed",
-        "progress": 100,
-        "message": "Video generation complete!"
-    })
+    active_generations[generation_id].update(
+        {"stage": "completed", "progress": 100, "message": "Video generation complete!"}
+    )
 
-    return {
-        "video_path": final_output_path,
-        "cost": 0
-    }
+    return {"video_path": final_output_path, "cost": 0}

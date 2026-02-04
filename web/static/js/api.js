@@ -206,6 +206,27 @@ const api = {
         });
     },
 
+    async syncSessions(deviceId = null) {
+        return this.fetch('/sessions/sync', {
+            method: 'POST',
+            body: JSON.stringify({ device_id: deviceId || 'web' })
+        });
+    },
+
+    async syncCards(deviceId = null) {
+        return this.fetch('/cards/sync', {
+            method: 'POST',
+            body: JSON.stringify({ device_id: deviceId || 'web' })
+        });
+    },
+
+    async syncCollections(deviceId = null) {
+        return this.fetch('/collections/sync', {
+            method: 'POST',
+            body: JSON.stringify({ device_id: deviceId || 'web' })
+        });
+    },
+
     async deleteSession(sessionId) {
         return this.fetch(`/sessions/${sessionId}`, {
             method: 'DELETE'
@@ -271,6 +292,17 @@ const api = {
     // Status
     async getStatus() {
         return this.fetch('/status');
+    },
+
+    async getLocks() {
+        return this.fetch('/locks', {}, true);
+    },
+
+    async releaseLocks(payload) {
+        return this.fetch('/locks/release', {
+            method: 'POST',
+            body: JSON.stringify(payload || {})
+        });
     },
 
     async getQRCode() {
@@ -618,9 +650,10 @@ const api = {
     },
 
     // ============ CLI Launch ============
-    async launchCLI(projectId) {
+    async launchCLI(projectId, command = 'claude') {
         return this.fetch(`/projects/${projectId}/launch-cli`, {
-            method: 'POST'
+            method: 'POST',
+            body: JSON.stringify({ command })
         });
     },
 
@@ -651,5 +684,60 @@ const api = {
     async getVideoHistory(deviceId) {
         const params = deviceId ? `?device_id=${deviceId}` : '';
         return this.fetch(`/video/history${params}`);
+    },
+
+    // ============ Ralph Swarm ============
+    async getRalphStatus(projectDir = 'C:/shadow') {
+        return this.fetch(`/ralph/status?project_dir=${encodeURIComponent(projectDir)}`);
+    },
+
+    async launchRalphSwarm(data) {
+        return this.fetch('/ralph/launch', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    async pauseRalphSwarm(projectDir = 'C:/shadow') {
+        return this.fetch('/ralph/pause-all', {
+            method: 'POST',
+            body: JSON.stringify({ project_dir: projectDir })
+        });
+    },
+
+    async killRalphSwarm(projectDir = 'C:/shadow') {
+        return this.fetch('/ralph/kill-all', {
+            method: 'POST',
+            body: JSON.stringify({ project_dir: projectDir })
+        });
+    },
+
+    async pauseRalphAgent(agentId, projectDir = 'C:/shadow') {
+        return this.fetch(`/ralph/agents/${agentId}/pause`, {
+            method: 'POST',
+            body: JSON.stringify({ project_dir: projectDir })
+        });
+    },
+
+    async getRalphLogs(agentId, type = 'out', lines = 200, projectDir = 'C:/shadow') {
+        return this.fetch(`/ralph/logs/${agentId}?type=${type}&lines=${lines}&project_dir=${encodeURIComponent(projectDir)}`);
+    },
+
+    async getRalphRoles() {
+        return this.fetch('/ralph/agent-roles');
+    },
+
+    async launchBrainstormer(objective, project_name = "Shadow") {
+        return this.fetch('/ralph/brainstorm', {
+            method: 'POST',
+            body: JSON.stringify({ objective, project_name })
+        });
+    },
+
+    async launchLooper(task, project_name = "Shadow") {
+        return this.fetch('/ralph/loop', {
+            method: 'POST',
+            body: JSON.stringify({ task, project_name })
+        });
     }
 };
