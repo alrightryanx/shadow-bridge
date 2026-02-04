@@ -292,7 +292,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.161"
+APP_VERSION = "1.162"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -4861,7 +4861,7 @@ class ShadowBridgeApp:
             self.setup_styles()
             log.info("[OK] Styles setup completed successfully")
         except Exception as e:
-            log.error(f"âœ— Failed to setup styles: {e}", exc_info=True)
+            log.error(f"\u2717 Failed to setup styles: {e}", exc_info=True)
 
         # Initialize Threading Primitives
         self._web_dashboard_monitor_stop_event = threading.Event()
@@ -4876,7 +4876,7 @@ class ShadowBridgeApp:
             self.create_widgets()
             log.info("[OK] Widgets created successfully")
         except Exception as e:
-            log.critical(f"âœ— FATAL: Failed to create widgets: {e}", exc_info=True)
+            log.critical(f"\u2717 FATAL: Failed to create widgets: {e}", exc_info=True)
             raise
 
         # Set window size and position (load saved state or default to bottom right)
@@ -5048,7 +5048,7 @@ class ShadowBridgeApp:
             )
             log.info("[OK] Secondary button styles configured")
         except Exception as e:
-            log.error(f"âœ— Failed to configure secondary button styles: {e}")
+            log.error(f"\u2717 Failed to configure secondary button styles: {e}")
 
         # Scrollbar styling
         try:
@@ -5071,7 +5071,7 @@ class ShadowBridgeApp:
             )
             log.info("[OK] Scrollbar styles configured")
         except Exception as e:
-            log.error(f"âœ— Failed to configure scrollbar styles: {e}")
+            log.error(f"\u2717 Failed to configure scrollbar styles: {e}")
 
         log.info("[OK] setup_styles() completed")
 
@@ -5125,7 +5125,7 @@ class ShadowBridgeApp:
 
             log.info("[OK] Scrollable main container created")
         except Exception as e:
-            log.error(f"âœ— Failed to create scrollable container: {e}", exc_info=True)
+            log.error(f"\u2717 Failed to create scrollable container: {e}", exc_info=True)
             raise
 
         # Header with title
@@ -7634,7 +7634,7 @@ Or run in PowerShell (Admin):
             # Big checkmark
             checkmark_label = tk.Label(
                 celebration,
-                text="âœ“",
+                text="\u2713",
                 font=("Segoe UI", 72, "bold"),
                 fg="white",
                 bg="#10B981",
@@ -7667,7 +7667,7 @@ Or run in PowerShell (Admin):
             log.error(f"Error showing success celebration: {e}")
             # Fallback to simple messagebox
             messagebox.showinfo(
-                "âœ“ Connected!",
+                "\u2713 Connected!",
                 f"SSH key installed for {device_name}",
                 parent=self.root,
             )
