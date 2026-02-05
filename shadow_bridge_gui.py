@@ -292,7 +292,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.162"
+APP_VERSION = "1.163"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9001,6 +9001,43 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 sys.excepthook = handle_exception
 
 
+def _launch_ouroboros_refiner():
+    """Launch the Ouroboros Refiner in watch mode as a background subprocess."""
+    refiner_script = Path("C:/shadow/scripts/ouroboros_refiner.py")
+    if not refiner_script.exists():
+        log.warning(f"Ouroboros Refiner not found at {refiner_script}")
+        return None
+
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if not github_token:
+        log.warning("GITHUB_TOKEN not set - Ouroboros Refiner will not start")
+        return None
+
+    try:
+        log.info("Launching Ouroboros Refiner (--watch --interval 120)...")
+        env = os.environ.copy()
+        env["GITHUB_TOKEN"] = github_token
+
+        startupinfo = None
+        if IS_WINDOWS:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+
+        proc = subprocess.Popen(
+            [sys.executable, str(refiner_script), "--watch", "--interval", "120"],
+            env=env,
+            startupinfo=startupinfo,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log.info(f"Ouroboros Refiner started (PID {proc.pid})")
+        return proc
+    except Exception as e:
+        log.error(f"Failed to launch Ouroboros Refiner: {e}")
+        return None
+
+
 def main():
     """Main entry point."""
     global DEBUG_BUILD, AIDEV_MODE, AGENT_MODE, _single_instance
@@ -9167,7 +9204,17 @@ def main():
         log.info("Running in Headless mode (window hidden)")
         app.root.withdraw()
 
-    app.run()
+    # Launch Ouroboros Refiner in AIDEV mode (auto-fix GitHub issues)
+    refiner_proc = None
+    if AIDEV_MODE:
+        refiner_proc = _launch_ouroboros_refiner()
+
+    try:
+        app.run()
+    finally:
+        if refiner_proc and refiner_proc.poll() is None:
+            log.info("Stopping Ouroboros Refiner...")
+            refiner_proc.terminate()
 
 
 if __name__ == "__main__":
