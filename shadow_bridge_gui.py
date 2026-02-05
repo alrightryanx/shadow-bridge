@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.172"
+APP_VERSION = "1.175"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9012,6 +9012,24 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     except Exception:
         pass
 
+    # Sentinel V3: Analyze exception and offer fix suggestion
+    suggestion_id = None
+    if HAS_SENTINEL:
+        try:
+            from ouroboros.sentinel import get_sentinel_analyzer
+            analyzer = get_sentinel_analyzer()
+
+            # Analyze the exception
+            analysis = analyzer.analyze_exception(exc_type, exc_value, exc_traceback)
+
+            if analysis:
+                # Generate a fix suggestion
+                suggestion_id = analyzer.suggest_fix(analysis)
+                if suggestion_id:
+                    log.info(f"[Sentinel] Created fix suggestion: {suggestion_id}")
+        except Exception as sentinel_err:
+            log.debug(f"Sentinel analysis skipped: {sentinel_err}")
+
     # Also show a non-blocking messagebox if possible
     try:
         import tkinter.messagebox as messagebox
@@ -9025,9 +9043,14 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         ):
             parent = _app_instance.root
 
+        # Include fix suggestion info if available
+        extra_msg = ""
+        if suggestion_id:
+            extra_msg = f"\n\n\U0001F4A1 Sentinel has a fix suggestion.\nView in dashboard: http://localhost:6767/ouroboros"
+
         messagebox.showerror(
             "ShadowBridge Error",
-            f"An unhandled error occurred:\n\n{exc_value}\n\nSee shadow_error.log on your desktop.",
+            f"An unhandled error occurred:\n\n{exc_value}\n\nSee shadow_error.log on your desktop.{extra_msg}",
             parent=parent,
         )
     except Exception:
@@ -9089,6 +9112,46 @@ def _launch_ouroboros_refiner():
         return proc
     except Exception as e:
         log.error(f"Failed to launch Ouroboros Refiner: {e}")
+        return None
+
+
+def _launch_ouroboros_verifier():
+    """Launch the Ouroboros Fix Verifier in watch mode as a background subprocess."""
+    verifier_script = Path("C:/shadow/scripts/ouroboros_verifier.py")
+    if not verifier_script.exists():
+        log.warning(f"Ouroboros Verifier not found at {verifier_script}")
+        return None
+
+    # Find Python interpreter
+    import shutil
+    python_cmd = None
+    for candidate in ["C:/Windows/py.exe", "python", "python3"]:
+        if shutil.which(candidate):
+            python_cmd = candidate
+            break
+    if not python_cmd:
+        log.warning("Python interpreter not found - Ouroboros Verifier will not start")
+        return None
+
+    try:
+        log.info(f"Launching Ouroboros Verifier (--watch --interval 21600) via {python_cmd}...")
+
+        startupinfo = None
+        if IS_WINDOWS:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+
+        proc = subprocess.Popen(
+            [python_cmd, str(verifier_script), "--watch", "--interval", "21600"],
+            startupinfo=startupinfo,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log.info(f"Ouroboros Verifier started (PID {proc.pid})")
+        return proc
+    except Exception as e:
+        log.error(f"Failed to launch Ouroboros Verifier: {e}")
         return None
 
 
@@ -9260,8 +9323,10 @@ def main():
 
     # Launch Ouroboros Refiner in AIDEV mode (auto-fix GitHub issues)
     refiner_proc = None
+    verifier_proc = None
     if AIDEV_MODE:
         refiner_proc = _launch_ouroboros_refiner()
+        verifier_proc = _launch_ouroboros_verifier()
 
     try:
         app.run()
@@ -9269,6 +9334,9 @@ def main():
         if refiner_proc and refiner_proc.poll() is None:
             log.info("Stopping Ouroboros Refiner...")
             refiner_proc.terminate()
+        if verifier_proc and verifier_proc.poll() is None:
+            log.info("Stopping Ouroboros Verifier...")
+            verifier_proc.terminate()
 
 
 if __name__ == "__main__":
