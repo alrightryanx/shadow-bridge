@@ -509,6 +509,54 @@ class AgentStateStore:
             return 0.0
         return (row["wins"] or 0) / row["total"]
 
+    def get_best_agents_for_category(
+        self, category: str, limit: int = 10
+    ) -> List[Dict]:
+        """
+        Rank agents by success rate for a specific task category.
+        Weights recent performance higher (tasks in last 24h count 2x).
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT agent_id,
+                      COUNT(*) as total,
+                      SUM(success) as wins,
+                      SUM(CASE WHEN completed_at >= datetime('now', '-1 day')
+                          THEN success ELSE 0 END) as recent_wins,
+                      SUM(CASE WHEN completed_at >= datetime('now', '-1 day')
+                          THEN 1 ELSE 0 END) as recent_total,
+                      AVG(duration_ms) as avg_duration_ms
+               FROM agent_performance
+               WHERE task_category = ?
+               GROUP BY agent_id
+               ORDER BY total DESC""",
+            (category,),
+        ).fetchall()
+
+        results = []
+        for row in rows:
+            total = row["total"] or 0
+            wins = row["wins"] or 0
+            recent_total = row["recent_total"] or 0
+            recent_wins = row["recent_wins"] or 0
+
+            overall_rate = wins / max(total, 1)
+            recent_rate = recent_wins / max(recent_total, 1) if recent_total > 0 else overall_rate
+            weighted_score = overall_rate * 0.6 + recent_rate * 0.4
+
+            results.append({
+                "agent_id": row["agent_id"],
+                "success_rate": round(overall_rate, 3),
+                "recent_success_rate": round(recent_rate, 3),
+                "total_tasks": total,
+                "recent_tasks": recent_total,
+                "weighted_score": round(weighted_score, 3),
+                "avg_duration_ms": round(row["avg_duration_ms"] or 0),
+            })
+
+        results.sort(key=lambda x: x["weighted_score"], reverse=True)
+        return results[:limit]
+
     # ---- Persistent Task Queue (replaces in-memory task_queue list) ----
 
     def enqueue_task(

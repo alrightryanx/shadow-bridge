@@ -1117,7 +1117,8 @@ After the protocol markers, respond with a JSON list of tasks:
             logger.exception(f"Scanner error: {e}")
 
     def _find_task_for_agent(self, agent_info: dict, allowed_categories: Optional[List[str]] = None) -> Optional[dict]:
-        """Find the best pending task for an agent based on its role and repo."""
+        """Find the best pending task for an agent based on its role, repo, and performance history."""
+        agent_id = agent_info.get("id", "")
         agent_repo = agent_info.get("repo", "")
         agent_specialty = agent_info.get("specialty", "general")
 
@@ -1132,7 +1133,17 @@ After the protocol markers, respond with a JSON list of tasks:
         }
         preferred = specialty_categories.get(agent_specialty, ["todo"])
 
-        # Sort pending tasks: matching repo + category first, then by score
+        # Get agent's performance history for smart routing
+        perf_cache = {}
+        try:
+            store = get_state_store()
+            if agent_id:
+                for cat in set(preferred + ["todo", "smell", "error_handling", "performance", "test_gap"]):
+                    perf_cache[cat] = store.get_agent_success_rate(agent_id, category=cat)
+        except Exception:
+            pass
+
+        # Sort pending tasks: matching repo + category + performance history
         pending = [t for t in self.task_queue if t.get("status") == "pending"]
         if allowed_categories:
             pending = [t for t in pending if t.get("category") in allowed_categories]
@@ -1141,7 +1152,9 @@ After the protocol markers, respond with a JSON list of tasks:
             repo_match = 1 if agent_repo and t.get("repo", "") in agent_repo else 0
             cat_match = 1 if t.get("category") in preferred else 0
             score = t.get("score", 0)
-            return (repo_match, cat_match, score)
+            # Performance bonus: agent's success rate for this category (0-1)
+            perf_bonus = perf_cache.get(t.get("category", ""), 0.5)
+            return (repo_match, cat_match, perf_bonus, score)
 
         pending.sort(key=task_sort_key, reverse=True)
         return pending[0] if pending else None
@@ -1271,6 +1284,21 @@ After the protocol markers, respond with a JSON list of tasks:
                     "repo": task.get("repo")
                 })
 
+                # Record performance for smart routing
+                try:
+                    get_state_store().record_performance(
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        task_category=task.get("category", ""),
+                        success=True,
+                        duration_ms=duration_ms,
+                        files_changed=0,
+                        estimated_cost=task_cost,
+                        repo=task.get("repo", ""),
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to record performance: {e}")
+
                 # Cleanup workspace after successful completion
                 self._cleanup_task_workspace(task, agent_id)
             else:
@@ -1284,6 +1312,23 @@ After the protocol markers, respond with a JSON list of tasks:
                     get_state_store().fail_task_db(task_id)
                 except Exception as e:
                     logger.error(f"Failed to persist task failure: {e}")
+
+                # Record failed performance for smart routing
+                try:
+                    get_state_store().record_performance(
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        task_category=task.get("category", ""),
+                        success=False,
+                        duration_ms=duration_ms,
+                        files_changed=0,
+                        estimated_cost=COST_PER_TASK_ESTIMATE.get(
+                            agent_info.get("provider", "gemini").lower(), 0.005
+                        ),
+                        repo=task.get("repo", ""),
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to record performance: {e}")
 
                 # Cleanup workspace after failure too
                 self._cleanup_task_workspace(task, agent_id)

@@ -6438,6 +6438,115 @@ def monitoring_history():
     return jsonify({"success": True, "history": svc.get_metrics_history(minutes=minutes)})
 
 
+# ========== Project Manager (Multi-Project Isolation) ==========
+
+
+@api_bp.route("/projects/deploy", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def project_deploy():
+    """Deploy agents to a project."""
+    from ..services.project_manager import get_project_manager, ProjectConfig
+    data = request.get_json(force=True)
+    config = ProjectConfig(
+        project_path=data["project_path"],
+        display_name=data.get("display_name", ""),
+        agent_count=data.get("agent_count", 5),
+        provider=data.get("provider", "gemini"),
+        model=data.get("model", ""),
+        focus=data.get("focus", "general"),
+        preset=data.get("preset", "general"),
+        custom_rules=data.get("custom_rules", []),
+        budget_limit_usd=float(data.get("budget_limit_usd", 0)),
+        max_runtime_hours=int(data.get("max_runtime_hours", 0)),
+        agent_configs=data.get("agent_configs"),
+    )
+    pm = get_project_manager()
+    result = pm.deploy_project(config)
+    return jsonify(result)
+
+
+@api_bp.route("/projects/active", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def projects_active():
+    """Get active project deployments."""
+    from ..services.project_manager import get_project_manager
+    pm = get_project_manager()
+    return jsonify({"success": True, "projects": pm.get_active_projects()})
+
+
+@api_bp.route("/projects/all", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def projects_all():
+    """Get all project deployments."""
+    from ..services.project_manager import get_project_manager
+    pm = get_project_manager()
+    return jsonify({"success": True, "projects": pm.get_all_projects()})
+
+
+@api_bp.route("/projects/aggregate", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def projects_aggregate():
+    """Get aggregate project status."""
+    from ..services.project_manager import get_project_manager
+    pm = get_project_manager()
+    return jsonify({"success": True, **pm.get_aggregate_status()})
+
+
+@api_bp.route("/projects/<project_id>", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def project_status(project_id):
+    """Get status of a specific project deployment."""
+    from ..services.project_manager import get_project_manager
+    pm = get_project_manager()
+    status = pm.get_project_status(project_id)
+    if not status:
+        return jsonify({"success": False, "error": "Project not found"}), 404
+    return jsonify({"success": True, "project": status})
+
+
+@api_bp.route("/projects/<project_id>/stop", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def project_stop(project_id):
+    """Stop a project deployment."""
+    from ..services.project_manager import get_project_manager
+    pm = get_project_manager()
+    return jsonify(pm.stop_project(project_id))
+
+
+@api_bp.route("/projects/<project_id>/pause", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def project_pause(project_id):
+    """Pause a project deployment."""
+    from ..services.project_manager import get_project_manager
+    pm = get_project_manager()
+    return jsonify(pm.pause_project(project_id))
+
+
+@api_bp.route("/projects/<project_id>/resume", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def project_resume(project_id):
+    """Resume a paused project deployment."""
+    from ..services.project_manager import get_project_manager
+    pm = get_project_manager()
+    return jsonify(pm.resume_project(project_id))
+
+
 # ========== Mobile Sync (Push/Pull) ==========
 
 
