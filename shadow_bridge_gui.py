@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.176"
+APP_VERSION = "1.177"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9046,7 +9046,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         # Include fix suggestion info if available
         extra_msg = ""
         if suggestion_id:
-            extra_msg = f"\n\n\U0001F4A1 Sentinel has a fix suggestion.\nView in dashboard: http://localhost:6767/ouroboros"
+            extra_msg = "\n\n[*] Sentinel has a fix suggestion.\nView in dashboard: http://localhost:6767/ouroboros"
 
         messagebox.showerror(
             "ShadowBridge Error",
