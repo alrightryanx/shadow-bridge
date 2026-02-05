@@ -1473,53 +1473,43 @@ DO NOT use loops for:
     # ---- Broadcasting ----
 
     def _broadcast_status(self):
-        """Broadcast current status via WebSocket."""
-        # CRITICAL: Import orchestrator to get the real broadcast function
+        """Broadcast consolidated status via WebSocket.
+
+        Instead of sending N per-agent events (300+ events/cycle at 100 agents),
+        sends a single 'autonomous_status' event containing all agent states.
+        The dashboard derives per-agent views from this consolidated payload.
+        """
         try:
             from web.services.agent_orchestrator import broadcast_agent_event
-            
-            status_data = self.get_status() # Get the unified status
-            
-            # Update the dashboard real-time list
-            for agent_id, agent_info in status_data.get("agents", {}).items():
-                broadcast_agent_event("agent_status_changed", {
-                    "id": agent_id,
-                    "status": agent_info.get("status", "idle"),
-                    "name": agent_info.get("name"),
-                    "specialty": agent_info.get("role"), 
-                    "current_task": agent_info.get("current_task"),
-                    "current_task_id": agent_info.get("current_task_id"),
-                    "current_thread_id": agent_info.get("current_thread_id"),
-                    "tasks_completed": agent_info.get("tasks_completed", 0)
-                })
-                
-                # Broadcast activity for ANY agent doing something
-                if agent_info.get("status") in ("busy", "working", "active"):
-                    task = agent_info.get("current_task") or "Executing sub-task"
-                    
-                    # For agent terminal box
-                    broadcast_agent_event("agent_output_line", {
-                        "agent_id": agent_id,
-                        "line": f"> [{agent_info.get('name')}] Working on: {task}",
-                        "stream": "stdout"
-                    })
-                    
-                    # For global activity monitor (activity-feed)
-                    broadcast_agent_event("autonomous_activity", {
-                        "message": f"{agent_info.get('name')} is active: {task}",
-                        "type": "info",
-                        "agent_id": agent_id
-                    })
-                elif agent_info.get("status") == "idle" and self.cycle_count % 5 == 0:
-                    # Occasional idle pulse to show life
-                    broadcast_agent_event("autonomous_activity", {
-                        "message": f"{agent_info.get('name')} is seeking tasks...",
-                        "type": "debug",
-                        "agent_id": agent_id
-                    })
-                    
-            # Also broadcast the global autonomous status
+
+            status_data = self.get_status()
+
+            # Single consolidated event - dashboard reads agents from this
             broadcast_agent_event("autonomous_status", status_data)
+
+            # Activity summary (1 event per cycle instead of N per-agent events)
+            active_names = []
+            for agent_id, agent_info in status_data.get("agents", {}).items():
+                if agent_info.get("status") in ("busy", "working", "active"):
+                    active_names.append(agent_info.get("name", agent_id[:8]))
+
+            if active_names:
+                broadcast_agent_event("autonomous_activity", {
+                    "message": f"{len(active_names)} agents active: {', '.join(active_names[:5])}"
+                              + (f" +{len(active_names)-5} more" if len(active_names) > 5 else ""),
+                    "type": "info",
+                    "active_count": len(active_names),
+                    "total_count": len(status_data.get("agents", {})),
+                })
+            elif self.cycle_count % 5 == 0:
+                total = len(status_data.get("agents", {}))
+                if total > 0:
+                    broadcast_agent_event("autonomous_activity", {
+                        "message": f"{total} agents idle, seeking tasks...",
+                        "type": "debug",
+                        "active_count": 0,
+                        "total_count": total,
+                    })
         except Exception as e:
             logger.debug(f"Broadcast error: {e}")
 

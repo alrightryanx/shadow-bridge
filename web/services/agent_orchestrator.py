@@ -23,6 +23,7 @@ from collections import defaultdict
 
 from .lock_manager import get_lock_manager
 from .subagent_loop import get_subagent_loop_controller
+from .state_store import get_state_store
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,6 @@ output_callbacks: Dict[str, List[Callable]] = defaultdict(list)
 # Task completion tracking
 agent_task_events: Dict[str, threading.Event] = {}  # agent_id -> completion event
 agent_task_states: Dict[str, Dict] = {}  # agent_id -> {task, status, started_at}
-agent_task_blocks: List[Dict] = []  # recent task block events
-MAX_TASK_BLOCKS = 50
 
 # Crash recovery tracking
 agent_restart_counts: Dict[str, List[float]] = defaultdict(list)  # agent_id -> [timestamps]
@@ -70,17 +69,40 @@ RESOURCE_DISK_MIN_GB = float(os.environ.get("AGENT_DISK_MIN_GB", "1.0"))  # GB f
 MAX_LOG_LINES_PER_AGENT = int(os.environ.get("AGENT_MAX_LOG_LINES", "1000"))
 STATUS_FETCH_POOL_SIZE = int(os.environ.get("AGENT_STATUS_POOL_SIZE", "50"))
 
+# WebSocket output batching config
+OUTPUT_BATCH_INTERVAL = float(os.environ.get("AGENT_OUTPUT_BATCH_INTERVAL", "1.0"))
+OUTPUT_BATCH_MAX_LINES = int(os.environ.get("AGENT_OUTPUT_BATCH_MAX_LINES", "20"))
+
+# Output batch buffer (agent_id -> list of recent lines)
+_output_batch: Dict[str, List[Dict]] = defaultdict(list)
+_output_batch_lock = threading.Lock()
+_output_batch_thread: Optional[threading.Thread] = None
+
 
 def _record_task_block(entry: Dict):
-    """Record a task block event for UI/API visibility."""
-    agent_task_blocks.append(entry)
-    if len(agent_task_blocks) > MAX_TASK_BLOCKS:
-        del agent_task_blocks[0:len(agent_task_blocks) - MAX_TASK_BLOCKS]
+    """Record a task block event to SQLite for crash-proof persistence."""
+    try:
+        store = get_state_store()
+        store.record_task_block(
+            agent_id=entry.get("agent_id", ""),
+            task_id=entry.get("task_id", ""),
+            thread_id=entry.get("thread_id", ""),
+            repo=entry.get("repo"),
+            lock_paths=entry.get("lock_paths", []),
+            reason=entry.get("reason", ""),
+        )
+    except Exception as e:
+        logger.error(f"Failed to record task block: {e}")
 
 
 def get_task_blocks() -> List[Dict]:
-    """Get recent task block events."""
-    return list(agent_task_blocks)
+    """Get recent task block events from SQLite."""
+    try:
+        store = get_state_store()
+        return store.get_task_blocks(limit=50)
+    except Exception as e:
+        logger.error(f"Failed to get task blocks: {e}")
+        return []
 
 
 def _build_protocol_header(task_id: str, thread_id: str) -> str:
@@ -730,6 +752,23 @@ def _finalize_task(
 
     broadcast_agent_event("agent_task_completed", event_payload)
 
+    # Record performance to SQLite for smart routing
+    task_duration = elapsed_ms or 0
+    if not task_duration and state.get("started_at"):
+        try:
+            started_ts = datetime.fromisoformat(state["started_at"]).timestamp()
+            task_duration = int((time.time() - started_ts) * 1000)
+        except (ValueError, TypeError):
+            pass
+    record_task_performance(
+        agent_id=agent_id,
+        task_id=state.get("task_id", ""),
+        category=agent.get("specialty", "general") if agent else "general",
+        success=(normalized_status == "success"),
+        duration_ms=task_duration,
+        repo=state.get("repo", ""),
+    )
+
     if agent:
         broadcast_agent_event("agent_status_changed", get_agent_status(agent_id))
 
@@ -839,13 +878,13 @@ def _read_agent_stream(agent_id: str, stream, stream_type: str, process=None):
             except Exception as e:
                 logger.debug(f"Error handling loop marker: {e}")
 
-            # Broadcast output line
-            broadcast_agent_event("agent_output_line", {
-                "agent_id": agent_id,
-                "line": line,
-                "stream": stream_type,
-                "timestamp": log_entry["timestamp"]
-            })
+            # Queue output for batched WebSocket broadcast (reduces flood at 100+ agents)
+            with _output_batch_lock:
+                _output_batch[agent_id].append({
+                    "line": line,
+                    "stream": stream_type,
+                    "timestamp": log_entry["timestamp"]
+                })
 
             # Send to session if linked
             agent = active_agents.get(agent_id)
@@ -1111,6 +1150,48 @@ def get_specialty_prompt(specialty: str) -> str:
     return prompts.get(specialty, prompts["general"])
 
 
+def _flush_output_batches():
+    """Periodically flush batched output lines to WebSocket clients.
+
+    Instead of broadcasting every line individually (thousands/sec at 100 agents),
+    this collects lines for OUTPUT_BATCH_INTERVAL seconds and sends them as a
+    single 'agent_output_batch' event per agent.
+    """
+    while not agent_watchdog_stop_event.wait(OUTPUT_BATCH_INTERVAL):
+        with _output_batch_lock:
+            if not _output_batch:
+                continue
+            batch_snapshot = dict(_output_batch)
+            _output_batch.clear()
+
+        for agent_id, lines in batch_snapshot.items():
+            if not lines:
+                continue
+            # Send only the last N lines to avoid flooding
+            recent = lines[-OUTPUT_BATCH_MAX_LINES:]
+            broadcast_agent_event("agent_output_batch", {
+                "agent_id": agent_id,
+                "lines": recent,
+                "total_lines": len(lines),
+            })
+
+
+def start_output_batch_flusher():
+    """Start the background thread that flushes output batches."""
+    global _output_batch_thread
+
+    if _output_batch_thread and _output_batch_thread.is_alive():
+        return
+
+    _output_batch_thread = threading.Thread(
+        target=_flush_output_batches,
+        daemon=True,
+        name="output-batch-flusher"
+    )
+    _output_batch_thread.start()
+    logger.info(f"Output batch flusher started (interval={OUTPUT_BATCH_INTERVAL}s)")
+
+
 def start_agent_watchdog():
     """Start background watchdog thread to monitor agent health."""
     global agent_watchdog_thread
@@ -1126,9 +1207,16 @@ def start_agent_watchdog():
     logger.info("Agent watchdog started")
 
 
+_watchdog_cycle_count = 0
+
+
 def watchdog_loop():
-    """Monitor all agents and restart crashed ones."""
+    """Monitor all agents, restart crashed ones, and sync state to SQLite."""
+    global _watchdog_cycle_count
+
     while not agent_watchdog_stop_event.wait(WATCHDOG_CHECK_INTERVAL):
+        _watchdog_cycle_count += 1
+
         for agent_id in list(active_agents.keys()):
             agent = active_agents.get(agent_id)
             if not agent:
@@ -1174,6 +1262,10 @@ def watchdog_loop():
                         "task_id": task_id,
                         "elapsed": elapsed
                     })
+
+        # Periodic state sync to SQLite (every 6 cycles = ~30 seconds)
+        if _watchdog_cycle_count % 6 == 0:
+            _sync_state_to_sqlite()
 
 
 def handle_agent_crash(agent_id: str):
@@ -1285,6 +1377,62 @@ def broadcast_agent_event(event_type: str, data: Dict):
         logger.debug(f"Could not broadcast agent event: {e}")
 
 
+def _sync_state_to_sqlite():
+    """Periodically sync in-memory task states to SQLite for crash recovery.
+
+    Called by the watchdog every ~30 seconds. Syncs:
+    - agent_task_states dict -> agent_task_state table
+    - Trims old log entries from SQLite
+    """
+    try:
+        store = get_state_store()
+
+        # Sync task states
+        for agent_id, state in list(agent_task_states.items()):
+            store.upsert_task_state(
+                agent_id,
+                task_id=state.get("task_id"),
+                thread_id=state.get("thread_id"),
+                task_display=state.get("task"),
+                status=state.get("status"),
+                started_at=state.get("started_at"),
+                done_at=state.get("done_at"),
+                done_status=state.get("done_status"),
+                done_reason=state.get("done_reason"),
+                elapsed_ms=state.get("elapsed_ms"),
+                progress_pct=state.get("progress_pct"),
+                progress_msg=state.get("progress_msg"),
+                result_json=json.dumps(state.get("result")) if state.get("result") else None,
+                last_marker_at=state.get("last_marker_at"),
+            )
+
+        # Trim old logs periodically (every 10 sync cycles = ~5 min)
+        if _watchdog_cycle_count % 60 == 0:
+            store.trim_all_logs()
+
+    except Exception as e:
+        logger.debug(f"State sync to SQLite failed: {e}")
+
+
+def record_task_performance(agent_id: str, task_id: str, category: str,
+                            success: bool, duration_ms: int, repo: str = "",
+                            estimated_cost: float = 0.0):
+    """Record task performance to SQLite for smart routing."""
+    try:
+        store = get_state_store()
+        store.record_performance(
+            agent_id=agent_id,
+            task_id=task_id,
+            task_category=category,
+            success=success,
+            duration_ms=duration_ms,
+            repo=repo,
+            estimated_cost=estimated_cost,
+        )
+    except Exception as e:
+        logger.debug(f"Failed to record performance: {e}")
+
+
 def save_agents_data():
     """Save active agents data to file."""
 
@@ -1341,5 +1489,6 @@ def load_agents_data():
 # Load agents data on module import
 load_agents_data()
 
-# Start agent watchdog
+# Start agent watchdog and output batch flusher
 start_agent_watchdog()
+start_output_batch_flusher()
