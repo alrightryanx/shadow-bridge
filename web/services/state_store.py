@@ -215,26 +215,31 @@ class AgentStateStore:
         agent_id: str,
         task_id: str,
     ) -> bool:
-        """Attempt to acquire a lock. Returns True if acquired."""
+        """Attempt to acquire a lock. Returns True if acquired.
+
+        Uses atomic INSERT OR IGNORE + SELECT pattern to avoid race conditions.
+        """
         conn = self._get_conn()
         now = datetime.utcnow().isoformat()
-        try:
-            conn.execute(
-                """INSERT INTO file_locks (lock_key, lock_type, repo, path, agent_id, task_id, acquired_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (lock_key, lock_type, repo, path, agent_id, task_id, now),
-            )
-            conn.commit()
-            return True
-        except sqlite3.IntegrityError:
-            # Lock key already exists - check if same holder
-            row = conn.execute(
-                "SELECT agent_id, task_id FROM file_locks WHERE lock_key = ?",
-                (lock_key,),
-            ).fetchone()
-            if row and row["agent_id"] == agent_id and row["task_id"] == task_id:
-                return True  # Already held by this agent+task
-            return False
+
+        # Atomic operation: try to insert, then check who holds the lock
+        conn.execute(
+            """INSERT OR IGNORE INTO file_locks
+               (lock_key, lock_type, repo, path, agent_id, task_id, acquired_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (lock_key, lock_type, repo, path, agent_id, task_id, now),
+        )
+        conn.commit()
+
+        # Check if we got the lock or already held it
+        row = conn.execute(
+            "SELECT agent_id, task_id FROM file_locks WHERE lock_key = ?",
+            (lock_key,),
+        ).fetchone()
+
+        if row and row["agent_id"] == agent_id and row["task_id"] == task_id:
+            return True  # We acquired it or already held it
+        return False  # Someone else holds it
 
     def get_lock(self, lock_key: str) -> Optional[Dict]:
         """Get lock info for a key."""

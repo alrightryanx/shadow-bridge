@@ -193,8 +193,8 @@ class MonitoringService:
                 total_done = completed + failed
                 if total_done > 0:
                     failure_rate = failed / total_done
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to get task queue stats for failure rate: {e}")
 
             result = {
                 "total": total,
@@ -225,7 +225,8 @@ class MonitoringService:
                 "failed": stats.get("failed", 0),
                 "total": stats.get("total", 0),
             }
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to get task pipeline stats: {e}")
             return {"pending": 0, "assigned": 0, "completed": 0, "failed": 0, "total": 0}
 
     def _evaluate_alerts(self, metrics: Dict):
@@ -286,8 +287,8 @@ class MonitoringService:
                 )
             else:
                 self._resolve_alert("stale_tasks")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to evaluate stale task alerts: {e}")
 
     def _fire_alert(self, category: str, level: str, message: str):
         """Create or update an alert."""
@@ -417,7 +418,8 @@ class MonitoringService:
                 "failed": failed,
                 "success_rate": round(completed / max(completed + failed, 1) * 100, 1),
             }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Task pipeline unavailable: {e}")
             return {"scanned": 0, "queued": 0, "assigned": 0, "completed": 0, "failed": 0, "success_rate": 0}
 
     def get_cost_summary(self) -> Dict:
@@ -434,7 +436,8 @@ class MonitoringService:
                     loop.estimated_cost_usd / max(len(loop.completed_tasks), 1), 4
                 ),
             }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Cost summary unavailable: {e}")
             return {"total_usd": 0, "by_provider": {}, "tasks_completed": 0, "avg_cost_per_task": 0}
 
     def get_lock_contention(self) -> Dict:
@@ -452,7 +455,8 @@ class MonitoringService:
                 "locks": {k: v for k, v in list(locks.items())[:20]},
                 "recent_blocks": blocks,
             }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Lock contention data unavailable: {e}")
             return {"active_locks": 0, "locks": {}, "recent_blocks": []}
 
 

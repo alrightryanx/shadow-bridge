@@ -130,7 +130,7 @@ class MessageBus:
                             data = json.loads(line.strip())
                             msg = AgentMessage.from_dict(data)
                             self._message_log.append(msg)
-                        except (json.JSONDecodeError, KeyError, ValueError) as e:
+                        except (json.JSONDecodeError, KeyError, ValueError, AttributeError, TypeError) as e:
                             logger.debug(f"Skipping malformed message: {e}")
                             continue
                 logger.info(f"Loaded {len(self._message_log)} messages from log")
