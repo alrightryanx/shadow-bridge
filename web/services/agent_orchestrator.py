@@ -858,6 +858,9 @@ def _read_agent_stream(agent_id: str, stream, stream_type: str, process=None):
             # Add to logs
             agent_logs[agent_id].append(log_entry)
 
+            # Track output time for zombie/rate detection
+            record_agent_output_time(agent_id)
+
             # Trim logs (amortized: only trim when 50% over limit)
             log_list = agent_logs[agent_id]
             if len(log_list) > MAX_LOG_LINES_PER_AGENT * 1.5:
@@ -1209,13 +1212,155 @@ def start_agent_watchdog():
 
 _watchdog_cycle_count = 0
 
+# Enhanced watchdog tracking
+_agent_last_output_time: Dict[str, float] = {}  # agent_id -> timestamp of last output
+_agent_output_rate: Dict[str, int] = {}  # agent_id -> lines in current rate window
+_agent_rate_window_start: Dict[str, float] = {}  # agent_id -> rate window start time
+_crash_timestamps: List[float] = []  # timestamps of recent crashes for cascade detection
+_cascade_paused = False  # True if cascade failure protection tripped
+
+# Enhanced watchdog config
+ZOMBIE_TIMEOUT_SECONDS = int(os.environ.get("AGENT_ZOMBIE_TIMEOUT", "300"))  # 5 min no output = zombie
+AGENT_MEMORY_LIMIT_MB = int(os.environ.get("AGENT_MEMORY_LIMIT_MB", "500"))  # per-agent RSS limit
+CASCADE_WINDOW_SECONDS = int(os.environ.get("AGENT_CASCADE_WINDOW", "300"))  # 5 min window
+CASCADE_FAILURE_THRESHOLD = float(os.environ.get("AGENT_CASCADE_THRESHOLD", "0.3"))  # 30% crash = pause
+OUTPUT_RATE_LIMIT = int(os.environ.get("AGENT_OUTPUT_RATE_LIMIT", "100"))  # lines/sec
+
+
+def record_agent_output_time(agent_id: str):
+    """Called when an agent produces output. Tracks for zombie detection."""
+    _agent_last_output_time[agent_id] = time.time()
+
+    # Output rate tracking
+    now = time.time()
+    window_start = _agent_rate_window_start.get(agent_id, 0)
+    if now - window_start > 5:  # 5-second rate windows
+        _agent_output_rate[agent_id] = 1
+        _agent_rate_window_start[agent_id] = now
+    else:
+        _agent_output_rate[agent_id] = _agent_output_rate.get(agent_id, 0) + 1
+
+
+def _check_cascade_failure() -> bool:
+    """Check if too many agents crashed recently. Returns True if cascade detected."""
+    global _cascade_paused
+
+    now = time.time()
+    # Clean old crash timestamps
+    _crash_timestamps[:] = [t for t in _crash_timestamps if now - t < CASCADE_WINDOW_SECONDS]
+
+    total_agents = len(active_agents)
+    if total_agents < 3:
+        return False  # Too few agents to trigger cascade
+
+    crash_ratio = len(_crash_timestamps) / total_agents
+    if crash_ratio >= CASCADE_FAILURE_THRESHOLD:
+        if not _cascade_paused:
+            _cascade_paused = True
+            logger.critical(
+                f"CASCADE FAILURE: {len(_crash_timestamps)}/{total_agents} agents "
+                f"crashed in {CASCADE_WINDOW_SECONDS}s. PAUSING ALL AGENTS."
+            )
+            broadcast_agent_event("cascade_failure", {
+                "crashes": len(_crash_timestamps),
+                "total_agents": total_agents,
+                "ratio": round(crash_ratio, 2),
+                "window_seconds": CASCADE_WINDOW_SECONDS,
+            })
+        return True
+    else:
+        _cascade_paused = False
+        return False
+
+
+def _check_zombie(agent_id: str, agent: Dict) -> bool:
+    """Check if an agent is a zombie (alive but no output). Returns True if zombie."""
+    last_output = _agent_last_output_time.get(agent_id)
+    if last_output is None:
+        # Use spawn time as fallback
+        spawned = agent.get("spawned_at")
+        if spawned:
+            try:
+                last_output = datetime.fromisoformat(spawned).timestamp()
+            except (ValueError, TypeError):
+                last_output = time.time()
+        else:
+            last_output = time.time()
+        _agent_last_output_time[agent_id] = last_output
+
+    silent_seconds = time.time() - last_output
+    if silent_seconds > ZOMBIE_TIMEOUT_SECONDS:
+        logger.warning(
+            f"Watchdog: agent {agent_id} is a zombie "
+            f"(no output for {silent_seconds:.0f}s, limit {ZOMBIE_TIMEOUT_SECONDS}s)"
+        )
+        broadcast_agent_event("agent_zombie_detected", {
+            "agent_id": agent_id,
+            "silent_seconds": round(silent_seconds),
+        })
+        return True
+    return False
+
+
+def _check_memory(agent_id: str, process) -> bool:
+    """Check if an agent process exceeds memory limit. Returns True if over limit."""
+    try:
+        proc = psutil.Process(process.pid)
+        rss_mb = proc.memory_info().rss / (1024 * 1024)
+        if rss_mb > AGENT_MEMORY_LIMIT_MB:
+            logger.warning(
+                f"Watchdog: agent {agent_id} using {rss_mb:.0f}MB "
+                f"(limit {AGENT_MEMORY_LIMIT_MB}MB), restarting"
+            )
+            broadcast_agent_event("agent_memory_exceeded", {
+                "agent_id": agent_id,
+                "rss_mb": round(rss_mb),
+                "limit_mb": AGENT_MEMORY_LIMIT_MB,
+            })
+            return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    return False
+
+
+def _check_output_rate(agent_id: str) -> bool:
+    """Check if agent is producing excessive output (possible loop). Returns True if looping."""
+    rate = _agent_output_rate.get(agent_id, 0)
+    window_start = _agent_rate_window_start.get(agent_id, 0)
+    elapsed = time.time() - window_start
+    if elapsed < 1:
+        return False
+    lines_per_sec = rate / max(elapsed, 1)
+    if lines_per_sec > OUTPUT_RATE_LIMIT:
+        logger.warning(
+            f"Watchdog: agent {agent_id} producing {lines_per_sec:.0f} lines/sec "
+            f"(limit {OUTPUT_RATE_LIMIT}), possible loop - pausing"
+        )
+        broadcast_agent_event("agent_output_flood", {
+            "agent_id": agent_id,
+            "lines_per_sec": round(lines_per_sec),
+            "limit": OUTPUT_RATE_LIMIT,
+        })
+        return True
+    return False
+
 
 def watchdog_loop():
-    """Monitor all agents, restart crashed ones, and sync state to SQLite."""
+    """Monitor all agents with enhanced health checks.
+
+    Detects: crashes, zombies, memory leaks, cascade failures, output floods, stuck tasks.
+    """
     global _watchdog_cycle_count
 
     while not agent_watchdog_stop_event.wait(WATCHDOG_CHECK_INTERVAL):
         _watchdog_cycle_count += 1
+
+        # Cascade failure check (every cycle)
+        if _check_cascade_failure():
+            # Don't restart anything during cascade - just wait
+            if _watchdog_cycle_count % 12 == 0:
+                _sync_state_to_sqlite()
+            continue
 
         for agent_id in list(active_agents.keys()):
             agent = active_agents.get(agent_id)
@@ -1226,13 +1371,39 @@ def watchdog_loop():
             if not process:
                 continue
 
-            # Check if process died
+            # 1. Check if process died
             if process.poll() is not None:
                 logger.warning(f"Watchdog detected crash: agent {agent_id}")
+                _crash_timestamps.append(time.time())
                 handle_agent_crash(agent_id)
                 continue
 
-            # Check for stuck tasks (no output for TASK_TIMEOUT_SECONDS)
+            # 2. Zombie detection (alive but silent)
+            if _check_zombie(agent_id, agent):
+                logger.info(f"Watchdog restarting zombie agent {agent_id}")
+                _crash_timestamps.append(time.time())
+                handle_agent_crash(agent_id)
+                continue
+
+            # 3. Memory leak detection
+            if _check_memory(agent_id, process):
+                _crash_timestamps.append(time.time())
+                handle_agent_crash(agent_id)
+                continue
+
+            # 4. Output rate flood detection
+            if _check_output_rate(agent_id):
+                # Pause the agent rather than restart
+                agent["status"] = "paused_flood"
+                agent["current_task"] = None
+                agent["current_task_id"] = None
+                broadcast_agent_event("agent_status_changed", {
+                    "agent_id": agent_id,
+                    "status": "paused_flood",
+                })
+                continue
+
+            # 5. Stuck task detection (original)
             state = agent_task_states.get(agent_id, {})
             if state.get("started_at") and not state.get("done_at"):
                 try:
@@ -1273,6 +1444,20 @@ def handle_agent_crash(agent_id: str):
     agent = active_agents.get(agent_id)
     if not agent:
         return
+
+    # Clean up watchdog tracking data
+    _agent_last_output_time.pop(agent_id, None)
+    _agent_output_rate.pop(agent_id, None)
+    _agent_rate_window_start.pop(agent_id, None)
+
+    # Return assigned tasks to pending in persistent queue
+    try:
+        store = get_state_store()
+        unassigned = store.unassign_agent_tasks(agent_id)
+        if unassigned:
+            logger.info(f"Returned {unassigned} tasks from crashed agent {agent_id} to pending queue")
+    except Exception as e:
+        logger.error(f"Failed to unassign tasks from crashed agent: {e}")
 
     # Check if intentional stop (user-initiated)
     if agent.get('intentional_stop'):

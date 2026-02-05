@@ -40,6 +40,7 @@ from web.services.agent_orchestrator import (
 from web.services.subagent_loop import get_subagent_loop_controller, SubagentLoopController
 from web.services.routine_scheduler import get_routine_scheduler
 from web.services.loop_intelligence import get_loop_intelligence
+from web.services.state_store import get_state_store
 
 logger = logging.getLogger(__name__)
 
@@ -167,10 +168,11 @@ class AutonomousLoop:
         self.agents: Dict[str, dict] = {}  # agent_id -> {role, provider, model, repo, current_task}
         self.agent_configs: List[dict] = []
 
-        # Task tracking
+        # Task tracking (hydrated from SQLite on init for crash recovery)
         self.task_queue: List[dict] = []
         self.completed_tasks: List[dict] = []
         self.failed_tasks: List[dict] = []
+        self._hydrate_tasks_from_sqlite()
         self._repo_completions: Dict[str, int] = {}  # repo -> completions since last build
         self._repo_workspaces: Dict[str, str] = {}  # repo -> workspace root
         self.efficiency_log: List[dict] = [] # Track task efficiency: {agent_id, task_id, duration_ms}
@@ -189,6 +191,45 @@ class AutonomousLoop:
         self.cycle_count = 0
         self.started_at: Optional[str] = None
         self.last_scan_time: Optional[float] = None
+
+    def _hydrate_tasks_from_sqlite(self):
+        """Recover pending/assigned tasks from SQLite after process restart."""
+        try:
+            store = get_state_store()
+            pending = store.get_pending_tasks(limit=500)
+            assigned = store.get_assigned_tasks()
+
+            # Re-queue assigned tasks as pending (agents died on crash)
+            for t in assigned:
+                store.unassign_task_db(t["id"])
+                t["status"] = "pending"
+                t["assigned_to"] = None
+
+            recovered = pending + assigned
+            if recovered:
+                # Avoid duplicates with any already-loaded in-memory tasks
+                existing_ids = {str(t.get("id")) for t in self.task_queue}
+                for t in recovered:
+                    if t["id"] not in existing_ids:
+                        self.task_queue.append(t)
+                        existing_ids.add(t["id"])
+                logger.info(f"Hydrated {len(recovered)} tasks from SQLite (crash recovery)")
+
+            # Also load recent completed/failed for status display
+            completed = store.get_completed_tasks_db(limit=100)
+            failed = store.get_failed_tasks_db(limit=50)
+            if completed:
+                existing_completed = {str(t.get("id")) for t in self.completed_tasks}
+                for t in completed:
+                    if t["id"] not in existing_completed:
+                        self.completed_tasks.append(t)
+            if failed:
+                existing_failed = {str(t.get("id")) for t in self.failed_tasks}
+                for t in failed:
+                    if t["id"] not in existing_failed:
+                        self.failed_tasks.append(t)
+        except Exception as e:
+            logger.error(f"Failed to hydrate tasks from SQLite: {e}")
 
     def _get_pulse_nudge(self) -> str:
         """Read current time nudges from pulse.md."""
@@ -604,19 +645,39 @@ class AutonomousLoop:
         return tasks
 
     def add_tasks(self, tasks: List[dict]) -> int:
-        """Add tasks to the in-memory queue with simple dedupe."""
+        """Add tasks to both in-memory queue and persistent SQLite store with dedupe."""
         if not tasks:
             return 0
+
+        import hashlib
 
         existing_ids = {str(t.get("id")) for t in self.task_queue}
         existing_keys = {(t.get("repo", ""), t.get("title", "")) for t in self.task_queue}
         added = 0
+        store = get_state_store()
 
         for task in tasks:
-            task_id = str(task.get("id"))
+            task_id = str(task.get("id") or uuid.uuid4().hex[:12])
             key = (task.get("repo", ""), task.get("title", ""))
             if task_id in existing_ids or key in existing_keys:
                 continue
+
+            task["id"] = task_id
+            dedup_hash = hashlib.sha256(f"{key[0]}:{key[1]}".encode()).hexdigest()[:16]
+
+            # Persist to SQLite
+            store.enqueue_task(
+                task_id=task_id,
+                title=task.get("title", ""),
+                description=task.get("description", ""),
+                category=task.get("category", ""),
+                priority=task.get("priority", 3),
+                repo=task.get("repo", ""),
+                file_path=task.get("file_path", task.get("file", "")),
+                dedup_hash=dedup_hash,
+            )
+
+            # Also keep in memory for fast access
             self.task_queue.append(task)
             existing_ids.add(task_id)
             existing_keys.add(key)
@@ -625,31 +686,40 @@ class AutonomousLoop:
         return added
 
     def remove_task(self, task_id: str) -> bool:
-        """Remove a task from the queue or SQLite database."""
-        # 1. Check in-memory queue
+        """Remove a task from both in-memory queue and persistent store."""
+        removed = False
+
+        # 1. Remove from in-memory queue
         for i, task in enumerate(self.task_queue):
             if str(task.get("id")) == str(task_id):
                 self.task_queue.pop(i)
-                logger.info(f"Removed task {task_id} from in-memory queue")
-                return True
+                removed = True
+                break
 
-        # 2. Check SQLite database (goals table)
-        try:
-            import sqlite3
-            SQLITE_DB_PATH = r"C:\shadow\backend\data\shadow_ai.db"
-            if os.path.exists(SQLITE_DB_PATH):
-                with sqlite3.connect(SQLITE_DB_PATH, timeout=5.0) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT id FROM goals WHERE id = ?", (task_id,))
-                    if cursor.fetchone():
-                        cursor.execute("DELETE FROM goals WHERE id = ?", (task_id,))
-                        conn.commit()
-                        logger.info(f"Deleted task {task_id} from SQLite goals table")
-                        return True
-        except Exception as e:
-            logger.error(f"Error deleting task {task_id} from SQLite: {e}")
+        # 2. Remove from persistent task queue
+        store = get_state_store()
+        if store.delete_task_db(str(task_id)):
+            removed = True
 
-        return False
+        # 3. Fallback: check legacy SQLite goals table
+        if not removed:
+            try:
+                import sqlite3
+                SQLITE_DB_PATH = r"C:\shadow\backend\data\shadow_ai.db"
+                if os.path.exists(SQLITE_DB_PATH):
+                    with sqlite3.connect(SQLITE_DB_PATH, timeout=5.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT id FROM goals WHERE id = ?", (task_id,))
+                        if cursor.fetchone():
+                            cursor.execute("DELETE FROM goals WHERE id = ?", (task_id,))
+                            conn.commit()
+                            removed = True
+            except Exception as e:
+                logger.error(f"Error deleting task {task_id} from legacy SQLite: {e}")
+
+        if removed:
+            logger.info(f"Removed task {task_id}")
+        return removed
 
     def get_builds(self) -> List[dict]:
         """Get build history."""
@@ -915,6 +985,15 @@ After the protocol markers, respond with a JSON list of tasks:
                 agent_info["status"] = "working"
                 assigned += 1
 
+                # Persist assignment to SQLite
+                try:
+                    get_state_store().assign_task_db(
+                        task["id"], agent_id,
+                        workspace_root=task.get("workspace_root", ""),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to persist task assignment: {e}")
+
                 logger.info(f"Assigned task '{task['title']}' to agent {agent_info.get('name')}")
 
                 self._broadcast_event("task_assigned", {
@@ -1090,6 +1169,12 @@ After the protocol markers, respond with a JSON list of tasks:
                 self.task_queue.remove(task)
                 self._record_success()
 
+                # Persist to SQLite
+                try:
+                    get_state_store().complete_task_db(task_id)
+                except Exception as e:
+                    logger.error(f"Failed to persist task completion: {e}")
+
                 # Track repo completions for build trigger
                 repo = task.get("repo", "")
                 self._repo_completions[repo] = self._repo_completions.get(repo, 0) + 1
@@ -1124,6 +1209,12 @@ After the protocol markers, respond with a JSON list of tasks:
                 task["failed_at"] = datetime.utcnow().isoformat()
                 self.failed_tasks.append(task)
                 self.task_queue.remove(task)
+
+                # Persist to SQLite
+                try:
+                    get_state_store().fail_task_db(task_id)
+                except Exception as e:
+                    logger.error(f"Failed to persist task failure: {e}")
 
                 # Cleanup workspace after failure too
                 self._cleanup_task_workspace(task, agent_id)

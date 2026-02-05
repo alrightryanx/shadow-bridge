@@ -118,6 +118,30 @@ class AgentStateStore:
             );
             CREATE INDEX IF NOT EXISTS idx_blocks_time ON task_blocks(timestamp);
 
+            -- Persistent task queue (replaces in-memory task_queue list)
+            CREATE TABLE IF NOT EXISTS task_queue (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                category TEXT,
+                priority INTEGER DEFAULT 3,
+                status TEXT DEFAULT 'pending',
+                repo TEXT,
+                file_path TEXT,
+                assigned_to TEXT,
+                workspace_root TEXT,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                failed_at TEXT,
+                assigned_at TEXT,
+                dedup_hash TEXT UNIQUE,
+                metadata_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_tq_status ON task_queue(status);
+            CREATE INDEX IF NOT EXISTS idx_tq_repo ON task_queue(repo);
+            CREATE INDEX IF NOT EXISTS idx_tq_assigned ON task_queue(assigned_to);
+            CREATE INDEX IF NOT EXISTS idx_tq_priority ON task_queue(priority, created_at);
+
             -- Agent performance history (new - for smart routing in Phase 3)
             CREATE TABLE IF NOT EXISTS agent_performance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -469,6 +493,230 @@ class AgentStateStore:
             return 0.0
         return (row["wins"] or 0) / row["total"]
 
+    # ---- Persistent Task Queue (replaces in-memory task_queue list) ----
+
+    def enqueue_task(
+        self,
+        task_id: str,
+        title: str,
+        description: str = "",
+        category: str = "",
+        priority: int = 3,
+        repo: str = "",
+        file_path: str = "",
+        dedup_hash: str = "",
+        metadata: Optional[Dict] = None,
+    ) -> bool:
+        """Add a task to the persistent queue. Returns False if duplicate."""
+        import json
+
+        conn = self._get_conn()
+        now = datetime.utcnow().isoformat()
+        try:
+            conn.execute(
+                """INSERT INTO task_queue
+                   (id, title, description, category, priority, status, repo,
+                    file_path, created_at, dedup_hash, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+                (task_id, title, description, category, priority, repo,
+                 file_path, now, dedup_hash or None,
+                 json.dumps(metadata) if metadata else None),
+            )
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False  # Duplicate dedup_hash
+
+    def enqueue_tasks_batch(self, tasks: List[Dict]) -> int:
+        """Bulk-insert tasks. Returns count of successfully added tasks."""
+        import json
+        import hashlib
+
+        conn = self._get_conn()
+        now = datetime.utcnow().isoformat()
+        added = 0
+        for t in tasks:
+            task_id = t.get("id", "")
+            title = t.get("title", "")
+            repo = t.get("repo", "")
+            dedup_hash = t.get("dedup_hash") or hashlib.sha256(
+                f"{repo}:{title}".encode()
+            ).hexdigest()[:16]
+            try:
+                conn.execute(
+                    """INSERT INTO task_queue
+                       (id, title, description, category, priority, status, repo,
+                        file_path, created_at, dedup_hash, metadata_json)
+                       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+                    (task_id, title, t.get("description", ""),
+                     t.get("category", ""), t.get("priority", 3),
+                     repo, t.get("file_path", ""), now, dedup_hash,
+                     json.dumps(t.get("metadata")) if t.get("metadata") else None),
+                )
+                added += 1
+            except sqlite3.IntegrityError:
+                continue  # Skip duplicates
+        conn.commit()
+        return added
+
+    def get_pending_tasks(
+        self,
+        repo: Optional[str] = None,
+        category: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """Get pending tasks ordered by priority then creation time."""
+        conn = self._get_conn()
+        query = "SELECT * FROM task_queue WHERE status = 'pending'"
+        params: list = []
+        if repo:
+            query += " AND repo = ?"
+            params.append(repo)
+        if category:
+            query += " AND category = ?"
+            params.append(category)
+        query += " ORDER BY priority ASC, created_at ASC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [self._task_row_to_dict(r) for r in rows]
+
+    def get_assigned_tasks(self, agent_id: Optional[str] = None) -> List[Dict]:
+        """Get tasks currently assigned to agents."""
+        conn = self._get_conn()
+        if agent_id:
+            rows = conn.execute(
+                "SELECT * FROM task_queue WHERE status = 'assigned' AND assigned_to = ?",
+                (agent_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM task_queue WHERE status = 'assigned'"
+            ).fetchall()
+        return [self._task_row_to_dict(r) for r in rows]
+
+    def get_completed_tasks_db(
+        self,
+        repo: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """Get completed tasks."""
+        conn = self._get_conn()
+        if repo:
+            rows = conn.execute(
+                "SELECT * FROM task_queue WHERE status = 'completed' AND repo = ? ORDER BY completed_at DESC LIMIT ?",
+                (repo, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM task_queue WHERE status = 'completed' ORDER BY completed_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._task_row_to_dict(r) for r in rows]
+
+    def get_failed_tasks_db(self, limit: int = 100) -> List[Dict]:
+        """Get failed tasks."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM task_queue WHERE status = 'failed' ORDER BY failed_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [self._task_row_to_dict(r) for r in rows]
+
+    def assign_task_db(self, task_id: str, agent_id: str, workspace_root: str = "") -> bool:
+        """Assign a pending task to an agent. Returns False if task not pending."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """UPDATE task_queue SET status = 'assigned', assigned_to = ?,
+               assigned_at = ?, workspace_root = ?
+               WHERE id = ? AND status = 'pending'""",
+            (agent_id, datetime.utcnow().isoformat(), workspace_root, task_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def complete_task_db(self, task_id: str) -> bool:
+        """Mark a task as completed."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE task_queue SET status = 'completed', completed_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), task_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def fail_task_db(self, task_id: str) -> bool:
+        """Mark a task as failed."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE task_queue SET status = 'failed', failed_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), task_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def unassign_task_db(self, task_id: str) -> bool:
+        """Return an assigned task to pending (e.g., agent crashed)."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE task_queue SET status = 'pending', assigned_to = NULL, assigned_at = NULL WHERE id = ?",
+            (task_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_task_db(self, task_id: str) -> bool:
+        """Permanently remove a task from the queue."""
+        conn = self._get_conn()
+        cursor = conn.execute("DELETE FROM task_queue WHERE id = ?", (task_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def get_task_queue_stats(self) -> Dict:
+        """Get task queue statistics."""
+        conn = self._get_conn()
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'assigned' THEN 1 ELSE 0 END) as assigned,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+            FROM task_queue
+        """).fetchone()
+        return {
+            "total": row["total"] or 0,
+            "pending": row["pending"] or 0,
+            "assigned": row["assigned"] or 0,
+            "completed": row["completed"] or 0,
+            "failed": row["failed"] or 0,
+        }
+
+    def unassign_agent_tasks(self, agent_id: str) -> int:
+        """Return all tasks assigned to an agent back to pending (e.g., agent crashed)."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE task_queue SET status = 'pending', assigned_to = NULL, assigned_at = NULL WHERE assigned_to = ? AND status = 'assigned'",
+            (agent_id,),
+        )
+        conn.commit()
+        return cursor.rowcount
+
+    @staticmethod
+    def _task_row_to_dict(row) -> Dict:
+        """Convert a task_queue row to a dict, parsing JSON fields."""
+        import json
+
+        d = dict(row)
+        meta = d.pop("metadata_json", None)
+        if meta:
+            try:
+                d["metadata"] = json.loads(meta)
+            except (json.JSONDecodeError, TypeError):
+                d["metadata"] = {}
+        else:
+            d["metadata"] = {}
+        return d
+
     # ---- Utility ----
 
     def close(self):
@@ -491,6 +739,7 @@ class AgentStateStore:
         states = conn.execute("SELECT COUNT(*) as c FROM agent_task_state").fetchone()["c"]
         blocks = conn.execute("SELECT COUNT(*) as c FROM task_blocks").fetchone()["c"]
         perf = conn.execute("SELECT COUNT(*) as c FROM agent_performance").fetchone()["c"]
+        tq = self.get_task_queue_stats()
 
         # DB file size
         try:
@@ -506,6 +755,7 @@ class AgentStateStore:
             "task_states": states,
             "task_blocks": blocks,
             "performance_records": perf,
+            "task_queue": tq,
         }
 
 
