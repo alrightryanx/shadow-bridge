@@ -47,11 +47,122 @@
     </div>
 </section>
 
+<!-- External Integration -->
+<section class="section">
+    <h2>External Telemetry Ingestion</h2>
+    <div class="ouro-integration-grid">
+        <div class="ouro-card">
+            <div class="ouro-card-icon neutral" style="background:rgba(66,133,244,0.15);color:#4285f4">
+                <span class="material-symbols-outlined">google</span>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Android Vitals</div>
+                <div class="ouro-card-value" style="font-size:14px">Google Play Store</div>
+                <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="syncExternal('vitals')">
+                    <span class="material-symbols-outlined" style="font-size:16px">sync</span> Sync
+                </button>
+            </div>
+        </div>
+        <div class="ouro-card">
+            <div class="ouro-card-icon neutral" style="background:rgba(255,202,40,0.15);color:#ffca28">
+                <span class="material-symbols-outlined">firebase</span>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Crashlytics</div>
+                <div class="ouro-card-value" style="font-size:14px">Firebase Console</div>
+                <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="syncExternal('crashlytics')">
+                    <span class="material-symbols-outlined" style="font-size:16px">sync</span> Sync
+                </button>
+            </div>
+        </div>
+        <div class="ouro-card" style="opacity:0.6">
+            <div class="ouro-card-icon neutral">
+                <span class="material-symbols-outlined">settings_suggest</span>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Configuration</div>
+                <div class="ouro-card-value" style="font-size:14px">Set API Keys</div>
+                <button class="btn btn-secondary btn-sm" style="margin-top:8px" disabled>
+                    <span class="material-symbols-outlined" style="font-size:16px">settings</span> Manage
+                </button>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Health Feedback -->
+<section class="section">
+    <h2>Health Feedback</h2>
+    <div class="ouro-health-grid">
+        <div class="ouro-card ouro-health-score-card">
+            <div class="ouro-health-ring-wrap">
+                <svg class="ouro-health-ring" viewBox="0 0 80 80">
+                    <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="6"/>
+                    <circle id="health-ring-fg" cx="40" cy="40" r="34" fill="none"
+                            stroke="#22c55e" stroke-width="6" stroke-linecap="round"
+                            stroke-dasharray="213.6" stroke-dashoffset="213.6"
+                            transform="rotate(-90 40 40)"/>
+                    <text x="40" y="44" text-anchor="middle" fill="var(--text-primary)"
+                          font-size="18" font-weight="700" id="health-ring-text">--</text>
+                </svg>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Health Score</div>
+                <div class="ouro-card-value" id="health-status-text">--</div>
+            </div>
+        </div>
+        <div class="ouro-card">
+            <div class="ouro-card-icon neutral">
+                <span class="material-symbols-outlined">warning</span>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Active Alerts</div>
+                <div class="ouro-card-value" id="health-alerts-count">--</div>
+            </div>
+        </div>
+        <div class="ouro-card">
+            <div class="ouro-card-icon" id="fix-verified-icon" style="background:rgba(34,197,94,0.15);color:#22c55e">
+                <span class="material-symbols-outlined">verified</span>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Verified Fixes</div>
+                <div class="ouro-card-value" id="fix-verified-count">--</div>
+            </div>
+        </div>
+        <div class="ouro-card">
+            <div class="ouro-card-icon" id="fix-pending-icon" style="background:rgba(245,158,11,0.15);color:#f59e0b">
+                <span class="material-symbols-outlined">hourglass_top</span>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Pending</div>
+                <div class="ouro-card-value" id="fix-pending-count">--</div>
+            </div>
+        </div>
+        <div class="ouro-card">
+            <div class="ouro-card-icon" id="fix-regressed-icon" style="background:rgba(239,68,68,0.15);color:#ef4444">
+                <span class="material-symbols-outlined">error</span>
+            </div>
+            <div class="ouro-card-body">
+                <div class="ouro-card-label">Regressed</div>
+                <div class="ouro-card-value" id="fix-regressed-count">--</div>
+            </div>
+        </div>
+    </div>
+</section>
+
 <!-- Open Issues -->
 <section class="section">
     <h2>Open Issues <span class="ouro-count-badge" id="issues-badge"></span></h2>
     <div id="issues-container" class="ouro-issues-list">
         <div class="empty-state">Loading issues...</div>
+    </div>
+</section>
+
+<!-- Fix History -->
+<section class="section">
+    <h2>Fix History <span class="ouro-count-badge" id="fixes-badge"></span></h2>
+    <div id="fixes-container" class="ouro-fixes-list">
+        <div class="empty-state">Loading fix history...</div>
     </div>
 </section>
 
@@ -276,6 +387,61 @@
     margin: 0;
 }
 
+/* Health Feedback Grid */
+.ouro-health-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+}
+.ouro-health-score-card {
+    grid-column: span 1;
+}
+.ouro-health-ring-wrap {
+    width: 64px; height: 64px; flex-shrink: 0;
+}
+.ouro-health-ring { width: 100%; height: 100%; }
+.ouro-health-ring circle { transition: stroke-dashoffset 0.8s ease, stroke 0.3s ease; }
+
+/* Fix History Table */
+.ouro-fixes-list { display: flex; flex-direction: column; gap: 6px; }
+.ouro-fix-row {
+    display: grid;
+    grid-template-columns: 70px 1fr 140px 90px;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    font-size: 13px;
+}
+.ouro-fix-row .ouro-fix-issue {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.ouro-fix-row .ouro-fix-summary {
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ouro-fix-row .ouro-fix-time {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    text-align: right;
+}
+.ouro-fix-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 12px;
+    text-align: center;
+    text-transform: capitalize;
+}
+.ouro-fix-badge.verified { background: rgba(34,197,94,0.15); color: #22c55e; }
+.ouro-fix-badge.pending { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.ouro-fix-badge.regressed { background: rgba(239,68,68,0.15); color: #ef4444; }
+
 .empty-state { text-align: center; padding: 24px; color: var(--text-tertiary); }
 </style>
 
@@ -284,11 +450,15 @@ document.addEventListener('DOMContentLoaded', function() {
     loadRefinerStatus();
     loadGithubIssues();
     loadAdbStatus();
+    loadHealthFeedback();
+    loadFixVerifications();
 
-    // Auto-refresh every 15s
+    // Auto-refresh
     setInterval(loadRefinerStatus, 15000);
     setInterval(loadGithubIssues, 60000);
     setInterval(loadAdbStatus, 15000);
+    setInterval(loadHealthFeedback, 30000);
+    setInterval(loadFixVerifications, 30000);
 });
 
 async function loadRefinerStatus() {
@@ -434,6 +604,78 @@ async function refreshLog() {
         }
     } catch (e) {
         document.getElementById('log-content').textContent = 'Failed to load log';
+    }
+}
+
+async function loadHealthFeedback() {
+    try {
+        const resp = await fetch('/api/ouroboros/health-context');
+        const data = await resp.json();
+
+        // Health score ring
+        const score = data.health_score;
+        const ringFg = document.getElementById('health-ring-fg');
+        const ringText = document.getElementById('health-ring-text');
+        const statusText = document.getElementById('health-status-text');
+
+        if (score && score.overall != null) {
+            const pct = Math.max(0, Math.min(100, score.overall));
+            const circumference = 213.6;
+            ringFg.setAttribute('stroke-dashoffset', circumference - (circumference * pct / 100));
+
+            // Color based on status
+            const color = score.status === 'healthy' ? '#22c55e' :
+                          score.status === 'degraded' ? '#f59e0b' : '#ef4444';
+            ringFg.setAttribute('stroke', color);
+            ringText.textContent = Math.round(pct);
+            statusText.textContent = score.status.charAt(0).toUpperCase() + score.status.slice(1);
+            statusText.style.color = color;
+        } else {
+            ringText.textContent = '--';
+            statusText.textContent = 'N/A';
+        }
+
+        // Active alerts count
+        const alertsEl = document.getElementById('health-alerts-count');
+        alertsEl.textContent = (data.trend_alerts || []).length;
+    } catch (e) {
+        console.error('Failed to load health feedback:', e);
+    }
+}
+
+async function loadFixVerifications() {
+    try {
+        const resp = await fetch('/api/ouroboros/fix-verifications');
+        const data = await resp.json();
+        const summary = data.summary || {};
+
+        document.getElementById('fix-verified-count').textContent = summary.verified || 0;
+        document.getElementById('fix-pending-count').textContent = summary.pending || 0;
+        document.getElementById('fix-regressed-count').textContent = summary.regressed || 0;
+
+        const badge = document.getElementById('fixes-badge');
+        badge.textContent = summary.total || '';
+
+        const container = document.getElementById('fixes-container');
+        const fixes = data.fixes || [];
+
+        if (!fixes.length) {
+            container.innerHTML = '<div class="empty-state">No deployed fixes recorded</div>';
+            return;
+        }
+
+        container.innerHTML = fixes.map(f => `
+            <div class="ouro-fix-row">
+                <span class="ouro-fix-issue">#${f.issue_number}</span>
+                <span class="ouro-fix-summary" title="${escapeHtml(f.fix_summary || '')}">${escapeHtml(f.fix_summary || 'No summary')}</span>
+                <span class="ouro-fix-time">${f.deployed_at ? formatRelativeTime(new Date(f.deployed_at)) : '--'}</span>
+                <span class="ouro-fix-badge ${f.verification_status || 'pending'}">${f.verification_status || 'pending'}</span>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('Failed to load fix verifications:', e);
+        document.getElementById('fixes-container').innerHTML =
+            '<div class="empty-state">Failed to load fix history</div>';
     }
 }
 

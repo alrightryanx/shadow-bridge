@@ -10,11 +10,14 @@ Provides the Ouroboros self-healing pipeline dashboard with:
 from flask import Blueprint, render_template, jsonify, request
 import json
 import os
+import sqlite3
 import subprocess
 import logging
 import time
+import uuid
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,40 @@ ouroboros_bp = Blueprint('ouroboros', __name__)
 REFINER_STATE_PATH = r'C:\shadow\scripts\.ouroboros_refiner_state.json'
 REFINER_LOG_PATH = r'C:\shadow\scripts\ouroboros_refiner.log'
 ADB_PATH = r'C:\android\platform-tools\adb.exe'
+
+# Database path (same as health_routes.py)
+DB_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    '..', 'backend', 'data', 'shadow_ai.db'
+)
+
+
+def _get_db():
+    """Get a database connection."""
+    return sqlite3.connect(DB_PATH)
+
+
+def _ensure_deployed_fixes_table():
+    """Create the deployed_fixes table if it doesn't exist."""
+    try:
+        conn = _get_db()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deployed_fixes (
+                id TEXT PRIMARY KEY,
+                issue_number INTEGER NOT NULL,
+                pattern_signature TEXT,
+                fix_summary TEXT,
+                ai_backend TEXT,
+                deployed_at TEXT NOT NULL,
+                verification_status TEXT DEFAULT 'pending',
+                verified_at TEXT,
+                notes TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to create deployed_fixes table: {e}")
 
 # GitHub config
 GITHUB_REPO = 'alrightryanx/shadow-android'
@@ -200,6 +237,218 @@ def api_adb_status():
     except Exception as e:
         logger.error(f"Failed to get ADB status: {e}")
         return jsonify({'devices': [], 'count': 0, 'connected': False, 'error': str(e)})
+
+
+@ouroboros_bp.route('/api/ouroboros/health-context')
+def api_health_context():
+    """Aggregated health data for the Ouroboros Refiner.
+
+    Combines health score, matching crash patterns, and active trend alerts
+    into a single response the Refiner can inject into AI prompts.
+    """
+    error_type = request.args.get('error_type', '')
+    file_name = request.args.get('file_name', '')
+
+    result = {
+        'health_score': None,
+        'crash_patterns': [],
+        'trend_alerts': [],
+    }
+
+    try:
+        conn = _get_db()
+
+        # Health score - compute locally (same logic as health_routes fallback)
+        try:
+            cursor = conn.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successes,
+                       AVG(response_time_ms) as avg_response_time
+                FROM usage_analytics
+                WHERE request_timestamp > datetime('now', '-24 hours')
+            """)
+            row = cursor.fetchone()
+            total = row[0] or 0
+            successes = row[1] or 0
+            avg_time = row[2] or 0
+
+            success_rate = (successes / total * 100) if total > 0 else 100
+            api_score = min(100, success_rate)
+            perf_score = max(0, 100 - (avg_time / 300)) if avg_time else 100
+
+            cursor2 = conn.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active
+                FROM agents
+            """)
+            agent_row = cursor2.fetchone()
+            agent_total = agent_row[0] or 0
+            agent_active = agent_row[1] or 0
+            agent_score = (agent_active / agent_total * 100) if agent_total > 0 else 100
+
+            overall = api_score * 0.40 + perf_score * 0.30 + agent_score * 0.30
+            status = 'healthy' if overall >= 80 else ('degraded' if overall >= 50 else 'critical')
+
+            result['health_score'] = {
+                'overall': round(overall, 1),
+                'status': status,
+                'api_reliability': round(api_score, 1),
+                'response_performance': round(perf_score, 1),
+                'agent_stability': round(agent_score, 1),
+            }
+        except Exception as e:
+            logger.debug(f"Health score computation skipped: {e}")
+
+        # Crash patterns - optionally filtered by error_type/file_name
+        try:
+            query = """
+                SELECT id, error_type, file_name, method_name, line_range,
+                       occurrence_count, first_seen, last_seen,
+                       fix_attempts, root_cause_category, resolved, resolution_summary
+                FROM crash_patterns
+                WHERE 1=1
+            """
+            params = []
+            if error_type:
+                query += " AND error_type LIKE ?"
+                params.append(f"%{error_type}%")
+            if file_name:
+                query += " AND file_name LIKE ?"
+                params.append(f"%{file_name}%")
+            query += " ORDER BY occurrence_count DESC LIMIT 20"
+
+            cursor = conn.execute(query, params)
+            columns = [desc[0] for desc in cursor.description]
+            result['crash_patterns'] = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.debug(f"Crash patterns query skipped: {e}")
+
+        # Active trend alerts
+        try:
+            cursor = conn.execute("""
+                SELECT id, metric_name, severity, current_value, baseline_value,
+                       deviation_pct, message, recommendation, created_at
+                FROM trend_alerts
+                WHERE resolved = 0
+                ORDER BY created_at DESC
+                LIMIT 20
+            """)
+            columns = [desc[0] for desc in cursor.description]
+            result['trend_alerts'] = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.debug(f"Trend alerts query skipped: {e}")
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to build health context: {e}")
+        return jsonify({**result, 'error': str(e)})
+
+    return jsonify(result)
+
+
+@ouroboros_bp.route('/api/ouroboros/fix-deployed', methods=['POST'])
+def api_fix_deployed():
+    """Record a deployed fix for verification tracking.
+
+    Accepts JSON: {issue_number, pattern_signature?, fix_summary?, ai_backend?, deployed_at?}
+    """
+    _ensure_deployed_fixes_table()
+
+    data = request.get_json(silent=True)
+    if not data or 'issue_number' not in data:
+        return jsonify({'success': False, 'error': 'issue_number is required'}), 400
+
+    fix_id = str(uuid.uuid4())[:12]
+    deployed_at = data.get('deployed_at', datetime.now(timezone.utc).isoformat())
+
+    try:
+        conn = _get_db()
+        conn.execute("""
+            INSERT INTO deployed_fixes (id, issue_number, pattern_signature, fix_summary,
+                                        ai_backend, deployed_at, verification_status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+        """, (
+            fix_id,
+            int(data['issue_number']),
+            data.get('pattern_signature', ''),
+            data.get('fix_summary', ''),
+            data.get('ai_backend', ''),
+            deployed_at,
+        ))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'fix_id': fix_id})
+    except Exception as e:
+        logger.error(f"Failed to record deployed fix: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@ouroboros_bp.route('/api/ouroboros/fix-verifications')
+def api_fix_verifications():
+    """Check verification status of deployed fixes.
+
+    Joins deployed_fixes with crash_patterns to see if patterns recurred after fix.
+    """
+    _ensure_deployed_fixes_table()
+
+    try:
+        conn = _get_db()
+
+        # Get all deployed fixes with optional pattern data
+        cursor = conn.execute("""
+            SELECT df.id, df.issue_number, df.pattern_signature, df.fix_summary,
+                   df.ai_backend, df.deployed_at, df.verification_status,
+                   df.verified_at, df.notes,
+                   cp.occurrence_count, cp.last_seen, cp.resolved as pattern_resolved
+            FROM deployed_fixes df
+            LEFT JOIN crash_patterns cp ON df.pattern_signature = cp.id
+            ORDER BY df.deployed_at DESC
+            LIMIT 50
+        """)
+        columns = [desc[0] for desc in cursor.description]
+        fixes = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+
+        # Compute summary stats
+        verified = sum(1 for f in fixes if f['verification_status'] == 'verified')
+        pending = sum(1 for f in fixes if f['verification_status'] == 'pending')
+        regressed = sum(1 for f in fixes if f['verification_status'] == 'regressed')
+
+        return jsonify({
+            'fixes': fixes,
+            'summary': {
+                'verified': verified,
+                'pending': pending,
+                'regressed': regressed,
+                'total': len(fixes),
+            }
+        })
+    except Exception as e:
+        logger.error(f"Failed to fetch fix verifications: {e}")
+        return jsonify({'fixes': [], 'summary': {'verified': 0, 'pending': 0, 'regressed': 0, 'total': 0}, 'error': str(e)})
+
+
+@ouroboros_bp.route('/api/ouroboros/external/sync', methods=['POST'])
+def api_external_sync():
+    """Trigger the external vitals/crashlytics sync script."""
+    try:
+        provider = request.args.get('provider', 'all')
+        script_path = r'C:\shadow\scripts\external_vitals_ingestor.py'
+        
+        # Run the script in the background
+        # We use 'py' for Windows environments as per my instructions
+        cmd = ['py', script_path, '--provider', provider]
+        
+        # Start the process without waiting
+        subprocess.Popen(cmd)
+        
+        return jsonify({
+            'success': True, 
+            'message': f'External sync ({provider}) initiated in background.'
+        })
+    except Exception as e:
+        logger.error(f"Failed to initiate external sync: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 def _read_last_lines(filepath, n):

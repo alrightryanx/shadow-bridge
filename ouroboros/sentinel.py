@@ -16,6 +16,8 @@ import requests
 import socket
 import subprocess
 import os
+import sqlite3
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -107,11 +109,12 @@ class Sentinel:
 
                     self.health_status[key] = is_healthy
 
-                # Ouroboros V2: Run trend analysis periodically
+                # Ouroboros V2: Run trend analysis and fix verification periodically
                 self._trend_check_counter += 1
                 if self._trend_check_counter >= self._trend_check_interval:
                     self._trend_check_counter = 0
                     self._run_trend_analysis()
+                    self._verify_deployed_fixes()
 
             except Exception as e:
                 logger.error(f"Sentinel monitor error: {e}")
@@ -133,6 +136,94 @@ class Sentinel:
 
         except Exception as e:
             logger.error(f"[Sentinel] Trend analysis failed: {e}")
+
+    def _verify_deployed_fixes(self):
+        """Verify whether deployed fixes actually resolved the crash patterns.
+
+        For each pending fix older than 1 hour:
+        - If the crash pattern's last_seen is BEFORE deployed_at -> verified
+        - If last_seen is AFTER deployed_at AND occurrence_count increased -> regressed
+        - Otherwise -> keep pending (not enough data yet)
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+
+            # Check if deployed_fixes table exists
+            table_check = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='deployed_fixes'"
+            ).fetchone()
+            if not table_check:
+                conn.close()
+                return
+
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+            cursor = conn.execute("""
+                SELECT df.id, df.issue_number, df.pattern_signature, df.deployed_at,
+                       cp.last_seen, cp.occurrence_count
+                FROM deployed_fixes df
+                LEFT JOIN crash_patterns cp ON df.pattern_signature = cp.id
+                WHERE df.verification_status = 'pending'
+                  AND df.deployed_at < ?
+            """, (cutoff,))
+
+            rows = cursor.fetchall()
+            if not rows:
+                conn.close()
+                return
+
+            verified_count = 0
+            regressed_count = 0
+            now_iso = datetime.now(timezone.utc).isoformat()
+
+            for fix_id, issue_number, pattern_sig, deployed_at, last_seen, occurrence_count in rows:
+                if not pattern_sig or not last_seen:
+                    # No linked pattern or no crash data - skip for now
+                    continue
+
+                if last_seen < deployed_at:
+                    # Pattern hasn't recurred since fix -> verified
+                    conn.execute(
+                        "UPDATE deployed_fixes SET verification_status = 'verified', verified_at = ? WHERE id = ?",
+                        (now_iso, fix_id)
+                    )
+                    verified_count += 1
+                    logger.info(f"[Sentinel] Fix {fix_id} for issue #{issue_number} VERIFIED - pattern not seen since deployment")
+                elif last_seen > deployed_at:
+                    # Pattern recurred after fix -> regressed
+                    conn.execute(
+                        "UPDATE deployed_fixes SET verification_status = 'regressed', verified_at = ?, "
+                        "notes = 'Pattern recurred after fix deployment' WHERE id = ?",
+                        (now_iso, fix_id)
+                    )
+                    regressed_count += 1
+                    logger.warning(f"[Sentinel] Fix {fix_id} for issue #{issue_number} REGRESSED - pattern recurred after deployment")
+
+                    # Create a critical trend alert for regressions
+                    import uuid
+                    alert_id = str(uuid.uuid4())[:12]
+                    conn.execute("""
+                        INSERT OR IGNORE INTO trend_alerts
+                            (id, metric_name, severity, current_value, baseline_value,
+                             deviation_pct, message, recommendation, resolved, created_at)
+                        VALUES (?, ?, 'critical', ?, 0, 100.0, ?, ?, 0, ?)
+                    """, (
+                        alert_id,
+                        'fix_regression',
+                        occurrence_count or 0,
+                        f"Fix for issue #{issue_number} regressed - crash pattern recurred after deployment",
+                        f"Review issue #{issue_number} and apply a different fix strategy. Previous approach failed.",
+                        now_iso,
+                    ))
+
+            conn.commit()
+            conn.close()
+
+            if verified_count or regressed_count:
+                logger.info(f"[Sentinel] Fix verification: {verified_count} verified, {regressed_count} regressed")
+
+        except Exception as e:
+            logger.error(f"[Sentinel] Fix verification failed: {e}")
 
     def _check_service(self, config: Dict) -> bool:
         """Checks if a specific service is healthy."""
