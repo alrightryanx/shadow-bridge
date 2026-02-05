@@ -1,0 +1,48 @@
+{"timestamp": "2026-02-01T12:49:26.830889", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:27.267007", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:33.338801", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:33.805738", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:38.349753", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:38.867581", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:43.430090", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:44.007840", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:48.665742", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:49.239740", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:53.745388", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:54.322099", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:58.983992", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:49:59.460233", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:04.226100", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:04.743613", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:09.317531", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:09.854166", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:14.047184", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:14.563591", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:18.946766", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:19.502418", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:24.428849", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:25.172953", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:29.611048", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:30.101546", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:35.274363", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:35.836477", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:40.620978", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:41.150381", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:46.091261", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:46.622020", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:52.180364", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:52.849426", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:58.773555", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:50:59.350929", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:05.012796", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:05.710822", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:11.205741", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:11.753732", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:16.423739", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:16.845761", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:43.398348", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:51:43.785090", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:55:01.688231", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:55:02.114931", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
+{"timestamp": "2026-02-01T12:55:33.002537", "device_id": "TEST-DEVICE-001", "prompt_tokens": 50, "provider": "gemini-api", "request_id": "req-123", "response_tokens": 100, "total_time": 1500, "was_successful": true}
+{"timestamp": "2026-02-01T12:55:33.384823", "device_id": "TEST-DEVICE-001", "provider": "gemini-api", "total_time": 500, "was_successful": true}
