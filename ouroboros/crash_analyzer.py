@@ -11,6 +11,7 @@ This is the brain of Ouroboros. When a crash is received:
 
 import os
 import glob
+import re
 import subprocess
 import json
 import logging
@@ -351,8 +352,56 @@ Analyze the crash and provide your fix:
 class GitHubReporter:
     """Creates GitHub issues for crashes with AI analysis."""
 
+    # Dedup: 24-hour cooldown, persisted to JSON file
+    DEDUP_COOLDOWN_SECS = 24 * 60 * 60
+    DEDUP_FILE = "github_issue_dedup.json"
+
     def __init__(self, repo_path: str):
         self.repo_path = repo_path
+        self._dedup_path = Path(repo_path).parent / "shadow-bridge" / "telemetry_data" / self.DEDUP_FILE
+
+    def _compute_fingerprint(self, title: str) -> str:
+        """Normalize title to a dedup fingerprint, stripping variable numbers."""
+        fp = title
+        fp = re.sub(r'\d+x\d+', 'NxN', fp)
+        fp = re.sub(r'\d+dp', 'Ndp', fp)
+        fp = re.sub(r'\d+ms', 'Nms', fp)
+        fp = re.sub(r'\d+\.\d+', 'N.N', fp)
+        fp = re.sub(r'\d+', 'N', fp)
+        return fp.strip().lower()
+
+    def _load_dedup_cache(self) -> dict:
+        try:
+            if self._dedup_path.exists():
+                with open(self._dedup_path, 'r') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_dedup_cache(self, cache: dict):
+        try:
+            self._dedup_path.parent.mkdir(parents=True, exist_ok=True)
+            # Prune expired entries
+            now = datetime.now().timestamp()
+            pruned = {k: v for k, v in cache.items()
+                      if (now - v) < self.DEDUP_COOLDOWN_SECS}
+            with open(self._dedup_path, 'w') as f:
+                json.dump(pruned, f)
+        except Exception as e:
+            logger.warning(f"Failed to save dedup cache: {e}")
+
+    def _is_duplicate(self, fingerprint: str) -> bool:
+        cache = self._load_dedup_cache()
+        last_filed = cache.get(fingerprint, 0)
+        if last_filed == 0:
+            return False
+        return (datetime.now().timestamp() - last_filed) < self.DEDUP_COOLDOWN_SECS
+
+    def _record_issue(self, fingerprint: str):
+        cache = self._load_dedup_cache()
+        cache[fingerprint] = datetime.now().timestamp()
+        self._save_dedup_cache(cache)
 
     def create_crash_issue(self, analysis: Dict) -> bool:
         """
@@ -371,6 +420,12 @@ class GitHubReporter:
             line_number = analysis.get("line_number", "?")
 
             title = f"[AUTO-FIX] {error_type} in {file_name}:{line_number}"
+
+            # Dedup: skip if a similar issue was recently filed
+            fingerprint = self._compute_fingerprint(title)
+            if self._is_duplicate(fingerprint):
+                logger.info(f"Skipping duplicate crash issue: {title}")
+                return False
 
             # Build issue body
             body = self._build_issue_body(analysis)
@@ -394,6 +449,7 @@ class GitHubReporter:
             if result.returncode == 0:
                 issue_url = result.stdout.strip()
                 logger.info(f"Created GitHub issue: {issue_url}")
+                self._record_issue(fingerprint)
                 return True
             else:
                 logger.error(f"Failed to create issue: {result.stderr}")
