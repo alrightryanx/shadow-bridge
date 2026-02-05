@@ -9,6 +9,12 @@ from cx_Freeze import Executable, setup
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
+
+# web/ and ouroboros/ relocated to shadow-android
+SHADOW_ANDROID_DIR = BASE_DIR.parent / "shadow-android"
+if SHADOW_ANDROID_DIR.exists():
+    sys.path.insert(0, str(SHADOW_ANDROID_DIR))
+
 SV_TTK_PATH = Path(sv_ttk.__file__).parent
 
 def _read_version() -> str:
@@ -22,8 +28,9 @@ def _read_version() -> str:
 
 
 include_files = [
-    (str(BASE_DIR / "web" / "templates"), "web/templates"),
-    (str(BASE_DIR / "web" / "static"), "web/static"),
+    # web/ relocated to shadow-android
+    (str(SHADOW_ANDROID_DIR / "web" / "templates"), "web/templates"),
+    (str(SHADOW_ANDROID_DIR / "web" / "static"), "web/static"),
     (str(BASE_DIR / "images"), "images"),
     (str(BASE_DIR / "icon.ico"), "icon.ico"),
     (str(BASE_DIR / "logo.png"), "logo.png"),
