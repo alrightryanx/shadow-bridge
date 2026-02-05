@@ -434,14 +434,6 @@ body {
     box-shadow: 0 0 8px var(--success);
 }
 
-.connection-banner {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-xs);
-    min-width: 280px;
-}
-
 .connection-health {
     display: flex;
     align-items: center;
@@ -469,28 +461,6 @@ body {
 
 .connection-selection-hint {
     display: none; /* Hidden - redundant with backend/model selectors */
-}
-
-.connection-controls {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    flex-wrap: wrap;
-}
-
-.connection-control {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: 10px;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    color: var(--md-sys-color-on-surface-variant);
-}
-
-.connection-select {
-    min-width: 150px;
-    max-width: 220px;
 }
 
 .device-switcher {
@@ -752,6 +722,14 @@ body {
     height: auto !important;
     color: var(--md-sys-color-on-surface) !important;
     background-position: right center !important;
+    cursor: pointer;
+}
+
+.connection-select option {
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    padding: 8px 12px;
+    font-weight: 500;
 }
 
 .connection-status-wrap {
