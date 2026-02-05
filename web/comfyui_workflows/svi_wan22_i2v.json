@@ -1,0 +1,87 @@
+{
+  "name": "SVI Pro 2.0 + Wan 2.2 Image-to-Video",
+  "description": "Animate a still image into video using SVI Pro 2.0 with Wan 2.2",
+  "version": "1.0",
+  "input_type": "image",
+  "nodes": {
+    "1": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{{INPUT_IMAGE}}"
+      }
+    },
+    "2": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "svi-pro-20/svi_pro_2.0.safetensors"
+      }
+    },
+    "3": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "{{PROMPT}}",
+        "clip": ["2", 1]
+      }
+    },
+    "4": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "{{NEGATIVE_PROMPT}}",
+        "clip": ["2", 1]
+      }
+    },
+    "5": {
+      "class_type": "ImageToLatent",
+      "inputs": {
+        "image": ["1", 0],
+        "vae": ["2", 2]
+      }
+    },
+    "6": {
+      "class_type": "LatentToVideo",
+      "inputs": {
+        "latent": ["5", 0],
+        "length": "{{FRAMES}}"
+      }
+    },
+    "7": {
+      "class_type": "SVIVideoSampler",
+      "inputs": {
+        "model": ["2", 0],
+        "positive": ["3", 0],
+        "negative": ["4", 0],
+        "latent_video": ["6", 0],
+        "seed": "{{SEED}}",
+        "steps": 25,
+        "cfg": 6.5,
+        "denoise": 0.85,
+        "motion_strength": "{{MOTION_STRENGTH}}"
+      }
+    },
+    "8": {
+      "class_type": "VAEDecodeVideo",
+      "inputs": {
+        "samples": ["7", 0],
+        "vae": ["2", 2]
+      }
+    },
+    "9": {
+      "class_type": "VHS_VideoCombine",
+      "inputs": {
+        "images": ["8", 0],
+        "frame_rate": "{{FPS}}",
+        "format": "video/mp4",
+        "filename_prefix": "{{OUTPUT_PREFIX}}",
+        "save_output": true
+      }
+    }
+  },
+  "defaults": {
+    "NEGATIVE_PROMPT": "static, frozen, still image, blurry, distorted, watermark",
+    "FPS": 24,
+    "SEED": -1,
+    "MOTION_STRENGTH": 0.7
+  },
+  "required_inputs": ["INPUT_IMAGE", "PROMPT", "FRAMES"],
+  "output_node": "9"
+}

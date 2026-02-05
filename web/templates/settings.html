@@ -1,0 +1,582 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+<!-- Connection Status -->
+<section class="section">
+    <div class="section-header">
+        <h2>Connection Status</h2>
+    </div>
+    <div class="status-cards">
+        <div class="status-card">
+            <div class="status-icon" id="shadowbridge-status-icon"><span class="material-symbols-outlined">circle</span></div>
+            <div class="status-info">
+                <span class="status-name">ShadowBridge</span>
+                <span class="status-value" id="shadowbridge-status">Checking...</span>
+            </div>
+        </div>
+        <div class="status-card">
+            <div class="status-icon" id="ssh-status-icon"><span class="material-symbols-outlined">circle</span></div>
+            <div class="status-info">
+                <span class="status-name">SSH Connection</span>
+                <span class="status-value" id="ssh-status">Checking...</span>
+            </div>
+        </div>
+        <div class="status-card">
+            <div class="status-icon" id="devices-status-icon"><span class="material-symbols-outlined">circle</span></div>
+            <div class="status-info">
+                <span class="status-name">Devices</span>
+                <span class="status-value" id="devices-status">Checking...</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Device Setup -->
+<section class="section">
+    <h2>Connect New Device</h2>
+    <div class="qr-section">
+        <div class="qr-instructions">
+            <p>Scan this QR code with Shadow app to connect a new device.</p>
+            <p class="qr-note">Make sure both devices are on the same network or use Tailscale.</p>
+            <button class="btn btn-small btn-secondary" onclick="loadQRCode()">
+                <span class="material-symbols-outlined">qr_code_2</span> Regenerate
+            </button>
+        </div>
+        <div class="qr-placeholder" id="qr-code">
+            <div class="qr-loading">
+                <div class="spinner"></div>
+                <span>Loading QR code...</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Connected Devices -->
+<section class="section">
+    <h2>Connected Devices</h2>
+    <p class="section-description">Manage devices connected to ShadowBridge.</p>
+    <div id="devices-list" class="devices-list">
+        <div class="loading-state">
+            <div class="spinner"></div>
+            <span>Loading devices...</span>
+        </div>
+    </div>
+</section>
+
+<!-- Preferences -->
+<section class="section">
+    <h2>Preferences</h2>
+    <div class="settings-form">
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Auto-refresh Interval</span>
+                <span class="setting-description">How often to refresh data from devices</span>
+            </div>
+            <div class="setting-control">
+                <select id="refresh-interval" class="form-select" onchange="saveRefreshInterval()">
+                    <option value="0">Manual only</option>
+                    <option value="30">30 seconds</option>
+                    <option value="60" selected>1 minute</option>
+                    <option value="300">5 minutes</option>
+                    <option value="600">10 minutes</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Data Retention</span>
+                <span class="setting-description">How long to keep cached data locally</span>
+            </div>
+            <div class="setting-control">
+                <select id="data-retention" class="form-select" onchange="saveDataRetention()">
+                    <option value="7">7 days</option>
+                    <option value="30" selected>30 days</option>
+                    <option value="90">90 days</option>
+                    <option value="365">1 year</option>
+                    <option value="0">Forever</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Security -->
+<section class="section">
+    <h2>Security</h2>
+    <div class="settings-form">
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Note Encryption</span>
+                <span class="setting-description">Encrypt notes at rest using AES-256</span>
+            </div>
+            <div class="setting-control">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="note-encryption" onchange="toggleEncryption()">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+        <div class="setting-item" id="encryption-key-setting" style="display: none;">
+            <div class="setting-info">
+                <span class="setting-label">Encryption Passphrase</span>
+                <span class="setting-description">Set a passphrase to encrypt/decrypt notes</span>
+            </div>
+            <div class="setting-control">
+                <input type="password" id="encryption-passphrase" class="form-input" placeholder="Enter passphrase">
+                <button class="btn btn-small btn-primary" onclick="saveEncryptionKey()">Save</button>
+            </div>
+        </div>
+        <div class="setting-item">
+            <div class="setting-info">
+                <span class="setting-label">Auto-lock Timeout</span>
+                <span class="setting-description">Automatically lock encrypted notes after inactivity</span>
+            </div>
+            <div class="setting-control">
+                <select id="auto-lock" class="form-select" onchange="saveAutoLock()">
+                    <option value="0">Never</option>
+                    <option value="5" selected>5 minutes</option>
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Email Verification -->
+<section class="section">
+    <h2>Email Verification</h2>
+    <p class="section-description">Verify your email to enable team features, remote sharing, and account recovery.</p>
+
+    <div id="email-verified-section" class="email-status-section" style="display: none;">
+        <div class="email-verified-badge">
+            <span class="material-symbols-outlined">verified</span>
+            <span>Verified: <strong id="verified-email-display"></strong></span>
+        </div>
+        <button class="btn btn-small btn-secondary" onclick="removeVerifiedEmail()">
+            <span class="material-symbols-outlined">link_off</span> Unlink Email
+        </button>
+    </div>
+
+    <div id="email-unverified-section">
+        <div class="email-form" id="email-request-form">
+            <div class="form-group">
+                <label for="email-input">Email Address</label>
+                <input type="email" id="email-input" class="form-input" placeholder="your@email.com">
+            </div>
+            <button class="btn btn-primary" onclick="requestVerification()">
+                <span class="material-symbols-outlined">send</span> Send Verification Code
+            </button>
+        </div>
+
+        <div class="email-form" id="email-verify-form" style="display: none;">
+            <p class="verify-instructions">Enter the 6-digit code sent to <strong id="verify-email-label"></strong></p>
+            <div class="form-group">
+                <label for="verify-code-input">Verification Code</label>
+                <input type="text" id="verify-code-input" class="form-input verification-code" maxlength="6" placeholder="000000" pattern="[0-9]*" inputmode="numeric">
+            </div>
+            <div class="email-form-actions">
+                <button class="btn btn-secondary" onclick="cancelVerification()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmVerification()">
+                    <span class="material-symbols-outlined">check</span> Verify
+                </button>
+            </div>
+            <p class="verify-note">Code expires in 10 minutes. <a href="#" onclick="requestVerification(); return false;">Resend code</a></p>
+        </div>
+    </div>
+</section>
+
+<!-- Data Management -->
+<section class="section">
+    <h2>Data Management</h2>
+    <div class="data-info">
+        <div class="data-stat">
+            <span class="data-label">Local Data Path</span>
+            <code class="data-value" id="data-path">~/.shadowai/</code>
+        </div>
+        <div class="data-stat">
+            <span class="data-label">Cache Size</span>
+            <span class="data-value" id="cache-size">Calculating...</span>
+        </div>
+        <div class="data-stat">
+            <span class="data-label">Cached Notes</span>
+            <span class="data-value" id="cached-notes">0</span>
+        </div>
+    </div>
+    <div class="data-actions">
+        <button class="btn btn-secondary" onclick="clearCache()">
+            <span class="material-symbols-outlined">delete</span> Clear Cache
+        </button>
+        <button class="btn btn-secondary" onclick="exportAllData()">
+            <span class="material-symbols-outlined">download</span> Export All Data
+        </button>
+    </div>
+
+    <h3 style="margin-top: var(--spacing-xl); margin-bottom: var(--spacing-md);">Data Cleanup</h3>
+    <p class="section-description" style="margin-bottom: var(--spacing-md);">Remove stale data while preserving your most recent device.</p>
+    <div class="data-actions">
+        <button class="btn btn-secondary" onclick="cleanupStaleData()">
+            <span class="material-symbols-outlined">cleaning_services</span> Clean Stale Data
+        </button>
+        <button class="btn btn-secondary" onclick="resetDeviceHistory()">
+            <span class="material-symbols-outlined">devices</span> Reset Device History
+        </button>
+    </div>
+</section>
+
+<!-- Network Configuration -->
+<section class="section">
+    <h2>Network Configuration</h2>
+    <div class="about-info">
+        <div class="about-row">
+            <span class="about-label">Web Dashboard Port</span>
+            <span class="about-value">6767</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Data Receiver Port</span>
+            <span class="about-value">19284</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Discovery Broadcast Port</span>
+            <span class="about-value">19285</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Claude Code Relay Port</span>
+            <span class="about-value">19286</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">Local IP</span>
+            <span class="about-value" id="local-ip">Detecting...</span>
+        </div>
+    </div>
+    <div class="network-check">
+        <button class="btn btn-primary" id="tailscale-check-btn" onclick="checkTailScale()">
+            <span class="material-symbols-outlined">wifi</span> Check TailScale
+        </button>
+        <span id="tailscale-status-label" class="network-status">Unknown</span>
+    </div>
+</section>
+
+<!-- About -->
+<section class="section">
+    <h2>About</h2>
+    <div class="about-info">
+        <div class="about-row">
+            <span class="about-label">Shadow Web Dashboard</span>
+            <span class="about-value">v1.000</span>
+        </div>
+        <div class="about-row">
+            <span class="about-label">ShadowBridge Version</span>
+            <span class="about-value" id="bridge-version">--</span>
+        </div>
+        <div class="about-row clickable" onclick="window.open('https://github.com/alrightryanx/shadowai/releases', '_blank')">
+            <span class="about-label">Changelog</span>
+            <span class="about-value link">View on GitHub <span class="material-symbols-outlined">open_in_new</span></span>
+        </div>
+        <div class="about-row clickable" onclick="window.open('https://ryancartwright.com/shadowai', '_blank')">
+            <span class="about-label">Website</span>
+            <span class="about-value link">ryancartwright.com/shadowai <span class="material-symbols-outlined">open_in_new</span></span>
+        </div>
+        <div class="about-row clickable" onclick="window.open('mailto:contact@ryancartwright.com', '_blank')">
+            <span class="about-label">Contact</span>
+            <span class="about-value link">contact@ryancartwright.com <span class="material-symbols-outlined">open_in_new</span></span>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadStatus();
+    loadQRCode();
+    loadDataStats();
+    loadPreferences();
+    loadEmailVerificationStatus();
+    loadDevicesList();
+});
+
+// ============ Email Verification ============
+
+let pendingVerificationEmail = null;
+
+async function loadEmailVerificationStatus() {
+    const deviceId = getCurrentDeviceId();
+    try {
+        const response = await fetch(`/api/email/verified/${encodeURIComponent(deviceId)}`);
+        const data = await response.json();
+        if (data.email) {
+            document.getElementById('email-verified-section').style.display = 'flex';
+            document.getElementById('email-unverified-section').style.display = 'none';
+            document.getElementById('verified-email-display').textContent = data.email;
+        } else {
+            document.getElementById('email-verified-section').style.display = 'none';
+            document.getElementById('email-unverified-section').style.display = 'block';
+        }
+    } catch (e) { console.error('Failed to load email status:', e); }
+}
+
+function getCurrentDeviceId() {
+    let deviceId = localStorage.getItem('shadow_device_id');
+    if (!deviceId) {
+        deviceId = 'web_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('shadow_device_id', deviceId);
+    }
+    return deviceId;
+}
+
+async function requestVerification() {
+    const email = document.getElementById('email-input').value.trim();
+    if (!email || !email.includes('@')) { showToast('Please enter a valid email address', 'error'); return; }
+    const deviceId = getCurrentDeviceId();
+    try {
+        const response = await fetch('/api/email/verify/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, device_id: deviceId })
+        });
+        const result = await response.json();
+        if (result.success) {
+            pendingVerificationEmail = email;
+            document.getElementById('email-request-form').style.display = 'none';
+            document.getElementById('email-verify-form').style.display = 'block';
+            document.getElementById('verify-email-label').textContent = email;
+            document.getElementById('verify-code-input').value = '';
+            document.getElementById('verify-code-input').focus();
+            if (result.code) { showToast(`Test mode - Code: ${result.code}`, 'info'); }
+            else { showToast(result.message, 'success'); }
+        } else { showToast(result.error || 'Failed to send verification', 'error'); }
+    } catch (e) { showToast('Failed to send verification code', 'error'); }
+}
+
+function cancelVerification() {
+    pendingVerificationEmail = null;
+    document.getElementById('email-request-form').style.display = 'block';
+    document.getElementById('email-verify-form').style.display = 'none';
+}
+
+async function confirmVerification() {
+    const code = document.getElementById('verify-code-input').value.trim();
+    if (!code || code.length !== 6) { showToast('Please enter the 6-digit code', 'error'); return; }
+    if (!pendingVerificationEmail) { cancelVerification(); return; }
+    const deviceId = getCurrentDeviceId();
+    try {
+        const response = await fetch('/api/email/verify/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: pendingVerificationEmail, code: code, device_id: deviceId })
+        });
+        const result = await response.json();
+        if (result.success) {
+            showToast('Email verified successfully!', 'success');
+            pendingVerificationEmail = null;
+            loadEmailVerificationStatus();
+        } else { showToast(result.error || 'Verification failed', 'error'); }
+    } catch (e) { showToast('Verification failed', 'error'); }
+}
+
+async function removeVerifiedEmail() {
+    if (!confirm('Remove verified email?')) return;
+    const deviceId = getCurrentDeviceId();
+    try {
+        const response = await fetch(`/api/email/verified/${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
+        if ((await response.json()).success) { showToast('Email unlinked', 'success'); loadEmailVerificationStatus(); }
+    } catch (e) { showToast('Failed to unlink email', 'error'); }
+}
+
+// ============ Preferences & Data ============
+
+async function loadStatus() {
+    const status = await api.getStatus();
+    const sbIcon = document.getElementById('shadowbridge-status-icon');
+    const sbStatus = document.getElementById('shadowbridge-status');
+    if (status.shadowbridge_running) { sbIcon.className = 'status-icon online'; sbStatus.textContent = 'Running'; }
+    else { sbIcon.className = 'status-icon offline'; sbStatus.textContent = 'Not Running'; }
+
+    const sshIcon = document.getElementById('ssh-status-icon');
+    const sshStatus = document.getElementById('ssh-status');
+    if (status.ssh_status === 'connected') { sshIcon.className = 'status-icon online'; sshStatus.textContent = 'Connected'; }
+    else { sshIcon.className = 'status-icon offline'; sshStatus.textContent = 'Disconnected'; }
+
+    const devIcon = document.getElementById('devices-status-icon');
+    const devStatus = document.getElementById('devices-status');
+    if (status.devices_connected > 0) { devIcon.className = 'status-icon online'; devStatus.textContent = status.devices_connected + ' connected'; }
+    else { devIcon.className = 'status-icon offline'; devStatus.textContent = 'No devices'; }
+
+    if (status.version) { document.getElementById('bridge-version').textContent = status.version; }
+    if (status.local_ip) { document.getElementById('local-ip').textContent = status.local_ip; }
+    if (status.data_path) { document.getElementById('data-path').textContent = status.data_path; }
+}
+
+async function checkTailScale() {
+    const btn = document.getElementById('tailscale-check-btn');
+    const label = document.getElementById('tailscale-status-label');
+    if (btn) btn.disabled = true;
+    if (label) label.textContent = 'Checking...';
+    try {
+        const response = await fetch('/api/tailscale/status');
+        const data = await response.json();
+        if (response.ok && data.success) { label.textContent = 'TailScale running'; showToast('TailScale is running', 'success'); }
+        else { const m = data.error || 'TailScale check failed'; label.textContent = m; showToast(m, 'error'); }
+    } catch (e) { label.textContent = 'Check failed'; }
+    finally { if (btn) btn.disabled = false; }
+}
+
+async function loadDevicesList() {
+    const container = document.getElementById('devices-list');
+    if (!container) return;
+    try {
+        const response = await fetch('/api/devices');
+        const devices = await response.json();
+        if (!devices || devices.length === 0) {
+            container.innerHTML = '<div class="empty-state"><span class="material-symbols-outlined">devices</span><p>No devices connected yet.</p></div>';
+            return;
+        }
+        container.innerHTML = devices.map(device => `
+            <div class="device-item">
+                <div class="device-info">
+                    <div class="device-header">
+                        <span class="device-status ${device.status === 'online' ? 'online' : 'offline'}"></span>
+                        <span class="device-name">${escapeHtml(device.name || device.id)}</span>
+                    </div>
+                    <div class="device-details">
+                        <span class="device-id">${escapeHtml(device.id)}</span>
+                        <span class="device-last-seen">Seen: ${escapeHtml(device.last_seen_formatted || 'Never')}</span>
+                    </div>
+                </div>
+                <div class="device-actions">
+                    <button class="btn btn-small btn-danger" onclick="removeDevice('${escapeHtml(device.id)}', '${escapeHtml(device.name || device.id)}')">
+                        <span class="material-symbols-outlined">delete</span>
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    } catch (e) { console.error('Failed to load devices:', e); }
+}
+
+async function removeDevice(deviceId, deviceName) {
+    if (!confirm(`Remove "${deviceName}"?`)) return;
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
+        if ((await response.json()).success) { showToast('Device removed', 'success'); loadDevicesList(); loadStatus(); }
+    } catch (e) { showToast('Failed to remove device', 'error'); }
+}
+
+async function loadQRCode() {
+    const container = document.getElementById('qr-code');
+    const qrData = await api.getQRCode();
+    if (qrData.image) { container.innerHTML = `<img src="${qrData.image}" alt="QR Code" class="qr-image"><div class="qr-host">${escapeHtml(qrData.host)}:${qrData.port}</div>`; document.getElementById('local-ip').textContent = qrData.host; }
+    else { container.innerHTML = `<div class="qr-data"><code>${escapeHtml(qrData.data || 'Error loading QR')}</code></div>`; }
+}
+
+async function loadDataStats() {
+    let size = 0; let count = 0;
+    for (let key in localStorage) { if (localStorage.hasOwnProperty(key)) { size += localStorage[key].length * 2; if (key.startsWith('shadow_note_')) count++; } }
+    document.getElementById('cache-size').textContent = formatBytes(size);
+    document.getElementById('cached-notes').textContent = count.toString();
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function loadPreferences() {
+    document.getElementById('refresh-interval').value = localStorage.getItem('shadow_refresh_interval') || '60';
+    document.getElementById('data-retention').value = localStorage.getItem('shadow_data_retention') || '30';
+    const enc = localStorage.getItem('shadow_encryption_enabled') === 'true';
+    document.getElementById('note-encryption').checked = enc;
+    document.getElementById('encryption-key-setting').style.display = enc ? 'flex' : 'none';
+    document.getElementById('auto-lock').value = localStorage.getItem('shadow_auto_lock') || '5';
+}
+
+function toggleEncryption() {
+    const enabled = document.getElementById('note-encryption').checked;
+    localStorage.setItem('shadow_encryption_enabled', enabled);
+    document.getElementById('encryption-key-setting').style.display = enabled ? 'flex' : 'none';
+}
+
+function saveEncryptionKey() {
+    const p = document.getElementById('encryption-passphrase').value;
+    if (!p || p.length < 8) { showToast('Min 8 characters', 'error'); return; }
+    localStorage.setItem('shadow_encryption_key_set', 'true');
+    document.getElementById('encryption-passphrase').value = '';
+    showToast('Saved', 'success');
+}
+
+function saveAutoLock() { localStorage.setItem('shadow_auto_lock', document.getElementById('auto-lock').value); showToast('Saved', 'success'); }
+function saveRefreshInterval() { localStorage.setItem('shadow_refresh_interval', document.getElementById('refresh-interval').value); showToast('Saved', 'success'); }
+function saveDataRetention() { localStorage.setItem('shadow_data_retention', document.getElementById('data-retention').value); showToast('Saved', 'success'); }
+
+async function cleanupStaleData() {
+    if (!confirm('Cleanup stale data?')) return;
+    try {
+        const res = await fetch('/api/cleanup/stale', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const result = await res.json();
+        if (result.success) { showToast(`Cleaned up data`, 'success'); loadDataStats(); }
+    } catch (e) { showToast('Cleanup failed', 'error'); }
+}
+
+async function resetDeviceHistory() {
+    if (!confirm('Reset device history?')) return;
+    try {
+        const res = await fetch('/api/cleanup/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        if ((await res.json()).success) { showToast('Reset success', 'success'); loadStatus(); }
+    } catch (e) { showToast('Reset failed', 'error'); }
+}
+
+async function clearCache() {
+    if (!confirm('Clear cache?')) return;
+    for (let key in localStorage) { if (key.startsWith('shadow_') || key.startsWith('api_cache_')) localStorage.removeItem(key); }
+    showToast('Cleared', 'success'); loadDataStats();
+}
+
+async function exportAllData() {
+    const data = { date: new Date().toISOString(), settings: {}, cache: {} };
+    for (let key in localStorage) { if (key.startsWith('shadow_')) data.cache[key] = localStorage[key]; }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'shadow_export.json'; a.click();
+    showToast('Exported', 'success');
+}
+</script>
+
+<style>
+.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-md); }
+.settings-form { display: flex; flex-direction: column; gap: var(--spacing-md); }
+.setting-item { display: flex; justify-content: space-between; align-items: center; padding: var(--spacing-md); background: var(--bg-card); border-radius: var(--radius-md); }
+.setting-info { display: flex; flex-direction: column; gap: var(--spacing-xs); }
+.setting-label { font-weight: 500; color: var(--text); }
+.setting-description { font-size: 12px; color: var(--text-dim); }
+.form-select { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 14px; }
+.data-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md); margin-bottom: var(--spacing-lg); }
+.data-stat { display: flex; flex-direction: column; gap: var(--spacing-xs); padding: var(--spacing-md); background: var(--bg-card); border-radius: var(--radius-md); }
+.data-label { font-size: 12px; color: var(--text-dim); }
+.data-value { font-size: 16px; font-weight: 500; color: var(--text); }
+.data-actions { display: flex; gap: var(--spacing-md); flex-wrap: wrap; }
+.network-check { margin-top: var(--spacing-md); display: flex; gap: var(--spacing-sm); align-items: center; }
+.network-status { color: var(--text-dim); font-size: 0.9rem; }
+.about-row.clickable { cursor: pointer; }
+.about-row.clickable:hover { background: var(--bg-hover); }
+.about-value.link { color: var(--accent); }
+.qr-loading { display: flex; flex-direction: column; align-items: center; gap: var(--spacing-md); padding: var(--spacing-lg); color: var(--text-dim); }
+.spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.email-status-section { display: flex; align-items: center; justify-content: space-between; padding: var(--spacing-md); background: var(--bg-card); border-radius: var(--radius-md); border: 1px solid var(--success); }
+.email-verified-badge { display: flex; align-items: center; gap: var(--spacing-sm); color: var(--success); }
+.email-form { background: var(--bg-card); padding: var(--spacing-lg); border-radius: var(--radius-md); }
+.verification-code { font-size: 24px; letter-spacing: 8px; text-align: center; font-family: monospace; max-width: 200px !important; }
+.devices-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.device-item { display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--bg-card); border-radius: var(--radius-md); border: 1px solid var(--border); }
+.device-status { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+.device-status.online { background: var(--success); }
+.device-status.offline { background: var(--text-dim); }
+</style>
+{% endblock %}

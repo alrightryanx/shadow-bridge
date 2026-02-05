@@ -1,0 +1,876 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Notes{% endblock %}
+{% block page_title %}Notes{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+    <input type="text" id="search-input" class="search-input" placeholder="Search notes..." oninput="filterNotes()">
+    <button class="btn btn-small filter-btn" id="show-pinned-btn" onclick="togglePinnedFilter()">
+        <span class="material-symbols-outlined">push_pin</span> Pinned
+    </button>
+    <button class="btn btn-primary" onclick="showCreateNoteModal()">
+        <span class="material-symbols-outlined">add</span> Create New
+    </button>
+</div>
+
+<div class="notes-list" id="notes-container">
+    <div class="loading">Loading notes...</div>
+</div>
+
+<!-- Share Note Modal -->
+<div id="share-note-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">share</span> Share Note</h2>
+            <button class="modal-close" onclick="closeShareModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="share-note-title" id="share-note-title-display"></p>
+
+            <!-- Current shares -->
+            <div class="share-section">
+                <h3>Shared With</h3>
+                <div id="current-shares" class="share-list">
+                    <div class="empty-state">Not shared with anyone</div>
+                </div>
+            </div>
+
+            <!-- Add new share -->
+            <div class="share-section">
+                <h3>Add Device</h3>
+                <div class="share-add-form">
+                    <select id="share-device-select" class="form-input">
+                        <option value="">Select a device...</option>
+                    </select>
+                    <select id="share-permission-select" class="form-input">
+                        <option value="view">View only</option>
+                        <option value="edit">Can edit</option>
+                        <option value="full">Full access</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="addShare()">
+                        <span class="material-symbols-outlined">person_add</span> Share
+                    </button>
+                </div>
+            </div>
+
+            <div class="share-info">
+                <p><strong>Permission Levels:</strong></p>
+                <ul>
+                    <li><strong>View</strong> - Can read the note</li>
+                    <li><strong>Edit</strong> - Can read and modify</li>
+                    <li><strong>Full</strong> - Can read, modify, and delete</li>
+                </ul>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeShareModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Create Note Modal -->
+<div id="create-note-modal" class="modal hidden">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h2>Create Note</h2>
+            <button class="modal-close" onclick="closeCreateNoteModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="create-note-title">Title *</label>
+                <input type="text" id="create-note-title" class="form-input" placeholder="Note title">
+            </div>
+            <div class="form-group">
+                <label for="create-note-content">Content</label>
+                <textarea id="create-note-content" class="form-input note-textarea" rows="8" placeholder="Write your note here... (Markdown supported)"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="create-note-priority">Priority</label>
+                <select id="create-note-priority" class="form-input">
+                    <option value="LOW">Low</option>
+                    <option value="NORMAL" selected>Normal</option>
+                    <option value="HIGH">High</option>
+                    <option value="URGENT">Urgent</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="create-note-tags">Tags</label>
+                <input type="text" id="create-note-tags" class="form-input" placeholder="tag1, tag2, tag3 (comma separated)">
+            </div>
+            <div class="form-row">
+                <label class="form-checkbox">
+                    <input type="checkbox" id="create-note-pinned"> <span class="material-symbols-outlined">push_pin</span> Pin this note
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeCreateNoteModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createNote()">Create</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allNotes = [];
+let loadedNoteContents = {};  // Cache for loaded note contents
+let showPinnedOnly = false;
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadNotes();
+});
+
+async function loadNotes() {
+    const deviceId = getDeviceIdParam();
+    allNotes = await api.getNotes(deviceId);
+    filterNotes();  // Re-apply search filter
+}
+
+function togglePinnedFilter() {
+    showPinnedOnly = !showPinnedOnly;
+    document.getElementById('show-pinned-btn').classList.toggle('active', showPinnedOnly);
+    filterNotes();
+}
+
+function filterNotes() {
+    const search = document.getElementById('search-input').value.toLowerCase();
+
+    let filtered = allNotes.filter(n =>
+        n.title.toLowerCase().includes(search)
+    );
+
+    // Filter to pinned only if enabled
+    if (showPinnedOnly) {
+        filtered = filtered.filter(n => n.is_pinned);
+    }
+
+    // Sort pinned to top
+    filtered.sort((a, b) => {
+        if (a.is_pinned && !b.is_pinned) return -1;
+        if (!a.is_pinned && b.is_pinned) return 1;
+        return (b.updated_at || 0) - (a.updated_at || 0);
+    });
+
+    renderNotes(filtered);
+}
+
+async function togglePin(noteId, event) {
+    if (event) event.stopPropagation();
+    // Toggle pinned state locally and update UI
+    const note = allNotes.find(n => n.id === noteId);
+    if (note) {
+        note.is_pinned = !note.is_pinned;
+        filterNotes();
+        showToast(note.is_pinned ? 'Note pinned' : 'Note unpinned', 'success');
+        // TODO: Persist pin state via API
+    }
+}
+
+async function copyNoteContent(noteId, event) {
+    if (event) event.stopPropagation();
+
+    // Load content if not cached
+    if (!loadedNoteContents[noteId]) {
+        const result = await api.getNoteContent(noteId);
+        if (result.error) {
+            showToast('Failed to load note content', 'error');
+            return;
+        }
+        loadedNoteContents[noteId] = result.content || '';
+    }
+
+    const content = loadedNoteContents[noteId];
+    try {
+        await navigator.clipboard.writeText(content);
+        showToast('Note content copied to clipboard', 'success');
+    } catch (err) {
+        showToast('Failed to copy: ' + err.message, 'error');
+    }
+}
+
+function openNoteInModal(noteId, title, event) {
+    if (event) event.stopPropagation();
+
+    // Use the base.html modal with the cached content
+    const content = loadedNoteContents[noteId] || '';
+    currentNoteId = noteId;
+    currentNoteContent = content;
+
+    document.getElementById('modal-title').textContent = title;
+
+    if (typeof marked !== 'undefined') {
+        // Sanitize markdown output to prevent XSS
+        const rawHtml = marked.parse(content);
+        if (typeof DOMPurify !== 'undefined') {
+            document.getElementById('modal-content').innerHTML = DOMPurify.sanitize(rawHtml);
+        } else {
+            const sanitized = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+            document.getElementById('modal-content').innerHTML = sanitized;
+        }
+    } else {
+        document.getElementById('modal-content').innerHTML = '<pre>' + escapeHtml(content) + '</pre>';
+    }
+
+    document.getElementById('note-modal').classList.remove('hidden');
+}
+
+function renderNotes(notes) {
+    const container = document.getElementById('notes-container');
+
+    if (notes.length === 0) {
+        container.innerHTML = '<div class="empty-state">No notes found</div>';
+        return;
+    }
+
+    container.innerHTML = notes.map(n => `
+        <div class="note-card" id="note-card-${n.id}">
+            <div class="note-header" onclick="toggleNote('${n.id}')">
+                <button class="pin-btn ${n.is_pinned ? 'pinned' : ''}" onclick="togglePin('${n.id}', event)" title="Pin note"><span class="material-symbols-outlined">push_pin</span></button>
+                <div class="note-info">
+                    <div class="note-title">${escapeHtml(n.title)}</div>
+                    <div class="note-meta">
+                        <span>${n.device_name || ''}</span>
+                        ${n.device_name ? '<span class="separator">|</span>' : ''}
+                        <span>${n.time_ago || ''}</span>
+                    </div>
+                </div>
+                <div class="note-actions">
+                    <button class="btn-icon-small" onclick="editNoteInModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}', event)" title="Edit note"><span class="material-symbols-outlined">edit</span></button>
+                    <button class="btn-icon-small" onclick="openShareModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}', '${n.device_id || ''}', event)" title="Share note"><span class="material-symbols-outlined">share</span></button>
+                    <button class="btn-icon-small" onclick="copyNoteContent('${n.id}', event)" title="Copy content"><span class="material-symbols-outlined">content_copy</span></button>
+                    <button class="btn-icon-small btn-danger" onclick="confirmDeleteNote('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}', event)" title="Delete note"><span class="material-symbols-outlined">delete</span></button>
+                </div>
+                <span class="material-symbols-outlined expand-icon" id="expand-${n.id}">chevron_right</span>
+            </div>
+            <div class="note-content-wrapper" id="content-${n.id}" style="display: none;">
+                <div class="note-content-inner" id="content-inner-${n.id}">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function toggleNote(noteId) {
+    const contentWrapper = document.getElementById('content-' + noteId);
+    const expandIcon = document.getElementById('expand-' + noteId);
+    const contentInner = document.getElementById('content-inner-' + noteId);
+
+    if (contentWrapper.style.display === 'none') {
+        // Expand
+        contentWrapper.style.display = 'block';
+        expandIcon.textContent = 'expand_more';
+
+        // Load content if not already loaded
+        if (!loadedNoteContents[noteId]) {
+            contentInner.innerHTML = '<div class="loading">Loading note content...</div>';
+            const result = await api.getNoteContent(noteId);
+
+            if (result.error) {
+                contentInner.innerHTML = '<div class="error-message">' + escapeHtml(result.error) + '</div>';
+            } else {
+                loadedNoteContents[noteId] = result.content || '(Empty note)';
+                renderNoteContentInline(noteId, loadedNoteContents[noteId]);
+            }
+        }
+    } else {
+        // Collapse
+        contentWrapper.style.display = 'none';
+        expandIcon.textContent = 'chevron_right';
+    }
+}
+
+async function editNoteInModal(noteId, title, event) {
+    if (event) event.stopPropagation();
+
+    // Load content if not cached
+    if (!loadedNoteContents[noteId]) {
+        const result = await api.getNoteContent(noteId);
+        if (result.error) {
+            showToast('Failed to load note content', 'error');
+            return;
+        }
+        loadedNoteContents[noteId] = result.content || '';
+    }
+
+    currentNoteId = noteId;
+    currentNoteContent = loadedNoteContents[noteId];
+    currentNoteTitle = title;
+    isEditMode = true;
+
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-content').innerHTML = '<textarea id="note-editor" class="note-editor">' + escapeHtml(currentNoteContent) + '</textarea>';
+    document.getElementById('markdown-toolbar').classList.remove('hidden');
+    document.getElementById('edit-note-btn').classList.add('hidden');
+    document.getElementById('save-note-btn').classList.remove('hidden');
+    document.getElementById('note-modal').classList.remove('hidden');
+}
+
+function renderNoteContentInline(noteId, content) {
+    const contentInner = document.getElementById('content-inner-' + noteId);
+    if (!contentInner) return;
+
+    // Render as markdown if marked library is available
+    if (typeof marked !== 'undefined') {
+        const rawHtml = marked.parse(content);
+        const safeHtml = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '').replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+        contentInner.innerHTML = '<div class="markdown-body">' + safeHtml + '</div>';
+    } else {
+        // Fallback: render as preformatted text
+        contentInner.innerHTML = '<pre class="note-text">' + escapeHtml(content) + '</pre>';
+    }
+}
+
+function showCreateNoteModal() {
+    // Clear form
+    document.getElementById('create-note-title').value = '';
+    document.getElementById('create-note-content').value = '';
+    document.getElementById('create-note-priority').value = 'NORMAL';
+    document.getElementById('create-note-tags').value = '';
+    document.getElementById('create-note-pinned').checked = false;
+    document.getElementById('create-note-modal').classList.remove('hidden');
+}
+
+function closeCreateNoteModal() {
+    document.getElementById('create-note-modal').classList.add('hidden');
+}
+
+async function confirmDeleteNote(noteId, title, event) {
+    if (event) event.stopPropagation();
+
+    if (confirm(`Delete "${title}"?\n\nThis will permanently delete the note from your device.`)) {
+        const result = await api.deleteNote(noteId);
+        if (result.success) {
+            if (result.warning) {
+                // Deleted locally but device was offline
+                showToast(result.warning, 'warning');
+            } else {
+                showToast('Note deleted', 'success');
+            }
+            loadNotes();
+        } else {
+            showToast('Failed to delete: ' + (result.error || 'Unknown error'), 'error');
+        }
+    }
+}
+
+async function createNote() {
+    const title = document.getElementById('create-note-title').value.trim();
+    if (!title) {
+        showToast('Please enter a note title', 'warning');
+        return;
+    }
+
+    // Parse tags
+    const tagsInput = document.getElementById('create-note-tags').value.trim();
+    const tags = tagsInput ? tagsInput.split(',').map(t => t.trim()).filter(t => t) : [];
+
+    const data = {
+        title: title,
+        content: document.getElementById('create-note-content').value,
+        priority: document.getElementById('create-note-priority').value,
+        tags: tags,
+        is_pinned: document.getElementById('create-note-pinned').checked,
+        device_id: getDeviceIdParam() || 'web'
+    };
+
+    const result = await api.createNote(data);
+    if (result.success) {
+        showToast('Note created', 'success');
+        closeCreateNoteModal();
+        loadNotes();
+    } else {
+        showToast('Failed to create: ' + (result.error || 'Unknown error'), 'error');
+    }
+}
+
+// ============ Sharing Functions ============
+
+let currentShareNoteId = null;
+let currentShareOwnerDevice = null;
+let allDevices = [];
+
+async function openShareModal(noteId, title, ownerDevice, event) {
+    if (event) event.stopPropagation();
+
+    currentShareNoteId = noteId;
+    currentShareOwnerDevice = ownerDevice;
+
+    document.getElementById('share-note-title-display').textContent = title;
+    document.getElementById('share-note-modal').classList.remove('hidden');
+
+    // Load devices for dropdown
+    await loadDevicesForSharing();
+
+    // Load current permissions
+    await loadNotePermissions(noteId);
+}
+
+function closeShareModal() {
+    document.getElementById('share-note-modal').classList.add('hidden');
+    currentShareNoteId = null;
+    currentShareOwnerDevice = null;
+}
+
+async function loadDevicesForSharing() {
+    try {
+        allDevices = await api.getDevices();
+        const select = document.getElementById('share-device-select');
+        select.innerHTML = '<option value="">Select a device...</option>';
+
+        allDevices.forEach(device => {
+            // Don't show the owner device in the dropdown
+            if (device.id !== currentShareOwnerDevice) {
+                const option = document.createElement('option');
+                option.value = device.id;
+                option.textContent = device.name || device.id;
+                select.appendChild(option);
+            }
+        });
+    } catch (e) {
+        console.error('Failed to load devices:', e);
+    }
+}
+
+async function loadNotePermissions(noteId) {
+    const container = document.getElementById('current-shares');
+
+    try {
+        // Get permissions info from API
+        const response = await fetch(`/api/notes/${noteId}/permissions?device_id=${encodeURIComponent(currentShareOwnerDevice)}`);
+        const data = await response.json();
+
+        if (data.error) {
+            container.innerHTML = '<div class="empty-state">Could not load sharing info</div>';
+            return;
+        }
+
+        const sharedWith = data.shared_with || [];
+
+        if (sharedWith.length === 0) {
+            container.innerHTML = '<div class="empty-state">Not shared with anyone</div>';
+            return;
+        }
+
+        // Render current shares
+        container.innerHTML = sharedWith.map(share => {
+            const device = allDevices.find(d => d.id === share.device_id);
+            const deviceName = device ? (device.name || device.id) : share.device_id;
+            const permissionLabel = {
+                'view': 'View only',
+                'edit': 'Can edit',
+                'full': 'Full access'
+            }[share.permission] || share.permission;
+
+            return `
+                <div class="share-item">
+                    <div class="share-device">
+                        <span class="material-symbols-outlined">smartphone</span>
+                        <span>${escapeHtml(deviceName)}</span>
+                    </div>
+                    <div class="share-permission">${permissionLabel}</div>
+                    <button class="btn-icon-small btn-danger" onclick="removeShare('${share.device_id}')" title="Remove access">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error('Failed to load permissions:', e);
+        container.innerHTML = '<div class="empty-state">Could not load sharing info</div>';
+    }
+}
+
+async function addShare() {
+    const targetDevice = document.getElementById('share-device-select').value;
+    const permission = document.getElementById('share-permission-select').value;
+
+    if (!targetDevice) {
+        showToast('Please select a device', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/notes/${currentShareNoteId}/share`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                owner_device: currentShareOwnerDevice,
+                target_device: targetDevice,
+                permission: permission
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Note shared successfully', 'success');
+            document.getElementById('share-device-select').value = '';
+            await loadNotePermissions(currentShareNoteId);
+            await loadDevicesForSharing();  // Refresh dropdown
+        } else {
+            showToast(result.error || 'Failed to share', 'error');
+        }
+    } catch (e) {
+        console.error('Share error:', e);
+        showToast('Failed to share note', 'error');
+    }
+}
+
+async function removeShare(targetDevice) {
+    if (!confirm('Remove access for this device?')) return;
+
+    try {
+        const response = await fetch(`/api/notes/${currentShareNoteId}/share`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                owner_device: currentShareOwnerDevice,
+                target_device: targetDevice
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('Access removed', 'success');
+            await loadNotePermissions(currentShareNoteId);
+            await loadDevicesForSharing();  // Refresh dropdown
+        } else {
+            showToast(result.error || 'Failed to remove access', 'error');
+        }
+    } catch (e) {
+        console.error('Unshare error:', e);
+        showToast('Failed to remove access', 'error');
+    }
+}
+</script>
+
+<style>
+.note-card {
+    background: var(--bg-card);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+
+.note-header {
+    display: flex;
+    align-items: flex-start;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+    gap: 8px;
+}
+
+.note-header:hover {
+    background: var(--bg-hover);
+}
+
+.pin-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-dim);
+    transition: all 0.15s;
+}
+
+.pin-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.pin-btn.pinned {
+    color: var(--accent);
+}
+
+.pin-btn .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.expand-icon {
+    color: var(--text-dim);
+    font-size: 20px;
+    margin-left: 8px;
+    transition: transform 0.2s;
+}
+
+
+.note-info {
+    flex: 1;
+}
+
+.note-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+
+.note-header:hover .note-actions {
+    opacity: 1;
+}
+
+.btn-icon-small.btn-danger {
+    color: var(--error);
+}
+
+.btn-icon-small.btn-danger:hover {
+    background: rgba(217, 119, 87, 0.15);
+    color: var(--error);
+}
+
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 14px;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+}
+
+.filter-checkbox input {
+    cursor: pointer;
+}
+
+.note-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+
+.note-meta {
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.note-meta .separator {
+    margin: 0 6px;
+}
+
+.note-content-wrapper {
+    border-top: 1px solid var(--border);
+    background: var(--bg-elevated);
+}
+
+.note-content-inner {
+    padding: 16px;
+    max-height: min(80vh, 800px);
+    overflow-y: auto;
+}
+
+.note-content-inner .loading {
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+.note-content-inner .error-message {
+    color: var(--error);
+}
+
+.note-content-inner pre.note-text {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0;
+    color: var(--text);
+}
+
+.note-content-inner .markdown-body {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+}
+
+.note-content-inner .markdown-body h1,
+.note-content-inner .markdown-body h2,
+.note-content-inner .markdown-body h3 {
+    margin-top: 16px;
+    margin-bottom: 8px;
+}
+
+.note-content-inner .markdown-body p {
+    margin-bottom: 12px;
+}
+
+.note-content-inner .markdown-body code {
+    background: var(--bg-input);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.note-content-inner .markdown-body pre {
+    background: var(--bg-input);
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+}
+
+.note-content-inner .markdown-body pre code {
+    background: none;
+    padding: 0;
+}
+
+.form-row {
+    display: flex;
+    gap: var(--spacing-md);
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.form-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.form-checkbox input {
+    cursor: pointer;
+}
+
+.filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.filter-btn.active {
+    background: var(--accent);
+    color: white;
+}
+
+.note-textarea {
+    font-family: 'Consolas', 'Monaco', monospace;
+    resize: vertical;
+}
+
+.modal-medium {
+    max-width: 600px;
+}
+
+/* Sharing UI Styles */
+.share-note-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 16px;
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    border-radius: 6px;
+}
+
+.share-section {
+    margin-bottom: 20px;
+}
+
+.share-section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.share-list {
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.share-list .empty-state {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 14px;
+}
+
+.share-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border-radius: 6px;
+    margin-bottom: 6px;
+}
+
+.share-item:last-child {
+    margin-bottom: 0;
+}
+
+.share-device {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    color: var(--text);
+}
+
+.share-device .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--text-dim);
+}
+
+.share-permission {
+    font-size: 13px;
+    color: var(--text-dim);
+    padding: 4px 10px;
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    margin-right: 8px;
+}
+
+.share-add-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.share-add-form .form-input {
+    flex: 1;
+}
+
+.share-add-form .btn {
+    white-space: nowrap;
+}
+
+.share-info {
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.share-info p {
+    margin: 0 0 8px 0;
+}
+
+.share-info ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.share-info li {
+    margin-bottom: 4px;
+}
+
+.share-info strong {
+    color: var(--text);
+}
+</style>
+{% endblock %}

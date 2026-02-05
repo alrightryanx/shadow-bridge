@@ -1,0 +1,2318 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Sessions{% endblock %}
+{% block page_title %}Sessions{% endblock %}
+
+{% block content %}
+<!-- Two Column Layout -->
+<div class="dashboard-columns">
+    <!-- Recent Projects -->
+    <section class="section dashboard-card">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">folder</span> Recent Projects</h2>
+            <a href="/projects" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
+        </div>
+        <div class="mini-grid" id="recent-projects">
+            <div class="loading">Loading projects...</div>
+        </div>
+    </section>
+
+    <!-- Recent Notes -->
+    <section class="section dashboard-card">
+        <div class="section-header">
+            <h2><span class="material-symbols-outlined">description</span> Recent Notes</h2>
+            <a href="/notes" class="view-all">View All <span class="material-symbols-outlined">arrow_forward</span></a>
+        </div>
+        <div class="mini-grid" id="recent-notes">
+            <div class="loading">Loading notes...</div>
+        </div>
+    </section>
+</div>
+
+<section class="section dashboard-card recent-generations-card">
+    <div class="section-header">
+        <h2><span class="material-symbols-outlined">auto_awesome</span> Recent Generations</h2>
+    </div>
+    <div class="recent-generations-carousel" id="recent-generations">
+        <div class="loading">Loading generations...</div>
+    </div>
+</section>
+
+<!-- Session Console -->
+<section class="section dashboard-card session-console">
+    <div class="section-header">
+        <div class="session-header-left">
+            <h2><span class="material-symbols-outlined">forum</span> Session Chats</h2>
+            <div class="session-controls">
+                <select id="session-group-by" class="control-select" onchange="onSessionControlChange()">
+                    <option value="none">Show All</option>
+                    <option value="date">Group by Date</option>
+                    <option value="project">Group by Project</option>
+                    <option value="device">Group by Device</option>
+                </select>
+                <select id="session-sort-by" class="control-select" onchange="onSessionControlChange()">
+                    <option value="desc">Newest First</option>
+                    <option value="asc">Oldest First</option>
+                </select>
+                <button class="btn btn-small btn-secondary" onclick="refreshSessions()">Refresh Sessions</button>
+                <button class="btn btn-small btn-secondary" onclick="applyBackendToSession()">Apply Backend</button>
+                <button class="btn btn-small btn-secondary" onclick="clearAllSessions()">Clear All</button>
+            </div>
+        </div>
+        <div class="session-title-editor">
+            <input type="text" id="session-title-input" placeholder="Select a session to rename" />
+            <button class="btn btn-small btn-primary" type="button" onclick="saveSessionTitle()">Save</button>
+        </div>
+    </div>
+    <div class="session-console-grid">
+        <div class="session-list" id="session-list">
+            <div class="loading">Loading sessions...</div>
+        </div>
+        <div class="session-chat">
+            <div class="session-meta" id="session-meta">Select a session to view messages.</div>
+            <div class="session-messages" id="session-messages"></div>
+            <form class="session-compose" id="session-compose">
+                <textarea id="session-input" rows="2" placeholder="Send a message to this session..."></textarea>
+                <button class="btn btn-primary" type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+</section>
+
+<!-- Activity Feed -->
+<section class="section dashboard-card">
+    <div class="section-header">
+        <h2><span class="material-symbols-outlined">history</span> Recent Activity</h2>
+    </div>
+    <div class="activity-feed" id="activity-feed">
+        <div class="loading">Loading activity...</div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadDashboard();
+    const composeForm = document.getElementById('session-compose');
+    if (composeForm) {
+        composeForm.addEventListener('submit', onSessionComposeSubmit);
+    }
+    const input = document.getElementById('session-input');
+    if (input) {
+        input.addEventListener('input', onSessionDraftInput);
+    }
+    setInterval(updateSessionSyncIndicator, 60000);
+});
+
+let dashboardSessions = [];
+let selectedSessionId = null;
+let currentSessionDetail = null;
+let sessionMessageMap = new Map();
+let sessionsRefreshTimer = null;
+const SESSION_DRAFT_PREFIX = 'shadow_session_draft';
+const SESSION_SYNC_KEY = 'shadow_last_sessions_sync';
+const SESSION_SYNC_STALE_MS = 2 * 60 * 1000;
+const SESSION_DEFAULT_BACKEND_KEY = 'shadow_default_backend_preference';
+
+function getSessionDraftKey(sessionId) {
+    const deviceId = getDeviceIdParam() || 'all';
+    return `${SESSION_DRAFT_PREFIX}:${deviceId}:${sessionId}`;
+}
+
+function saveSessionDraft(sessionId, text) {
+    if (!sessionId || typeof localStorage === 'undefined') return;
+    try {
+        localStorage.setItem(getSessionDraftKey(sessionId), text || '');
+    } catch (e) {}
+}
+
+function restoreSessionDraft(sessionId) {
+    const input = document.getElementById('session-input');
+    if (!input || !sessionId || typeof localStorage === 'undefined') return;
+    try {
+        const draft = localStorage.getItem(getSessionDraftKey(sessionId));
+        if (draft) {
+            input.value = draft;
+        } else {
+            input.value = '';
+        }
+    } catch (e) {}
+}
+
+function clearSessionDraft(sessionId) {
+    if (!sessionId || typeof localStorage === 'undefined') return;
+    try {
+        localStorage.removeItem(getSessionDraftKey(sessionId));
+    } catch (e) {}
+}
+
+function onSessionDraftInput(event) {
+    const target = event?.target;
+    if (!selectedSessionId || !target) return;
+    saveSessionDraft(selectedSessionId, target.value || '');
+}
+
+function setDefaultBackendPreference(preference) {
+    if (!preference || typeof localStorage === 'undefined') return;
+    const payload = { ...preference, set_at: Date.now() };
+    try {
+        localStorage.setItem(SESSION_DEFAULT_BACKEND_KEY, JSON.stringify(payload));
+    } catch (e) {}
+}
+
+function getDefaultBackendPreference() {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+        const raw = localStorage.getItem(SESSION_DEFAULT_BACKEND_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function sessionHasBackendPreference(session) {
+    if (!session) return false;
+    return Boolean(
+        session.preferred_backend_key ||
+        session.preferred_backend_type ||
+        session.preferred_provider ||
+        session.preferred_model ||
+        session.preferred_model_key
+    );
+}
+
+async function autoApplyDefaultBackendPreference(session) {
+    const preference = getDefaultBackendPreference();
+    if (!session || !preference || sessionHasBackendPreference(session)) {
+        return session;
+    }
+
+    const createdAt = session.createdAt || session.created_at || 0;
+    if (preference.set_at && createdAt && createdAt < preference.set_at) {
+        return session;
+    }
+
+    const payload = {
+        id: session.id,
+        backend_change_pending: true,
+        backend_change_requested_at: Date.now(),
+        ...preference
+    };
+
+    const result = await api.upsertSession(payload);
+    if (result?.error) {
+        return session;
+    }
+    return result;
+}
+
+function markSessionsSynced(timestamp = Date.now()) {
+    if (typeof localStorage !== 'undefined') {
+        try {
+            localStorage.setItem(SESSION_SYNC_KEY, String(timestamp));
+        } catch (e) {}
+    }
+    updateSessionSyncIndicator(timestamp);
+}
+
+function getLastSessionsSync() {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+        const raw = localStorage.getItem(SESSION_SYNC_KEY);
+        const parsed = raw ? Number(raw) : null;
+        return Number.isFinite(parsed) ? parsed : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function updateSessionSyncIndicator(timestamp = null) {
+    const dot = document.getElementById('session-sync-dot');
+    const text = document.getElementById('session-sync-text');
+    if (!dot || !text) return;
+
+    const lastSync = timestamp || getLastSessionsSync();
+    if (!lastSync) {
+        dot.className = 'sync-dot';
+        text.textContent = 'Sync unknown';
+        return;
+    }
+
+    const ageMs = Date.now() - lastSync;
+    if (ageMs <= SESSION_SYNC_STALE_MS) {
+        dot.className = 'sync-dot ok';
+        text.textContent = 'In sync';
+    } else {
+        dot.className = 'sync-dot stale';
+        const minutes = Math.max(1, Math.round(ageMs / 60000));
+        text.textContent = `Stale (${minutes}m)`;
+    }
+}
+
+function resolveTargetDeviceInfo() {
+    const deviceId = getDeviceIdParam();
+    if (!deviceId) {
+        return { id: null, name: null };
+    }
+    const lookup = window.deviceNameMap instanceof Map ? window.deviceNameMap : null;
+    return {
+        id: deviceId,
+        name: lookup?.get(deviceId) || null
+    };
+}
+
+async function loadDashboard() {
+    const deviceId = getDeviceIdParam();
+
+    // Load recent projects
+    loadRecentProjects(deviceId);
+
+    // Load recent notes
+    loadRecentNotes(deviceId);
+
+    // Load recent generations
+    loadRecentGenerations(deviceId);
+
+    // Load recent sessions
+    loadRecentSessions(deviceId);
+
+    // Load session console
+    loadSessionsPanel(deviceId);
+
+    // Load activity feed
+    loadActivityFeed(deviceId);
+}
+
+async function loadRecentProjects(deviceId) {
+    try {
+        const projects = await api.getProjects(deviceId);
+        const container = document.getElementById('recent-projects');
+        
+        if (!projects) {
+            console.error('loadRecentProjects: API returned null');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load projects</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (!Array.isArray(projects)) {
+            console.error('loadRecentProjects: API returned non-array data', typeof projects, projects);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load projects: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (projects.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">folder_off</span>
+                    <p>No projects found</p>
+                    <a href="/settings" class="btn btn-small btn-primary">Connect a device</a>
+                </div>
+            `;
+            return;
+        }
+        
+        console.log('loadRecentProjects: Loaded', projects.length, 'projects');
+        container.innerHTML = projects.slice(0, 4).map(p => `
+            <div class="mini-card project-mini" onclick="openProject('${p.id}')">
+                <div class="mini-header">
+                    <span class="material-symbols-outlined">folder</span>
+                    <span>${escapeHtml(p.device_name)}</span>
+                </div>
+                <div class="mini-title">${escapeHtml(p.name)}</div>
+                <div class="mini-meta">
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>${p.time_ago}</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('loadRecentProjects: Error loading projects', error);
+        const container = document.getElementById('recent-projects');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading projects: ${escapeHtml(error.message || 'Unknown error')}</p>
+                </div>
+            `;
+        }
+    }
+}
+
+ async function loadRecentNotes(deviceId) {
+    try {
+        const notes = await api.getNotes(deviceId);
+        const container = document.getElementById('recent-notes');
+        
+        if (!notes) {
+            console.error('loadRecentNotes: API returned null');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load notes</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (!Array.isArray(notes)) {
+            console.error('loadRecentNotes: API returned non-array data', typeof notes, notes);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load notes: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (notes.length === 0) {
+            console.log('loadRecentNotes: No notes');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">note_stack</span>
+                    <p>No notes found</p>
+                </div>
+            `;
+            return;
+        }
+        
+        console.log('loadRecentNotes: Loaded', notes.length, 'notes');
+        container.innerHTML = notes.slice(0, 4).map(n => `
+            <div class="mini-card note-mini" onclick="openNoteModal('${n.id}', '${escapeHtml(n.title).replace(/'/g, "\\'")}')">
+                <div class="mini-header">
+                    <span class="material-symbols-outlined">description</span>
+                    <span>${escapeHtml(n.device_name)}</span>
+                </div>
+                <div class="mini-title">${escapeHtml(n.title)}</div>
+                <div class="mini-meta">
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>${n.time_ago}</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('loadRecentNotes: Error loading notes', error);
+        const container = document.getElementById('recent-notes');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading notes: ${escapeHtml(error.message || 'Unknown error')}</p>
+                </div>
+            `;
+        }
+    }
+}
+
+ async function loadRecentSessions(deviceId) {
+    try {
+        const sessions = await api.getSessions(deviceId, null, 4);
+        const container = document.getElementById('recent-sessions');
+        if (!container) {
+            console.error('loadRecentSessions: Container not found');
+            return;
+        }
+        
+        if (!sessions) {
+            console.error('loadRecentSessions: API returned null or failed');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load sessions</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (!Array.isArray(sessions)) {
+            console.error('loadRecentSessions: API returned non-array data', typeof sessions, sessions);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Failed to load sessions: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        if (sessions.length === 0) {
+            console.log('loadRecentSessions: No sessions');
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">forum</span>
+                    <p>No recent sessions</p>
+                </div>
+            `;
+            return;
+        }
+        
+        console.log('loadRecentSessions: Loaded', sessions.length, 'sessions');
+        if (!sessions._offline) {
+            markSessionsSynced();
+        }
+        container.innerHTML = sessions.map(s => {
+            const status = s.is_running ? 'Running' : 'Idle';
+            const backend = formatBackendLabel(s);
+            const model = formatModelLabel(s);
+            const subtitle = [backend, model].filter(Boolean).join(' / ');
+            return `
+                <div class="mini-card session-mini ${s.is_running ? 'running' : ''}" onclick="selectSessionFromCard('${s.id}')">
+                    <div class="mini-header">
+                        <span class="material-symbols-outlined">chat</span>
+                        <span>${escapeHtml(s.device_name || s.device_id || 'Unknown device')}</span>
+                    </div>
+                    <div class="mini-title">${escapeHtml(s.title || 'New Session')}</div>
+                    <div class="mini-meta">
+                        <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
+                        <span>${escapeHtml(subtitle || 'Unknown backend')}</span>
+                    </div>
+                    <div class="mini-foot">${escapeHtml(s.time_ago || '')}</div>
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('loadRecentSessions: Error loading sessions', error);
+        const container = document.getElementById('recent-sessions');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading sessions: ${escapeHtml(error.message || 'Unknown error')}</p>
+            </div>
+        `;
+        }
+    }
+}
+
+async function loadRecentGenerations(deviceId) {
+    const container = document.getElementById('recent-generations');
+    if (!container) return;
+
+    container.innerHTML = '<div class="loading">Loading generations...</div>';
+
+    try {
+        const requests = [
+            api.fetch('/image/history?limit=20'),
+            fetchJson('/audio/history?limit=20'),
+            fetchJson('/video/history?limit=20'),
+        ];
+
+        const [imageResult, audioResult, videoResult] = await Promise.allSettled(requests);
+        const generations = [];
+
+        if (imageResult.status === 'fulfilled' && Array.isArray(imageResult.value?.images)) {
+            imageResult.value.images.forEach(entry => {
+                const metaParts = [];
+                if (entry.model) metaParts.push(entry.model);
+                if (entry.width && entry.height) metaParts.push(`${entry.width}x${entry.height}`);
+                if (entry.seed != null) metaParts.push(`Seed ${entry.seed}`);
+                generations.push({
+                    id: entry.id,
+                    type: 'image',
+                    typeLabel: 'Image',
+                    prompt: entry.prompt,
+                    createdAt: entry.created_at,
+                    meta: metaParts.join(' • '),
+                    previewUrl: entry.stream_url || (entry.image ? `data:image/png;base64,${entry.image}` : null),
+                    streamUrl: entry.stream_url,
+                });
+            });
+        } else if (imageResult.status === 'rejected') {
+            console.warn('loadRecentGenerations: image history failed', imageResult.reason);
+        }
+
+        if (audioResult.status === 'fulfilled' && Array.isArray(audioResult.value?.data)) {
+            audioResult.value.data.forEach(entry => {
+                const metaParts = [];
+                if (entry.model) metaParts.push(entry.model);
+                const duration = entry.duration || entry.duration_seconds || entry.durationSeconds;
+                if (duration) metaParts.push(`${duration}s`);
+                generations.push({
+                    id: entry.id,
+                    type: 'audio',
+                    typeLabel: 'Audio',
+                    prompt: entry.prompt,
+                    createdAt: entry.created_at,
+                    meta: metaParts.join(' • '),
+                    previewUrl: null,
+                    streamUrl: entry.stream_url,
+                });
+            });
+        } else if (audioResult.status === 'rejected') {
+            console.warn('loadRecentGenerations: audio history failed', audioResult.reason);
+        }
+
+        if (videoResult.status === 'fulfilled' && Array.isArray(videoResult.value?.data)) {
+            videoResult.value.data.forEach(entry => {
+                const metaParts = [];
+                if (entry.model) metaParts.push(entry.model);
+                if (entry.duration) metaParts.push(`${entry.duration}s`);
+                generations.push({
+                    id: entry.id,
+                    type: 'video',
+                    typeLabel: 'Video',
+                    prompt: entry.prompt,
+                    createdAt: entry.created_at,
+                    meta: metaParts.join(' • '),
+                    previewUrl: null,
+                    streamUrl: entry.stream_url,
+                });
+            });
+        } else if (videoResult.status === 'rejected') {
+            console.warn('loadRecentGenerations: video history failed', videoResult.reason);
+        }
+
+        const sorted = generations
+            .sort((a, b) => getGenerationTimestamp(b.createdAt) - getGenerationTimestamp(a.createdAt))
+            .slice(0, 20);
+
+        renderRecentGenerations(sorted);
+    } catch (error) {
+        console.error('loadRecentGenerations: Error loading data', error);
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">error</span>
+                <p>Error loading generations: ${escapeHtml(error.message || 'Unknown error')}</p>
+            </div>
+        `;
+    }
+}
+
+function renderRecentGenerations(items) {
+    const container = document.getElementById('recent-generations');
+    if (!container) return;
+
+    if (!items || items.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">auto_awesome</span>
+                <p>No recent generations</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = items.map(renderGenerationCard).join('');
+}
+
+function renderGenerationCard(item) {
+    const icon = getGenerationIcon(item.type);
+    const preview = item.previewUrl
+        ? `<img src="${item.previewUrl}" alt="${escapeHtml(item.typeLabel)} preview">`
+        : `<div class="generation-media-placeholder"><span class="material-symbols-outlined">${icon}</span></div>`;
+    const meta = item.meta ? `<div class="generation-meta">${escapeHtml(item.meta)}</div>` : '';
+    const timeLabel = formatRelativeTime(item.createdAt);
+    const actionButton = item.streamUrl
+        ? `<button class="btn btn-small btn-secondary" type="button" onclick="openGenerationPreview(${JSON.stringify(item.streamUrl)})">
+                <span class="material-symbols-outlined">open_in_new</span> Open
+           </button>`
+        : '';
+
+    return `
+        <div class="generation-card">
+            <div class="generation-media">
+                ${preview}
+            </div>
+            <div class="generation-body">
+                <div class="generation-header">
+                    <div class="generation-title">${escapeHtml(item.prompt || 'Untitled')}</div>
+                    <span class="generation-type">${escapeHtml(item.typeLabel)}</span>
+                </div>
+                ${meta}
+                <div class="generation-footer">
+                    <span class="generation-time">${escapeHtml(timeLabel)}</span>
+                    ${actionButton}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function getGenerationIcon(type) {
+    if (type === 'audio') return 'music_note';
+    if (type === 'video') return 'videocam';
+    return 'image';
+}
+
+function getGenerationTimestamp(value) {
+    if (value == null) return 0;
+    if (typeof value === 'number') return value;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatRelativeTime(value) {
+    const timestamp = getGenerationTimestamp(value);
+    if (!timestamp) return '';
+    const diff = Date.now() - timestamp;
+    const seconds = Math.round(Math.abs(diff) / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+}
+
+function openGenerationPreview(url) {
+    if (!url) return;
+    window.open(url, '_blank', 'noopener');
+}
+
+async function fetchJson(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+    }
+    return response.json();
+}
+
+async function loadSessionsPanel(deviceId, preserveSelection = false) {
+    try {
+        const sessions = await api.getSessions(deviceId, null, 100); // Load more for grouping/sorting
+        dashboardSessions = Array.isArray(sessions) ? sessions : [];
+        console.log('loadSessionsPanel: Loaded', dashboardSessions.length, 'sessions');
+        renderSessionList(dashboardSessions, preserveSelection);
+        if (!sessions._offline) {
+            markSessionsSynced();
+        }
+    } catch (error) {
+        console.error('loadSessionsPanel: Error loading session list', error);
+        dashboardSessions = [];
+        renderSessionList([], false);
+    }
+}
+
+function onSessionControlChange() {
+    renderSessionList(dashboardSessions, true);
+}
+
+function renderSessionList(sessions, preserveSelection) {
+    const container = document.getElementById('session-list');
+    if (!container) return;
+
+    if (!sessions || sessions.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="material-symbols-outlined">forum</span>
+                <p>No sessions synced yet</p>
+            </div>
+        `;
+        selectedSessionId = null;
+        currentSessionDetail = null;
+        renderSessionMessages([]);
+        updateSessionMeta(null);
+        return;
+    }
+
+    const groupBy = document.getElementById('session-group-by').value;
+    const sortBy = document.getElementById('session-sort-by').value;
+
+    // 1. Sort
+    let processedSessions = [...sessions].sort((a, b) => {
+        const timeA = a.lastActivityAt || 0;
+        const timeB = b.lastActivityAt || 0;
+        return sortBy === 'asc' ? timeA - timeB : timeB - timeA;
+    });
+
+    // 2. Render
+    let html = '';
+    if (groupBy === 'none') {
+        html = processedSessions.map(s => renderSessionItem(s)).join('');
+    } else {
+        const groups = new Map();
+        processedSessions.forEach(s => {
+            let key = 'Unknown';
+            if (groupBy === 'project') {
+                key = (s.projectId || 'Unassigned');
+            } else if (groupBy === 'device') {
+                key = (s.device_name || s.device_id || 'Unknown Device');
+            } else if (groupBy === 'date') {
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+                const yesterday = today - 86400000;
+                const last7Days = today - (7 * 86400000);
+                const ts = s.lastActivityAt || 0;
+                
+                if (ts >= today) key = 'Today';
+                else if (ts >= yesterday) key = 'Yesterday';
+                else if (ts >= last7Days) key = 'Last 7 Days';
+                else key = 'Earlier';
+            }
+            
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(s);
+        });
+
+        // For date grouping, we want a specific order
+        if (groupBy === 'date') {
+            const dateOrder = ['Today', 'Yesterday', 'Last 7 Days', 'Earlier'];
+            dateOrder.forEach(key => {
+                const groupSessions = groups.get(key);
+                if (groupSessions && groupSessions.length > 0) {
+                    html += `<div class="session-group-header">${escapeHtml(key)}</div>`;
+                    html += groupSessions.map(s => renderSessionItem(s)).join('');
+                }
+            });
+        } else {
+            groups.forEach((groupSessions, key) => {
+                html += `<div class="session-group-header">${escapeHtml(key)}</div>`;
+                html += groupSessions.map(s => renderSessionItem(s)).join('');
+            });
+        }
+    }
+
+    container.innerHTML = html;
+
+    let nextSessionId = selectedSessionId;
+    if (!preserveSelection || !sessions.some(s => s.id === selectedSessionId)) {
+        nextSessionId = processedSessions[0].id;
+    }
+
+    if (nextSessionId) {
+        selectedSessionId = nextSessionId;
+        if (!currentSessionDetail || currentSessionDetail.id !== nextSessionId || !preserveSelection) {
+            selectSession(nextSessionId);
+        } else {
+            const items = document.querySelectorAll('.session-list-item');
+            items.forEach(item => {
+                item.classList.toggle('active', item.getAttribute('data-session-id') === nextSessionId);
+            });
+        }
+    }
+}
+
+function renderSessionItem(s) {
+    const backend = formatBackendLabel(s);
+    const status = s.is_running ? 'Running' : 'Idle';
+    return `
+        <div class="session-list-item ${s.id === selectedSessionId ? 'active' : ''}" data-session-id="${s.id}" onclick="selectSession('${s.id}')">
+            <div class="session-item-content">
+                <div class="session-list-title">${escapeHtml(s.title || 'New Session')}</div>
+                <div class="session-list-meta">
+                    <span class="session-status ${s.is_running ? 'running' : 'idle'}">${status}</span>
+                    <span>${escapeHtml(backend || 'Unknown')}</span>
+                </div>
+                <div class="session-list-sub">${escapeHtml(s.time_ago || '')} | ${s.message_count || 0} msgs</div>
+            </div>
+            <div class="session-delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Close Session">
+                <span class="material-symbols-outlined">close</span>
+            </div>
+        </div>
+    `;
+}
+
+async function deleteSession(sessionId) {
+    if (!confirm('Are you sure you want to close this session? It will be removed from the dashboard.')) return;
+
+    try {
+        const result = await api.deleteSession(sessionId);
+        if (result.success) {
+            showToast('Session closed', 'success');
+            dashboardSessions = dashboardSessions.filter(s => s.id !== sessionId);
+            renderSessionList(dashboardSessions, false);
+            clearSessionDraft(sessionId);
+        } else {
+            showToast('Failed to close session: ' + result.error, 'error');
+        }
+    } catch (error) {
+        showToast('Error closing session', 'error');
+    }
+}
+
+async function clearAllSessions() {
+    if (!confirm('Are you sure you want to close ALL sessions shown here?')) return;
+    
+    // For simplicity, we'll just clear the local list first, but in a real app
+    // we'd probably want a bulk delete API.
+    let successCount = 0;
+    const toDelete = [...dashboardSessions];
+    
+    showToast(`Closing ${toDelete.length} sessions...`, 'info');
+    
+    for (const session of toDelete) {
+        const result = await api.deleteSession(session.id);
+        if (result.success) {
+            successCount++;
+            clearSessionDraft(session.id);
+        }
+    }
+    
+    loadSessionsPanel(getDeviceIdParam());
+    showToast(`Closed ${successCount} sessions`, 'success');
+}
+
+async function refreshSessions() {
+    const deviceId = getDeviceIdParam();
+    try {
+        const result = await api.syncSessions(deviceId);
+        if (result?.error) {
+            showToast(`Sessions sync failed: ${result.error}`, 'error');
+            return;
+        }
+        markSessionsSynced();
+        await loadRecentSessions(deviceId);
+        await loadSessionsPanel(deviceId, true);
+        showToast('Sessions refreshed', 'success');
+    } catch (error) {
+        showToast(`Sessions refresh failed: ${error.message || 'Unknown error'}`, 'error');
+    }
+}
+
+function buildSessionPreferenceFromSelection(selection) {
+    const backendKey = selection?.backend;
+    const modelKey = selection?.model;
+    if (!backendKey) return null;
+
+    const preference = {
+        preferred_backend_key: backendKey,
+        preferred_model_key: modelKey || null
+    };
+
+    switch (backendKey) {
+        case 'ssh_claude_code':
+            preference.preferred_backend_type = 'SSH';
+            preference.preferred_provider = 'Claude Code';
+            break;
+        case 'ssh_gemini_cli':
+            preference.preferred_backend_type = 'SSH';
+            preference.preferred_provider = 'Gemini';
+            break;
+        case 'openai_api':
+            preference.preferred_backend_type = 'API';
+            preference.preferred_provider = 'openai';
+            break;
+        case 'anthropic_api':
+            preference.preferred_backend_type = 'API';
+            preference.preferred_provider = 'anthropic';
+            break;
+        case 'shadowbridge':
+            preference.preferred_backend_type = 'SSH';
+            preference.preferred_provider = 'ShadowBridge';
+            break;
+        default:
+            preference.preferred_backend_type = null;
+            preference.preferred_provider = null;
+            break;
+    }
+
+    if (modelKey) {
+        preference.preferred_model = modelKey;
+    }
+
+    return preference;
+}
+
+async function applyBackendToSession() {
+    if (!selectedSessionId) {
+        showToast('Select a session first', 'warning');
+        return;
+    }
+
+    const preference = buildSessionPreferenceFromSelection(connectionSelection);
+    if (!preference) {
+        showToast('Select a backend first', 'warning');
+        return;
+    }
+
+    const payload = {
+        id: selectedSessionId,
+        backend_change_pending: true,
+        backend_change_requested_at: Date.now(),
+        ...preference
+    };
+
+    const result = await api.upsertSession(payload);
+    if (result?.error) {
+        showToast(`Failed to apply backend: ${result.error}`, 'error');
+        return;
+    }
+
+    currentSessionDetail = result;
+    setDefaultBackendPreference(preference);
+    updateSessionMeta(result);
+    showToast('Backend change queued', 'success');
+}
+
+function selectSessionFromCard(sessionId) {
+    selectSession(sessionId);
+    const consoleEl = document.querySelector('.session-console');
+    if (consoleEl && typeof consoleEl.scrollIntoView === 'function') {
+        consoleEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+async function selectSession(sessionId) {
+    selectedSessionId = sessionId;
+    const items = document.querySelectorAll('.session-list-item');
+    items.forEach(item => {
+        item.classList.toggle('active', item.getAttribute('data-session-id') === sessionId);
+    });
+    await loadSessionDetails(sessionId);
+    restoreSessionDraft(sessionId);
+    syncConnectionControlsToSession(currentSessionDetail);
+    if (typeof updateConnectionBanner === 'function') {
+        updateConnectionBanner();
+    }
+}
+
+async function loadSessionDetails(sessionId) {
+    if (!sessionId) return;
+    let session = await api.getSession(sessionId);
+    if (!session || session.error) {
+        showToast('Failed to load session', 'error');
+        return;
+    }
+    session = await autoApplyDefaultBackendPreference(session);
+    currentSessionDetail = session;
+    const titleInput = document.getElementById('session-title-input');
+    if (titleInput) {
+        titleInput.value = session.title || '';
+    }
+    updateSessionMeta(session);
+    renderSessionMessages(session.messages || []);
+    setStreamingIndicator(sessionId, false);
+}
+
+function renderSessionMessages(messages) {
+    const container = document.getElementById('session-messages');
+    if (!container) return;
+    sessionMessageMap = new Map();
+
+    if (!messages || messages.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state compact">
+                <p>No messages yet</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = messages.map(msg => {
+        const id = msg.id || msg.messageId || `msg_${msg.timestamp || Date.now()}`;
+        sessionMessageMap.set(id, true);
+        return renderSessionMessage(msg);
+    }).join('');
+
+    scrollSessionMessages();
+}
+
+function renderSessionMessage(message) {
+    const role = String(message.role || 'assistant').toLowerCase();
+    const id = message.id || message.messageId || `msg_${message.timestamp || Date.now()}`;
+    let content = (message.content || '').trim();
+    const timeLabel = formatTimeShort(message.timestamp);
+    
+    // Improved formatting for JSON blobs, technical logs, or Python dict strings
+    let displayContent = '';
+    
+    // Detection logic for technical/structured content
+    const looksTechnical = (content.startsWith('{') || content.startsWith('[')) && content.length > 60;
+    
+    if (looksTechnical) {
+        try {
+            // Try standard JSON first
+            const parsed = JSON.parse(content);
+            displayContent = `<pre class="code-block json-content"><code>${escapeHtml(JSON.stringify(parsed, null, 2))}</code></pre>`;
+        } catch (e) {
+            // If not valid JSON, check if it looks like a Python dict string (has 'key': 'value')
+            if (content.includes("': '") || content.includes("': {")) {
+                // Wrap in pre/code but don't attempt to re-format as JSON
+                displayContent = `<pre class="code-block technical-content"><code>${escapeHtml(content)}</code></pre>`;
+            } else {
+                // Fallback to standard rendering but still use pre if it's large and structured
+                displayContent = `<pre class="code-block"><code>${escapeHtml(content)}</code></pre>`;
+            }
+        }
+    } else {
+        displayContent = escapeHtml(content).replace(/\n/g, '<br>');
+    }
+
+    return `
+        <div class="session-msg ${role}" data-message-id="${id}">
+            <div class="session-msg-role">${escapeHtml(role)}</div>
+            <div class="session-msg-content">${displayContent}</div>
+            <div class="session-msg-meta">${timeLabel}</div>
+        </div>
+    `;
+}
+
+function updateSessionMeta(session) {
+    const meta = document.getElementById('session-meta');
+    if (!meta) return;
+    if (!session) {
+        meta.textContent = 'Select a session to view messages.';
+        return;
+    }
+    const backend = formatBackendLabel(session) || 'Unknown backend';
+    const model = formatModelLabel(session);
+    const device = session.device_name || session.device_id || 'Unknown device';
+    const status = session.is_running ? 'Running' : 'Idle';
+    const timeAgo = session.time_ago || '';
+    const backendSwitches = Number(session.backend_switch_count || 0);
+    const preferredBackend = formatBackendLabel({
+        backend_type: session.preferred_backend_type,
+        backendType: session.preferred_backend_type,
+        provider: session.preferred_provider
+    });
+    const preferredModel = session.preferred_model || session.preferred_model_key || '';
+    const hasPreference = Boolean(preferredBackend || preferredModel || session.preferred_backend_key);
+    const preferenceLabel = [
+        preferredBackend || session.preferred_backend_key,
+        preferredModel
+    ].filter(Boolean).join(' · ');
+    const preferenceState = session.backend_change_pending ? 'pending' : '';
+
+    meta.innerHTML = `
+        <span class="meta-pill">${escapeHtml(device)}</span>
+        <span class="meta-pill">${escapeHtml(backend)}</span>
+        ${model ? `<span class="meta-pill">${escapeHtml(model)}</span>` : ''}
+        <span class="meta-pill ${session.is_running ? 'running' : 'idle'}">${status}</span>
+        ${timeAgo ? `<span class="meta-pill">${escapeHtml(timeAgo)}</span>` : ''}
+        ${backendSwitches > 0 ? `<span class="meta-pill pending">Switches: ${backendSwitches}</span>` : ''}
+        ${hasPreference ? `<span class="meta-pill ${preferenceState}">${escapeHtml(preferenceLabel || 'Pinned')}</span>` : ''}
+        <span class="meta-pill sync-pill" id="session-sync-indicator">
+            <span class="sync-dot" id="session-sync-dot"></span>
+            <span class="sync-text" id="session-sync-text">Sync unknown</span>
+        </span>
+        <span class="meta-pill streaming hidden" id="session-streaming-indicator">Streaming...</span>
+    `;
+    updateSessionSyncIndicator();
+}
+
+function mapSessionToConnectionSelection(session) {
+    if (!session) return null;
+    if (session.preferred_backend_key) {
+        return {
+            backend: session.preferred_backend_key,
+            model: session.preferred_model_key || session.preferred_model || session.model || null
+        };
+    }
+
+    const backendType = String(session.backend_type || session.backendType || '').toLowerCase();
+    const provider = String(session.provider || '').toLowerCase();
+    let backend = null;
+    if (backendType.includes('ssh') || backendType === 'ssh') {
+        if (provider.includes('claude')) backend = 'ssh_claude_code';
+        if (provider.includes('gemini')) backend = 'ssh_gemini_cli';
+    } else if (backendType.includes('api')) {
+        if (provider.includes('openai')) backend = 'openai_api';
+        if (provider.includes('anthropic')) backend = 'anthropic_api';
+    } else if (backendType.includes('local') || provider.includes('on-device')) {
+        backend = 'shadowbridge';
+    }
+
+    return {
+        backend,
+        model: session.model || null
+    };
+}
+
+function syncConnectionControlsToSession(session) {
+    const mapping = mapSessionToConnectionSelection(session);
+    if (!mapping || !mapping.backend) return;
+
+    if (!CONNECTION_BACKEND_OPTIONS.some(option => option.value === mapping.backend)) {
+        return;
+    }
+
+    connectionSelection.backend = mapping.backend;
+    updateModelOptions(mapping.backend, mapping.model);
+    persistConnectionSelection();
+    updateConnectionSelectionHint();
+}
+
+function formatBackendLabel(session) {
+    const rawType = String(session.backend_type || session.backendType || '').toLowerCase();
+    const provider = String(session.provider || '').trim();
+
+    if (rawType.includes('ssh_claude_code')) return 'Claude Code (SSH)';
+    if (rawType.includes('ssh_gemini_cli')) return 'Gemini CLI (SSH)';
+    if (rawType.includes('ssh_aider')) return 'Aider (SSH)';
+    if (rawType.includes('ssh_cursor')) return 'Cursor (SSH)';
+    if (rawType.includes('ssh_opencode')) return 'OpenCode (SSH)';
+    if (rawType.includes('ssh')) return provider ? `SSH - ${provider}` : 'SSH';
+    
+    if (rawType.includes('openai_api')) return 'OpenAI API';
+    if (rawType.includes('anthropic_api')) return 'Anthropic API';
+    if (rawType.includes('gemini_api')) return 'Gemini API';
+    if (rawType.includes('grok_api')) return 'Grok API';
+    if (rawType.includes('api')) return provider || 'API';
+    
+    if (rawType.includes('local')) return 'On-phone LLM';
+    if (!rawType && provider) return provider;
+    if (rawType) return rawType.toUpperCase();
+    return '';
+}
+
+function formatModelLabel(session) {
+    const model = String(session.model || '').trim();
+    return model;
+}
+
+function formatTimeShort(timestamp) {
+    if (!timestamp) return '';
+    try {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+        return '';
+    }
+}
+
+function scrollSessionMessages() {
+    const container = document.getElementById('session-messages');
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+}
+
+function scheduleSessionsRefresh() {
+    if (sessionsRefreshTimer) {
+        clearTimeout(sessionsRefreshTimer);
+    }
+    sessionsRefreshTimer = setTimeout(() => {
+        const deviceId = getDeviceIdParam();
+        loadRecentSessions(deviceId);
+        loadSessionsPanel(deviceId, true);
+    }, 600);
+}
+
+function setStreamingIndicator(sessionId, isStreaming) {
+    const indicator = document.getElementById('session-streaming-indicator');
+    if (!indicator) return;
+    if (selectedSessionId && sessionId && selectedSessionId !== sessionId) return;
+    indicator.classList.toggle('hidden', !isStreaming);
+}
+
+function handleSessionMessage(data) {
+    const sessionId = data.session_id || data.sessionId;
+    const message = data.message || {};
+    if (!sessionId || !message) return;
+    const role = String(message.role || '').toLowerCase();
+    const isStreaming = Boolean(data.is_update) && role === 'assistant' && !message.is_final;
+    if (isStreaming) {
+        setStreamingIndicator(sessionId, true);
+    } else if (message.is_final || role !== 'assistant') {
+        setStreamingIndicator(sessionId, false);
+    }
+
+    if (selectedSessionId === sessionId) {
+        const container = document.getElementById('session-messages');
+        if (container) {
+            const messageId = message.id || message.messageId || `msg_${message.timestamp || Date.now()}`;
+            const existing = container.querySelector(`[data-message-id="${messageId}"]`);
+            if (existing) {
+                const contentEl = existing.querySelector('.session-msg-content');
+                if (contentEl) {
+                    const safeContent = escapeHtml(message.content || '').replace(/\n/g, '<br>');
+                    contentEl.innerHTML = safeContent;
+                }
+                const metaEl = existing.querySelector('.session-msg-meta');
+                if (metaEl) metaEl.textContent = formatTimeShort(message.timestamp);
+            } else {
+                container.insertAdjacentHTML('beforeend', renderSessionMessage(message));
+                sessionMessageMap.set(messageId, true);
+            }
+            scrollSessionMessages();
+        }
+    }
+
+    if (currentSessionDetail && currentSessionDetail.id === sessionId) {
+        if (!Array.isArray(currentSessionDetail.messages)) {
+            currentSessionDetail.messages = [];
+        }
+        const messageId = message.id || message.messageId;
+        const existingIndex = currentSessionDetail.messages.findIndex(m => (m.id || m.messageId) === messageId);
+        if (existingIndex >= 0) {
+            currentSessionDetail.messages[existingIndex] = message;
+        } else {
+            currentSessionDetail.messages.push(message);
+        }
+        let refreshMeta = false;
+        if (message.backend_type) {
+            currentSessionDetail.backend_type = message.backend_type;
+            refreshMeta = true;
+        }
+        if (message.backendType) {
+            currentSessionDetail.backendType = message.backendType;
+            refreshMeta = true;
+        }
+        if (message.provider) {
+            currentSessionDetail.provider = message.provider;
+            refreshMeta = true;
+        }
+        if (message.model) {
+            currentSessionDetail.model = message.model;
+            refreshMeta = true;
+        }
+        if (refreshMeta) {
+            updateSessionMeta(currentSessionDetail);
+            if (isStreaming) {
+                setStreamingIndicator(sessionId, true);
+            }
+            if (typeof updateConnectionBanner === 'function') {
+                updateConnectionBanner();
+            }
+        }
+    }
+
+    scheduleSessionsRefresh();
+}
+
+async function saveSessionTitle() {
+    if (!selectedSessionId) {
+        showToast('Select a session first', 'warning');
+        return;
+    }
+    const input = document.getElementById('session-title-input');
+    const title = (input?.value || '').trim();
+    if (!title) {
+        showToast('Title cannot be empty', 'warning');
+        return;
+    }
+
+    const targetDevice = resolveTargetDeviceInfo();
+    const sessionDeviceId = currentSessionDetail?.device_id || targetDevice.id;
+    const sessionDeviceName = currentSessionDetail?.device_name || targetDevice.name;
+
+    const payload = {
+        id: selectedSessionId,
+        title: title,
+        pending_sync: Boolean(sessionDeviceId),
+        projectId: currentSessionDetail?.projectId
+    };
+
+    if (sessionDeviceId) {
+        payload.device_id = sessionDeviceId;
+    }
+    if (sessionDeviceName) {
+        payload.device_name = sessionDeviceName;
+    }
+
+    const result = await api.upsertSession(payload);
+    if (result.error) {
+        showToast('Failed to update title: ' + result.error, 'error');
+        return;
+    }
+    currentSessionDetail = result;
+    loadSessionsPanel(getDeviceIdParam(), true);
+    showToast('Session title updated', 'success');
+}
+
+async function onSessionComposeSubmit(event) {
+    event.preventDefault();
+    if (!selectedSessionId) {
+        showToast('Select a session first', 'warning');
+        return;
+    }
+
+    const input = document.getElementById('session-input');
+    const content = (input?.value || '').trim();
+    if (!content) return;
+
+    const message = {
+        id: generateMessageId(),
+        role: 'user',
+        content: content,
+        timestamp: Date.now(),
+        source: 'web'
+    };
+
+    const targetDevice = resolveTargetDeviceInfo();
+    const sessionDeviceId = currentSessionDetail?.device_id || targetDevice.id;
+    const sessionDeviceName = currentSessionDetail?.device_name || targetDevice.name;
+
+    const sessionMeta = {
+        pending_sync: Boolean(sessionDeviceId),
+        projectId: currentSessionDetail?.projectId,
+        backend_type:
+            currentSessionDetail?.backend_type || currentSessionDetail?.backendType,
+        provider: currentSessionDetail?.provider,
+        model: currentSessionDetail?.model
+    };
+
+    if (sessionDeviceId) {
+        sessionMeta.device_id = sessionDeviceId;
+    }
+    if (sessionDeviceName) {
+        sessionMeta.device_name = sessionDeviceName;
+    }
+
+    const result = await api.appendSessionMessage(selectedSessionId, {
+        message: message,
+        session_meta: sessionMeta
+    });
+
+    if (result.error) {
+        showToast('Failed to send message: ' + result.error, 'error');
+        return;
+    }
+
+    handleSessionMessage({ session_id: selectedSessionId, message: result.message });
+    input.value = '';
+    clearSessionDraft(selectedSessionId);
+}
+
+function generateMessageId() {
+    return `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+ async function loadActivityFeed(deviceId) {
+    try {
+        const container = document.getElementById('activity-feed');
+        
+        // Combine projects and notes for activity
+        const projects = await api.getProjects(deviceId);
+        const notes = await api.getNotes(deviceId);
+        
+        // Check if data is arrays before processing
+        if (!Array.isArray(projects) || !Array.isArray(notes)) {
+            console.error('loadActivityFeed: API returned non-array data', 'projects:', typeof projects, 'notes:', typeof notes);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading activity: Invalid data format</p>
+                </div>
+            `;
+            return;
+        }
+        
+        const activities = [
+            ...projects.slice(0, 3).map(p => ({
+                type: 'project',
+                title: p.name,
+                device: p.device_name,
+                time: p.time_ago,
+                timestamp: p.updated_at || 0
+            })),
+            ...notes.slice(0, 3).map(n => ({
+                type: 'note',
+                title: n.title,
+                device: n.device_name,
+                time: n.time_ago,
+                timestamp: n.updated_at || 0
+            }))
+        ].sort((a, b) => b.timestamp - a.timestamp).slice(0, 6);
+        
+        if (activities.length === 0) {
+            container.innerHTML = '<div class="empty-state"><p>No recent activity</p></div>';
+            return;
+        }
+        
+        container.innerHTML = activities.map(a => `
+            <div class="activity-item">
+                <div class="activity-icon ${a.type}">
+                    <span class="material-symbols-outlined">${a.type === 'project' ? 'folder' : 'description'}</span>
+                </div>
+                <div class="activity-content">
+                    <span class="activity-action">${a.type === 'project' ? 'Project updated' : 'Note modified'}</span>
+                    <span class="activity-title">${escapeHtml(a.title)}</span>
+                </div>
+                <div class="activity-meta">
+                    <span class="activity-device">${escapeHtml(a.device)}</span>
+                    <span class="activity-time">${a.time}</span>
+                </div>
+            </div>
+        `).join('');
+        console.log('loadActivityFeed: Loaded', activities.length, 'activities');
+    } catch (error) {
+        console.error('loadActivityFeed: Error loading activity', error);
+        const container = document.getElementById('activity-feed');
+        if (container) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="material-symbols-outlined">error</span>
+                    <p>Error loading activity: ${escapeHtml(error.message || 'Unknown error')}</p>
+                </div>
+            `;
+        }
+    }
+}
+
+async function openNoteModal(noteId, title) {
+    const result = await api.getNoteContent(noteId);
+
+    if (result.error) {
+        showToast('Failed to load note: ' + result.error, 'error');
+        return;
+    }
+
+    currentNoteId = noteId;
+    currentNoteContent = result.content || '';
+
+    document.getElementById('modal-title').textContent = title;
+
+    if (typeof marked !== 'undefined') {
+        const rawHtml = marked.parse(currentNoteContent);
+        if (typeof DOMPurify !== 'undefined') {
+            document.getElementById('modal-content').innerHTML = DOMPurify.sanitize(rawHtml);
+        } else {
+            document.getElementById('modal-content').innerHTML = rawHtml.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '').replace(/\son\w+\s*=\s*["'][^"']*["']/gi, '');
+        }
+    } else {
+        document.getElementById('modal-content').innerHTML = '<pre>' + escapeHtml(currentNoteContent) + '</pre>';
+    }
+
+    document.getElementById('note-modal').classList.remove('hidden');
+}
+
+function getTimeAgo(date) {
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    return Math.floor(seconds / 86400) + 'd ago';
+}
+</script>
+
+<style>
+.dashboard-card {
+    background: var(--md-sys-color-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 12px;
+    padding: 24px;
+}
+
+.dashboard-card .section-header {
+    margin-bottom: 16px;
+}
+
+.dashboard-card .projects-list,
+.dashboard-card .notes-list {
+    margin: 0 -8px;
+}
+
+.dashboard-card .project-item,
+.dashboard-card .note-item {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.recent-generations-card {
+    margin-top: 16px;
+}
+
+.recent-generations-carousel {
+    display: flex;
+    overflow-x: auto;
+    gap: 16px;
+    padding: 12px 4px 4px;
+    scroll-snap-type: x mandatory;
+}
+
+.recent-generations-carousel .empty-state,
+.recent-generations-carousel .loading {
+    min-height: 140px;
+}
+
+.generation-card {
+    flex: 0 0 220px;
+    display: flex;
+    flex-direction: column;
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 220px;
+    scroll-snap-align: start;
+}
+
+.generation-media {
+    height: 110px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--md-sys-color-surface-variant);
+}
+
+.generation-media img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.generation-media-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    color: var(--accent);
+}
+
+.generation-body {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.generation-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.generation-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    line-height: 1.3;
+}
+
+.generation-type {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--accent);
+}
+
+.generation-meta {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    min-height: 32px;
+}
+
+.generation-footer {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.generation-time {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.generation-card button.btn {
+    padding: 4px 10px;
+    font-size: 11px;
+}
+
+.dashboard-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+    margin-bottom: var(--spacing-lg);
+}
+
+@media (max-width: 900px) {
+    .dashboard-columns {
+        grid-template-columns: 1fr;
+    }
+}
+
+.section-header h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.section-header h2 .material-symbols-outlined {
+    font-size: 20px;
+    color: var(--accent);
+}
+
+.view-all {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 13px;
+}
+
+.view-all .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.project-item, .note-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.project-item:hover, .note-item:hover {
+    background: var(--md-sys-color-surface-variant);
+    border-color: var(--md-sys-color-outline);
+}
+
+.project-icon, .note-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: var(--md-sys-color-surface-variant);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.project-icon .material-symbols-outlined {
+    color: var(--accent);
+}
+
+.note-icon .material-symbols-outlined {
+    color: var(--warning);
+}
+
+.project-details, .note-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.project-name, .note-title {
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.project-meta, .note-meta {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.project-meta .material-symbols-outlined,
+.note-meta .material-symbols-outlined {
+    font-size: 14px;
+}
+
+.meta-separator {
+    margin: 0 4px;
+    opacity: 0.5;
+}
+
+.project-arrow, .note-arrow {
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 20px;
+}
+
+.activity-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.activity-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.activity-item:hover {
+    background: var(--md-sys-color-surface-variant);
+    border-color: var(--md-sys-color-outline);
+}
+
+.activity-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.activity-icon.project {
+    background: rgba(var(--accent-rgb), 0.15);
+    color: var(--accent);
+}
+
+.activity-icon.note {
+    background: rgba(var(--warning-rgb), 0.15);
+    color: var(--warning);
+}
+
+.activity-icon .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.activity-content {
+    flex: 1;
+}
+
+.activity-action {
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.activity-title {
+    display: block;
+    font-weight: 500;
+    color: var(--md-sys-color-on-surface);
+    margin-top: 2px;
+}
+
+.activity-meta {
+    text-align: right;
+}
+
+.activity-device {
+    display: block;
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.activity-time {
+    display: block;
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    opacity: 0.7;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 32px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.empty-state .material-symbols-outlined {
+    font-size: 48px;
+    opacity: 0.5;
+    margin-bottom: 12px;
+}
+
+.empty-state p {
+    margin-bottom: 16px;
+}
+
+.empty-state.compact {
+    padding: 16px;
+    font-size: 13px;
+}
+
+.mini-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 8px;
+}
+
+.mini-card {
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    min-height: 100px;
+}
+
+.mini-card:hover {
+    background: var(--md-sys-color-surface-variant);
+    border-color: var(--md-sys-color-outline);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.mini-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.mini-header .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.mini-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.5;
+    min-height: 42px;
+    padding: 2px 0;
+}
+
+.mini-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    flex-wrap: wrap;
+    row-gap: 6px;
+    min-height: 20px;
+}
+
+.mini-meta .material-symbols-outlined {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.mini-foot {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    opacity: 0.8;
+    margin-top: auto;
+}
+
+.sessions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+}
+
+.session-status {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: var(--md-sys-color-surface-variant);
+    color: var(--md-sys-color-on-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    white-space: nowrap;
+}
+
+.session-status.running {
+    background: rgba(var(--success-rgb), 0.18);
+    color: var(--success);
+    border-color: rgba(var(--success-rgb), 0.35);
+}
+
+.session-status.idle {
+    background: rgba(var(--warning-rgb), 0.15);
+    color: var(--warning);
+    border-color: rgba(var(--warning-rgb), 0.3);
+}
+
+.session-console {
+    margin-top: var(--spacing-lg);
+}
+
+.session-title-editor {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.session-title-editor input {
+    min-width: 220px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font-size: 13px;
+}
+
+.session-console-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+    gap: var(--spacing-md);
+    align-items: stretch;
+    grid-auto-rows: minmax(0, auto);
+}
+
+.session-list {
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 10px;
+    padding: var(--spacing-md);
+    max-height: 800px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 520px;
+    flex: 1 1 auto;
+}
+
+.session-console .section-header {
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.session-header-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.session-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.control-select {
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.session-list-item {
+    position: relative;
+    padding: 14px 12px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    background: var(--md-sys-color-surface);
+    overflow: hidden;
+    user-select: none;
+    margin-bottom: 6px;
+}
+
+.session-list-item:hover {
+    border-color: var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-variant);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.session-list-item.active {
+    border-color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.08);
+}
+
+.session-item-content {
+    transition: transform 0.25s ease;
+    min-width: 0;
+    padding-right: 4px;
+}
+
+.session-list-item:hover .session-item-content {
+    transform: translateX(-40px);
+}
+
+.session-list-item:hover .session-delete-btn {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.session-delete-btn {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 44px;
+    background: var(--md-sys-color-error);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: translateX(100%);
+    opacity: 0;
+    transition: all 0.2s ease;
+    z-index: 5;
+}
+
+.session-delete-btn:hover {
+    background: #ff5252;
+}
+
+.session-group-header {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 12px 4px 6px 4px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    margin-bottom: 8px;
+}
+
+.session-list-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin-bottom: 6px;
+    white-space: normal;
+    word-wrap: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.5;
+    min-height: 42px;
+    padding-right: 8px;
+}
+
+.session-list-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: 6px;
+    row-gap: 4px;
+}
+
+.session-list-sub {
+    font-size: 11px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.session-chat {
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    min-height: 420px;
+    max-height: min(75vh, 720px);
+    height: auto;
+    min-width: 0; /* Fix for layout expansion */
+    padding: 0;
+}
+
+.session-meta {
+    padding: 12px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--md-sys-color-on-surface-variant);
+    row-gap: 8px;
+}
+
+.meta-pill {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--md-sys-color-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.meta-pill.running {
+    background: rgba(var(--success-rgb), 0.18);
+    color: var(--success);
+    border-color: rgba(var(--success-rgb), 0.35);
+}
+
+.meta-pill.idle {
+    background: rgba(var(--warning-rgb), 0.15);
+    color: var(--warning);
+    border-color: rgba(var(--warning-rgb), 0.3);
+}
+
+.meta-pill.sync-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sync-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warning);
+    box-shadow: 0 0 6px rgba(var(--warning-rgb), 0.6);
+}
+
+.sync-dot.ok {
+    background: var(--success);
+    box-shadow: 0 0 6px rgba(var(--success-rgb), 0.6);
+}
+
+.sync-dot.stale {
+    background: var(--error);
+    box-shadow: 0 0 6px rgba(var(--error-rgb), 0.6);
+}
+
+.meta-pill.streaming {
+    background: rgba(var(--accent-rgb), 0.18);
+    color: var(--accent);
+    border-color: rgba(var(--accent-rgb), 0.35);
+}
+
+.meta-pill.pending {
+    background: rgba(var(--warning-rgb), 0.2);
+    color: var(--warning);
+    border-color: rgba(var(--warning-rgb), 0.4);
+}
+
+.session-messages {
+    flex: 1;
+    padding: 12px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    max-height: 100%;
+}
+
+.session-msg {
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-variant);
+    max-width: 95%;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    word-break: break-word;
+}
+
+.session-msg.user {
+    align-self: flex-end;
+    background: rgba(var(--accent-rgb), 0.15);
+    border-color: rgba(var(--accent-rgb), 0.35);
+}
+
+.session-msg.assistant {
+    align-self: flex-start;
+    background: var(--md-sys-color-surface);
+}
+
+.session-msg.system {
+    align-self: center;
+    background: var(--md-sys-color-surface-variant);
+    border-style: dashed;
+    font-size: 12px;
+}
+
+.session-msg-role {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.session-msg-content {
+    font-size: 13px;
+    color: var(--md-sys-color-on-surface);
+    margin-top: 4px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+}
+
+.code-block {
+    margin: 8px 0;
+    padding: 10px;
+    background: var(--md-sys-color-surface-variant);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    max-width: 100%;
+}
+
+.code-block code {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+}
+
+.json-content code {
+    color: var(--accent-light);
+}
+
+.session-msg-meta {
+    font-size: 10px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-top: 4px;
+}
+
+.session-compose {
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    align-items: flex-end;
+}
+
+.session-compose textarea {
+    flex: 1;
+    resize: vertical;
+    border-radius: 8px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    padding: 8px;
+    font-size: 13px;
+}
+
+@media (max-width: 1000px) {
+    .session-console-grid {
+        grid-template-columns: 1fr;
+    }
+    .session-list {
+        max-height: none;
+        min-height: 0;
+    }
+    .session-chat {
+        max-height: none;
+        min-height: 360px;
+    }
+}
+
+@media (max-width: 640px) {
+    .session-console-grid {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-sm);
+    }
+    .session-title-editor {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .session-title-editor input {
+        width: 100%;
+    }
+    .session-controls {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+}
+</style>
+{% endblock %}

@@ -1,0 +1,786 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Audio{% endblock %}
+{% block page_title %}Audio{% endblock %}
+
+{% block content %}
+<div class="page-actions">
+    <button class="btn btn-primary" onclick="showAudioModal()">
+        <span class="material-symbols-outlined">graphic_eq</span> Generate Audio
+    </button>
+</div>
+
+<div id="audio-service-banner" class="info-banner hidden">
+    <div class="info-banner-content">
+        <span class="material-symbols-outlined">warning</span>
+        <div>
+            <span id="audio-service-message">Audio service unavailable</span>
+            <div id="audio-install-note" class="text-muted" style="font-size: 0.85em; margin-top: 4px;"></div>
+            <div id="audio-install-commands" class="audio-install-commands hidden"></div>
+            <a id="audio-install-guide" class="audio-install-guide hidden" target="_blank" rel="noreferrer">Manual install guide</a>
+        </div>
+    </div>
+    <button id="audio-install-btn" class="btn btn-small btn-primary" onclick="runAudioSetup()">Install (~2.5GB)</button>
+</div>
+
+<div id="active-audio-panel" class="batch-progress-panel hidden">
+    <div class="batch-progress-header">
+        <span class="material-symbols-outlined spin">autorenew</span>
+        <span id="active-audio-prompt" class="batch-prompt-text">Generating...</span>
+        <span id="active-audio-progress" class="batch-count">0%</span>
+    </div>
+    <div class="batch-progress-bar-container">
+        <div id="active-audio-bar" class="batch-progress-bar" style="width: 0%"></div>
+    </div>
+    <div class="batch-progress-footer">
+        <span id="active-audio-stage">Preparing...</span>
+        <button class="btn btn-small btn-danger" onclick="cancelAudioGeneration()">
+            <span class="material-symbols-outlined">cancel</span> Cancel
+        </button>
+    </div>
+    <div id="active-audio-error" class="error-message hidden"></div>
+</div>
+
+<div class="audio-layout">
+    <section class="section">
+        <div class="section-header">
+            <h2>Now Playing</h2>
+        </div>
+        <div class="audio-player-card">
+            <div class="audio-player-meta">
+                <div class="audio-player-title" id="player-title">No audio selected</div>
+                <div class="audio-player-subtitle" id="player-subtitle">Generate or select a clip</div>
+            </div>
+            <audio id="audio-player" controls class="audio-player"></audio>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-header">
+            <h2>Recent Generations</h2>
+        </div>
+        <div id="audio-history" class="audio-history-list">
+            <div class="loading">Loading audio history...</div>
+        </div>
+    </section>
+</div>
+
+<div id="audio-modal" class="modal hidden">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h2><span class="material-symbols-outlined">music_note</span> Generate Audio</h2>
+            <button class="modal-close" onclick="closeAudioModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="audio-prompt">Prompt *</label>
+                <textarea id="audio-prompt" class="form-input" rows="3" placeholder="A dreamy synthwave track with soft pads and slow drums..."></textarea>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group form-half">
+                    <label for="audio-mode">Mode</label>
+                    <select id="audio-mode" class="form-input" onchange="updateAudioModels()">
+                        <option value="music">Music</option>
+                        <option value="sfx">Sound Effects</option>
+                    </select>
+                </div>
+                <div class="form-group form-half">
+                    <label for="audio-model">Model</label>
+                    <select id="audio-model" class="form-input"></select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group form-half">
+                    <label for="audio-duration">Duration: <span id="duration-display">8</span>s</label>
+                    <input id="audio-duration" type="range" class="form-range" min="2" max="30" value="8" oninput="document.getElementById('duration-display').textContent = this.value; updateAudioEstimate()">
+                </div>
+                <div class="form-group form-half">
+                    <label for="audio-temperature">Creativity: <span id="audio-temperature-label">1.0 (balanced)</span></label>
+                    <input id="audio-temperature" type="range" class="form-range" min="0.2" max="2.0" step="0.1" value="1.0" oninput="updateTemperatureLabel()">
+                </div>
+            </div>
+
+            <!-- Advanced Settings (collapsible) -->
+            <div class="advanced-toggle" onclick="toggleAudioAdvanced()">
+                <span class="material-symbols-outlined" id="audio-advanced-icon">expand_more</span>
+                <span>Advanced Settings</span>
+            </div>
+            <div id="audio-advanced-controls" class="advanced-controls hidden">
+                <div class="form-row">
+                    <div class="form-group form-half">
+                        <label for="audio-seed">Seed (optional)</label>
+                        <input id="audio-seed" type="number" class="form-input" placeholder="Random" min="0">
+                        <div class="input-hint">Use same seed for reproducible results</div>
+                    </div>
+                    <div class="form-group form-half">
+                        <label for="audio-top-k">Top-k Sampling</label>
+                        <input id="audio-top-k" type="number" class="form-input" min="50" max="500" value="250">
+                        <div class="input-hint">Higher = more variety (50-500)</div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group form-half">
+                        <label for="audio-top-p">Top-p (Nucleus)</label>
+                        <input id="audio-top-p" type="number" class="form-input" min="0" max="1" step="0.05" value="0.0">
+                        <div class="input-hint">0 = disabled, 0.9 = focused</div>
+                    </div>
+                    <div class="form-group form-half">
+                        <label for="audio-cfg">Classifier-Free Guidance</label>
+                        <input id="audio-cfg" type="number" class="form-input" min="1" max="10" step="0.5" value="3.0">
+                        <div class="input-hint">Higher = follows prompt more closely</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Estimate panel -->
+            <div class="estimate-panel">
+                <div class="estimate-item">
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>Time: <strong id="audio-estimate-time">~30 sec</strong></span>
+                </div>
+                <div class="estimate-item">
+                    <span class="material-symbols-outlined">memory</span>
+                    <span>GPU: <strong id="audio-estimate-gpu">Local</strong></span>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeAudioModal()">Cancel</button>
+            <button class="btn btn-primary" id="audio-generate-btn" onclick="startAudioGeneration()">
+                <span class="material-symbols-outlined">play_arrow</span> Generate
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let audioModels = {};
+let activeAudioId = null;
+let audioPollInterval = null;
+let audioServiceInfo = {};
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadAudioModels();
+    loadAudioHistory();
+    checkAudioService();
+    updateAudioEstimate();
+});
+
+function showAudioModal() {
+    document.getElementById('audio-modal').classList.remove('hidden');
+    updateAudioEstimate();
+}
+
+function closeAudioModal() {
+    document.getElementById('audio-modal').classList.add('hidden');
+}
+
+function toggleAudioAdvanced() {
+    const controls = document.getElementById('audio-advanced-controls');
+    const icon = document.getElementById('audio-advanced-icon');
+    controls.classList.toggle('hidden');
+    icon.textContent = controls.classList.contains('hidden') ? 'expand_more' : 'expand_less';
+}
+
+function updateTemperatureLabel() {
+    const value = parseFloat(document.getElementById('audio-temperature').value);
+    let label = 'balanced';
+    if (value < 0.7) label = 'focused';
+    if (value > 1.3) label = 'wild';
+    document.getElementById('audio-temperature-label').textContent = `${value.toFixed(1)} (${label})`;
+}
+
+function updateAudioEstimate() {
+    const duration = parseInt(document.getElementById('audio-duration').value) || 8;
+    const model = document.getElementById('audio-model').value || 'musicgen-small';
+
+    // Estimate based on model size (seconds per second of audio)
+    let timeMultiplier = 4; // small model
+    if (model.includes('medium')) timeMultiplier = 6;
+    if (model.includes('large')) timeMultiplier = 10;
+
+    const estimatedSeconds = duration * timeMultiplier;
+    const timeStr = estimatedSeconds >= 60
+        ? `~${Math.floor(estimatedSeconds / 60)}m ${estimatedSeconds % 60}s`
+        : `~${estimatedSeconds} sec`;
+
+    document.getElementById('audio-estimate-time').textContent = timeStr;
+    document.getElementById('audio-estimate-gpu').textContent = audioServiceInfo.gpu_name || 'Local GPU';
+}
+
+async function loadAudioModels() {
+    try {
+        const response = await fetchWithRetry('/audio/models', {}, { attempts: 3, delay: 1200 });
+        const data = await response.json();
+        audioModels = data.data || {};
+        updateAudioModels();
+    } catch (err) {
+        console.error('Audio model load failed:', err);
+    }
+}
+
+function updateAudioModels() {
+    const mode = document.getElementById('audio-mode').value;
+    const modelSelect = document.getElementById('audio-model');
+    modelSelect.innerHTML = '';
+
+    (audioModels[mode] || []).forEach(model => {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = `${model.name} (max ${model.max_duration}s)`;
+        modelSelect.appendChild(option);
+    });
+}
+
+async function checkAudioService() {
+    try {
+        const response = await fetchWithRetry('/audio/status', {}, { attempts: 3, delay: 1200 });
+        const data = await response.json();
+        const service = data.service || {};
+        audioServiceInfo = service;
+
+        const banner = document.getElementById('audio-service-banner');
+        const installBtn = document.getElementById('audio-install-btn');
+        const installNote = document.getElementById('audio-install-note');
+        const installCommands = document.getElementById('audio-install-commands');
+        const installGuide = document.getElementById('audio-install-guide');
+        
+        if (!service.ready) {
+            banner.classList.remove('hidden');
+            const missing = [];
+            if (!service.torch_available) missing.push('PyTorch');
+            if (!service.audiocraft_available) missing.push('AudioCraft');
+            
+            const msg = missing.length > 0
+                ? `Missing: ${missing.join(', ')}`
+                : 'Audio dependencies not installed';
+            document.getElementById('audio-service-message').textContent = msg;
+            
+            // Show install note and update button based on environment
+            if (service.install_note) {
+                installNote.textContent = service.install_note;
+            } else {
+                installNote.textContent = '';
+            }
+
+            if (!service.can_install) {
+                installBtn.textContent = 'Not Available';
+                installBtn.disabled = true;
+                installBtn.classList.add('btn-disabled');
+            } else {
+                const sizeGb = service.install_size_gb || 3.0;
+                installBtn.textContent = `Install (~${sizeGb}GB)`;
+                installBtn.disabled = false;
+                installBtn.classList.remove('btn-disabled');
+            }
+            
+            if (service.install_commands && service.install_commands.length > 0) {
+                installCommands.textContent = service.install_commands.join('\\n');
+                installCommands.classList.remove('hidden');
+            } else {
+                installCommands.classList.add('hidden');
+            }
+
+            if (service.install_manual_url) {
+                installGuide.href = service.install_manual_url;
+                installGuide.classList.remove('hidden');
+            } else {
+                installGuide.classList.add('hidden');
+            }
+        } else {
+            banner.classList.add('hidden');
+            // Update GPU info
+            if (service.gpu_name) {
+                document.getElementById('audio-estimate-gpu').textContent = service.gpu_name;
+            }
+            installCommands.classList.add('hidden');
+            installGuide.classList.add('hidden');
+        }
+        
+        // Check setup status
+        const setup = data.setup || {};
+        if (setup.status === 'running') {
+            installBtn.disabled = true;
+            installBtn.textContent = `Installing... ${setup.progress}%`;
+            installNote.textContent = setup.message || 'Installing dependencies...';
+        } else if (setup.status === 'error') {
+            installNote.textContent = setup.error || 'Installation failed';
+            installBtn.disabled = false;
+            installBtn.textContent = 'Retry Install';
+        }
+    } catch (err) {
+        console.error('Audio status error:', err);
+    }
+}
+
+async function runAudioSetup() {
+    try {
+        const installBtn = document.getElementById('audio-install-btn');
+        installBtn.disabled = true;
+        installBtn.textContent = 'Starting...';
+        
+        const response = await fetch('/audio/setup', { method: 'POST' });
+        const data = await response.json();
+        
+        if (data.status === 'error') {
+            showToast(data.message || 'Setup failed', 'error');
+        } else {
+            showToast('Audio setup started. This may take 5-10 minutes...', 'info');
+            // Poll for status
+            const pollInterval = setInterval(async () => {
+                await checkAudioService();
+                const statusResp = await fetchWithRetry('/audio/setup/status', {}, { attempts: 3, delay: 1200 });
+                const statusData = await statusResp.json();
+                if (statusData.status !== 'running') {
+                    clearInterval(pollInterval);
+                    if (statusData.status === 'ready') {
+                        showToast('Audio setup complete! Please restart ShadowBridge.', 'success');
+                    } else if (statusData.status === 'error') {
+                        showToast('Setup failed: ' + (statusData.error || 'Unknown error'), 'error');
+                    }
+                }
+            }, 3000);
+        }
+    } catch (err) {
+        showToast('Audio setup failed: ' + err.message, 'error');
+        document.getElementById('audio-install-btn').disabled = false;
+    }
+}
+
+async function startAudioGeneration() {
+    const prompt = document.getElementById('audio-prompt').value.trim();
+    if (!prompt) {
+        showToast('Please enter a prompt', 'warning');
+        return;
+    }
+
+    const seedInput = document.getElementById('audio-seed').value;
+    const payload = {
+        prompt: prompt,
+        mode: document.getElementById('audio-mode').value,
+        model: document.getElementById('audio-model').value,
+        duration: parseFloat(document.getElementById('audio-duration').value),
+        temperature: parseFloat(document.getElementById('audio-temperature').value),
+        top_k: parseInt(document.getElementById('audio-top-k').value, 10),
+        top_p: parseFloat(document.getElementById('audio-top-p').value),
+        cfg_coef: parseFloat(document.getElementById('audio-cfg').value),
+        seed: seedInput ? parseInt(seedInput, 10) : undefined
+    };
+
+    const btn = document.getElementById('audio-generate-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined spin">autorenew</span> Starting...';
+
+    try {
+        const response = await fetch('/audio/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            activeAudioId = data.generation_id;
+            closeAudioModal();
+            showActiveAudioPanel(prompt);
+            startAudioPolling();
+            showToast('Audio generation started', 'success');
+        } else {
+            showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="material-symbols-outlined">play_arrow</span> Generate';
+    }
+}
+
+async function cancelAudioGeneration() {
+    if (!activeAudioId) {
+        stopAudioPolling();
+        document.getElementById('active-audio-panel').classList.add('hidden');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/audio/cancel/${activeAudioId}`, { method: 'POST' });
+        const data = await response.json();
+
+        if (data.success) {
+            showToast('Generation cancelled', 'info');
+        } else {
+            showToast('Could not cancel: ' + (data.error || 'Unknown'), 'warning');
+        }
+    } catch (err) {
+        console.error('Cancel error:', err);
+    } finally {
+        stopAudioPolling();
+        activeAudioId = null;
+        document.getElementById('active-audio-panel').classList.add('hidden');
+    }
+}
+
+function showActiveAudioPanel(prompt) {
+    const panel = document.getElementById('active-audio-panel');
+    panel.classList.remove('hidden');
+    document.getElementById('active-audio-prompt').textContent =
+        prompt.length > 50 ? prompt.slice(0, 50) + '...' : prompt;
+    document.getElementById('active-audio-stage').textContent = 'Preparing...';
+    document.getElementById('active-audio-progress').textContent = '0%';
+    document.getElementById('active-audio-bar').style.width = '0%';
+    document.getElementById('active-audio-error').classList.add('hidden');
+}
+
+function startAudioPolling() {
+    stopAudioPolling();
+    audioPollInterval = setInterval(pollAudioStatus, 2000);
+}
+
+function stopAudioPolling() {
+    if (audioPollInterval) {
+        clearInterval(audioPollInterval);
+        audioPollInterval = null;
+    }
+}
+
+async function pollAudioStatus() {
+    if (!activeAudioId) return;
+
+    try {
+        const response = await fetch(`/audio/status/${activeAudioId}`);
+        const data = await response.json();
+
+        if (data.error) {
+            document.getElementById('active-audio-error').textContent = data.error;
+            document.getElementById('active-audio-error').classList.remove('hidden');
+            stopAudioPolling();
+            return;
+        }
+
+        const progress = data.progress || 0;
+        document.getElementById('active-audio-progress').textContent = `${progress}%`;
+        document.getElementById('active-audio-bar').style.width = `${progress}%`;
+        document.getElementById('active-audio-stage').textContent = data.message || data.status || 'Processing';
+
+        if (data.status === 'completed') {
+            stopAudioPolling();
+            activeAudioId = null;
+            if (data.stream_url) {
+                playAudio({
+                    stream_url: data.stream_url,
+                    prompt: data.prompt || 'Generated audio',
+                    model: data.model || '',
+                    duration: data.duration || ''
+                });
+            }
+            loadAudioHistory();
+            showToast('Audio ready', 'success');
+        } else if (data.status === 'failed') {
+            stopAudioPolling();
+            activeAudioId = null;
+            document.getElementById('active-audio-error').textContent = data.error || 'Generation failed';
+            document.getElementById('active-audio-error').classList.remove('hidden');
+        }
+    } catch (err) {
+        console.error('Audio status error:', err);
+    }
+}
+
+async function loadAudioHistory() {
+    try {
+        const response = await fetchWithRetry('/audio/history', {}, { attempts: 3, delay: 1200 });
+        const data = await response.json();
+        renderAudioHistory(data.data || []);
+    } catch (err) {
+        document.getElementById('audio-history').innerHTML =
+            '<div class="error-message">Failed to load audio history</div>';
+    }
+}
+
+function renderAudioHistory(items) {
+    const container = document.getElementById('audio-history');
+
+    if (!items || items.length === 0) {
+        container.innerHTML = '<div class="empty-state">No audio generated yet</div>';
+        return;
+    }
+
+    container.innerHTML = items.map(item => {
+        const timeAgo = item.created_at ? formatTimeAgo(item.created_at) : '';
+        return `
+        <div class="audio-history-item">
+            <div class="audio-history-info">
+                <div class="audio-history-title">${escapeHtml(item.prompt || 'Untitled')}</div>
+                <div class="audio-history-meta">
+                    <span>${escapeHtml(item.model || '')}</span>
+                    <span class="separator">|</span>
+                    <span>${item.mode || 'music'}</span>
+                    <span class="separator">|</span>
+                    <span>${item.duration || 0}s</span>
+                    ${timeAgo ? `<span class="separator">|</span><span>${timeAgo}</span>` : ''}
+                </div>
+            </div>
+            <div class="audio-history-actions">
+                <button class="btn btn-small btn-icon" onclick='playAudio(${JSON.stringify(item)})' title="Play">
+                    <span class="material-symbols-outlined">play_arrow</span>
+                </button>
+                <button class="btn btn-small btn-icon btn-secondary" onclick='downloadAudio("${item.stream_url || ''}", "${escapeHtml(item.prompt || 'audio')}")' title="Download">
+                    <span class="material-symbols-outlined">download</span>
+                </button>
+            </div>
+        </div>
+    `}).join('');
+}
+
+function downloadAudio(url, filename) {
+    if (!url) {
+        showToast('Audio file unavailable', 'warning');
+        return;
+    }
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filename.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '_')}.wav`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+function formatTimeAgo(timestamp) {
+    const now = Date.now();
+    const diff = now - timestamp;
+
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return 'just now';
+}
+
+function playAudio(item) {
+    const player = document.getElementById('audio-player');
+    if (!item || !item.stream_url) {
+        showToast('Audio file unavailable', 'warning');
+        return;
+    }
+
+    document.getElementById('player-title').textContent = item.prompt || 'Generated audio';
+    document.getElementById('player-subtitle').textContent = `${item.model || ''} • ${item.duration || 0}s`;
+    player.src = item.stream_url;
+    player.play();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text || '';
+    return div.innerHTML;
+}
+</script>
+
+<style>
+.audio-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+}
+
+@media (max-width: 1200px) {
+    .audio-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.audio-player-card {
+    background: var(--card-bg, var(--glass-bg));
+    border: 1px solid var(--border-color, var(--glass-border));
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.audio-player-meta {
+    margin-bottom: 12px;
+}
+
+.audio-player-title {
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.audio-player-subtitle {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.audio-player {
+    width: 100%;
+}
+
+.audio-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.audio-history-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 12px 16px;
+}
+
+.audio-history-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.audio-history-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.audio-history-meta .separator {
+    opacity: 0.5;
+}
+
+.info-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: rgba(255, 183, 77, 0.12);
+    border: 1px solid rgba(255, 183, 77, 0.3);
+    margin-bottom: 16px;
+}
+
+.info-banner.hidden {
+    display: none;
+}
+
+.info-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--warning);
+}
+
+.audio-install-commands {
+    font-family: var(--font-mono, 'Segoe UI Mono', Consolas, monospace);
+    font-size: 0.85em;
+    margin-top: 6px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px dashed var(--border-color);
+    background: var(--bg-secondary);
+    white-space: pre-line;
+}
+
+.audio-install-guide {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 0.8em;
+    color: var(--primary-color);
+}
+
+.audio-install-commands.hidden,
+.audio-install-guide.hidden {
+    display: none;
+}
+
+.range-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* Advanced Settings */
+.advanced-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.9em;
+    border-top: 1px solid var(--border-color);
+    margin-top: 16px;
+    transition: color 0.2s;
+}
+
+.advanced-toggle:hover {
+    color: var(--text-primary);
+}
+
+.advanced-controls {
+    padding: 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.input-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* Estimate Panel */
+.estimate-panel {
+    display: flex;
+    gap: 24px;
+    padding: 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    margin-top: 16px;
+}
+
+.estimate-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.estimate-item .material-symbols-outlined {
+    color: var(--primary-color);
+}
+
+/* Icon Buttons */
+.btn-icon {
+    padding: 8px;
+    min-width: auto;
+}
+
+.btn-icon .material-symbols-outlined {
+    font-size: 18px;
+}
+
+.audio-history-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Spin animation */
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+</style>
+{% endblock %}

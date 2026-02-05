@@ -1,0 +1,1272 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - Deploy{% endblock %}
+{% block page_title %}Deploy Agents{% endblock %}
+
+{% block head %}
+<style>
+/* ============================================
+   DEPLOY WIZARD - SCOPED STYLES
+   ============================================ */
+
+/* Active Deployments Strip */
+.deploy-strip {
+    margin-bottom: var(--spacing-xl);
+}
+
+.deploy-strip-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-md);
+}
+
+.deploy-strip-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.deploy-strip-title .live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    animation: pulse-anim 2s infinite;
+}
+
+.deploy-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: var(--spacing-md);
+}
+
+.deploy-card {
+    background: var(--glass-bg-elevated);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    position: relative;
+    overflow: hidden;
+    transition: all var(--transition-normal);
+}
+
+.deploy-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%);
+}
+
+.deploy-card.paused::before {
+    background: var(--warning);
+}
+
+.deploy-card.stopped::before {
+    background: var(--md-sys-color-outline);
+}
+
+.deploy-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--spacing-md);
+}
+
+.deploy-card-info h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin: 0 0 4px;
+}
+
+.deploy-card-meta {
+    font-size: 0.8rem;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.deploy-card-status {
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.deploy-card-status.running {
+    background: var(--success-container);
+    color: var(--success);
+}
+
+.deploy-card-status.paused {
+    background: var(--warning-container);
+    color: var(--warning);
+}
+
+.deploy-card-status.starting {
+    background: var(--accent-container);
+    color: var(--accent-light);
+}
+
+.deploy-card-status.stopped,
+.deploy-card-status.failed {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.deploy-card-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.deploy-stat {
+    text-align: center;
+}
+
+.deploy-stat-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--md-sys-color-on-surface);
+    line-height: 1.2;
+}
+
+.deploy-stat-label {
+    font-size: 0.65rem;
+    color: var(--md-sys-color-on-surface-variant);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-top: 2px;
+}
+
+.deploy-card-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    justify-content: flex-end;
+}
+
+.deploy-card-actions .btn {
+    padding: 4px 12px;
+    font-size: 0.75rem;
+}
+
+.deploy-empty {
+    text-align: center;
+    padding: var(--spacing-lg);
+    color: var(--md-sys-color-on-surface-variant);
+    background: var(--glass-bg);
+    border: 1px dashed var(--glass-border);
+    border-radius: var(--radius-lg);
+    font-size: 0.9rem;
+}
+
+/* ---- Wizard ---- */
+.wizard-container {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: var(--spacing-xl);
+    align-items: start;
+}
+
+@media (max-width: 900px) {
+    .wizard-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+.wizard-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xl);
+}
+
+.wizard-section {
+    background: var(--glass-bg-elevated);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+}
+
+.wizard-section-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-lg);
+}
+
+.wizard-section-header .material-symbols-outlined {
+    font-size: 22px;
+    color: var(--accent);
+}
+
+.wizard-section-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin: 0;
+}
+
+.wizard-section-subtitle {
+    font-size: 0.8rem;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-left: auto;
+}
+
+/* Form Fields */
+.wiz-field {
+    margin-bottom: var(--spacing-lg);
+}
+
+.wiz-field:last-child {
+    margin-bottom: 0;
+}
+
+.wiz-label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.wiz-select,
+.wiz-input,
+.wiz-textarea {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--radius-md);
+    color: var(--md-sys-color-on-surface);
+    font-size: 0.9rem;
+    font-family: var(--font-family);
+    transition: all var(--transition-fast);
+    box-sizing: border-box;
+}
+
+.wiz-select:focus,
+.wiz-input:focus,
+.wiz-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-container);
+}
+
+.wiz-textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+/* Slider */
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.wiz-slider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--md-sys-color-outline-variant);
+    outline: none;
+    transition: background var(--transition-fast);
+}
+
+.wiz-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    transition: transform var(--transition-fast);
+}
+
+.wiz-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+}
+
+.wiz-slider::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+
+.slider-value {
+    min-width: 52px;
+    text-align: center;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--accent-light);
+    font-family: var(--font-mono);
+}
+
+/* Provider Row */
+.provider-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+}
+
+@media (max-width: 600px) {
+    .provider-row {
+        grid-template-columns: 1fr;
+    }
+}
+
+.api-key-status {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    margin-top: 4px;
+}
+
+.api-key-status.ok {
+    color: var(--success);
+}
+
+.api-key-status.missing {
+    color: var(--md-sys-color-error);
+}
+
+.api-key-status .material-symbols-outlined {
+    font-size: 14px;
+}
+
+/* Preset Grid */
+.preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: var(--spacing-md);
+}
+
+.preset-card {
+    background: var(--md-sys-color-surface);
+    border: 2px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: center;
+    position: relative;
+}
+
+.preset-card:hover {
+    border-color: var(--md-sys-color-outline);
+    transform: translateY(-1px);
+}
+
+.preset-card.selected {
+    border-color: var(--accent);
+    background: var(--accent-container);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+.preset-card .material-symbols-outlined {
+    font-size: 28px;
+    color: var(--md-sys-color-on-surface-variant);
+    margin-bottom: 6px;
+    display: block;
+}
+
+.preset-card.selected .material-symbols-outlined {
+    color: var(--accent-light);
+}
+
+.preset-card-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    margin-bottom: 2px;
+}
+
+.preset-card-desc {
+    font-size: 0.7rem;
+    color: var(--md-sys-color-on-surface-variant);
+    line-height: 1.3;
+}
+
+/* Limits Row */
+.limits-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+}
+
+@media (max-width: 600px) {
+    .limits-row {
+        grid-template-columns: 1fr;
+    }
+}
+
+.limit-input-wrap {
+    position: relative;
+}
+
+.limit-input-wrap .wiz-input {
+    padding-right: 50px;
+}
+
+.limit-unit {
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.75rem;
+    color: var(--md-sys-color-on-surface-variant);
+    pointer-events: none;
+}
+
+/* ---- Estimate Sidebar ---- */
+.estimate-panel {
+    position: sticky;
+    top: 24px;
+}
+
+.estimate-card {
+    background: var(--glass-bg-elevated);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+
+.estimate-header {
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: linear-gradient(135deg, rgba(196, 97, 63, 0.12) 0%, rgba(196, 97, 63, 0.04) 100%);
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.estimate-header .material-symbols-outlined {
+    color: var(--accent);
+    font-size: 20px;
+}
+
+.estimate-header h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--md-sys-color-on-surface);
+}
+
+.estimate-body {
+    padding: var(--spacing-lg);
+}
+
+.estimate-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.estimate-row:last-child {
+    border-bottom: none;
+}
+
+.estimate-label {
+    font-size: 0.8rem;
+    color: var(--md-sys-color-on-surface-variant);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.estimate-label .material-symbols-outlined {
+    font-size: 16px;
+    color: var(--md-sys-color-outline);
+}
+
+.estimate-value {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+    font-family: var(--font-mono);
+}
+
+.estimate-value.warn {
+    color: var(--warning);
+}
+
+.estimate-value.good {
+    color: var(--success);
+}
+
+.estimate-value.bad {
+    color: var(--md-sys-color-error);
+}
+
+.estimate-divider {
+    height: 1px;
+    background: var(--glass-border);
+    margin: var(--spacing-sm) 0;
+}
+
+.estimate-footer {
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-top: 1px solid var(--glass-border);
+    background: rgba(0,0,0,0.15);
+}
+
+.estimate-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+    font-size: 0.75rem;
+    color: var(--warning);
+    padding: var(--spacing-sm) 0;
+}
+
+.estimate-warning .material-symbols-outlined {
+    font-size: 16px;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+/* Deploy Button */
+.deploy-button-wrap {
+    padding: var(--spacing-md) var(--spacing-lg);
+}
+
+.btn-deploy {
+    width: 100%;
+    padding: 14px var(--spacing-lg);
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-light) 100%);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--transition-normal);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+    letter-spacing: 0.02em;
+    box-shadow: 0 4px 14px rgba(196, 97, 63, 0.3);
+}
+
+.btn-deploy:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(196, 97, 63, 0.4);
+}
+
+.btn-deploy:active {
+    transform: translateY(0);
+}
+
+.btn-deploy:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-deploy .material-symbols-outlined {
+    font-size: 20px;
+}
+
+/* Confirmation overlay */
+.deploy-confirm {
+    display: none;
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: rgba(0,0,0,0.2);
+    border-top: 1px solid var(--glass-border);
+    text-align: center;
+}
+
+.deploy-confirm.visible {
+    display: block;
+}
+
+.deploy-confirm p {
+    font-size: 0.85rem;
+    color: var(--md-sys-color-on-surface-variant);
+    margin: 0 0 var(--spacing-md);
+}
+
+.deploy-confirm-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    justify-content: center;
+}
+
+/* Loading spinner */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.loading-spin {
+    animation: spin 1s linear infinite;
+}
+
+/* System health bar */
+.system-health-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--md-sys-color-outline-variant);
+    overflow: hidden;
+    margin-top: 4px;
+}
+
+.system-health-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width var(--transition-normal);
+}
+
+.system-health-fill.good { background: var(--success); }
+.system-health-fill.warn { background: var(--warning); }
+.system-health-fill.bad { background: var(--md-sys-color-error); }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Active Deployments -->
+<section class="deploy-strip" id="deploy-strip">
+    <div class="deploy-strip-header">
+        <div class="deploy-strip-title">
+            <span class="live-dot" id="live-dot" style="display:none;"></span>
+            Active Deployments
+        </div>
+        <button class="btn btn-small btn-secondary" onclick="refreshDeployments()">
+            <span class="material-symbols-outlined" style="font-size:16px;">refresh</span>
+            Refresh
+        </button>
+    </div>
+    <div id="deploy-cards" class="deploy-cards">
+        <div class="deploy-empty" id="deploy-empty">
+            <span class="material-symbols-outlined" style="font-size:32px;display:block;margin-bottom:8px;opacity:0.5;">rocket_launch</span>
+            No active deployments. Configure and launch one below.
+        </div>
+    </div>
+</section>
+
+<!-- Wizard -->
+<div class="wizard-container">
+    <!-- Left: Form -->
+    <div class="wizard-form">
+
+        <!-- Project & Agent Count -->
+        <div class="wizard-section">
+            <div class="wizard-section-header">
+                <span class="material-symbols-outlined">folder_open</span>
+                <h3 class="wizard-section-title">Project & Scale</h3>
+            </div>
+
+            <div class="wiz-field">
+                <label class="wiz-label">Target Project</label>
+                <select id="wiz-project" class="wiz-select" onchange="onConfigChanged()">
+                    <option value="">Loading projects...</option>
+                </select>
+            </div>
+
+            <div class="wiz-field">
+                <label class="wiz-label">Agent Count</label>
+                <div class="slider-row">
+                    <input type="range" id="wiz-agents" class="wiz-slider" min="1" max="200" value="5" oninput="onAgentSlider(this.value)">
+                    <span class="slider-value" id="wiz-agents-value">5</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Provider & Model -->
+        <div class="wizard-section">
+            <div class="wizard-section-header">
+                <span class="material-symbols-outlined">cloud</span>
+                <h3 class="wizard-section-title">Provider & Model</h3>
+                <span class="wizard-section-subtitle" id="provider-cost-hint"></span>
+            </div>
+
+            <div class="provider-row">
+                <div class="wiz-field">
+                    <label class="wiz-label">Provider</label>
+                    <select id="wiz-provider" class="wiz-select" onchange="onProviderChanged()">
+                        <option value="">Loading...</option>
+                    </select>
+                    <div class="api-key-status" id="api-key-status"></div>
+                </div>
+                <div class="wiz-field">
+                    <label class="wiz-label">Model</label>
+                    <select id="wiz-model" class="wiz-select" onchange="onConfigChanged()">
+                        <option value="">Select provider first</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Focus Preset -->
+        <div class="wizard-section">
+            <div class="wizard-section-header">
+                <span class="material-symbols-outlined">target</span>
+                <h3 class="wizard-section-title">Focus Area</h3>
+            </div>
+
+            <div class="preset-grid" id="preset-grid">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
+        <!-- Rules & Limits -->
+        <div class="wizard-section">
+            <div class="wizard-section-header">
+                <span class="material-symbols-outlined">tune</span>
+                <h3 class="wizard-section-title">Rules & Limits</h3>
+            </div>
+
+            <div class="wiz-field">
+                <label class="wiz-label">Custom Rules <span style="font-weight:400;text-transform:none;letter-spacing:0;">(optional, one per line)</span></label>
+                <textarea id="wiz-rules" class="wiz-textarea" placeholder="e.g., Do not modify database schemas&#10;Always run tests before committing&#10;Focus on src/api/ directory only"></textarea>
+            </div>
+
+            <div class="limits-row">
+                <div class="wiz-field">
+                    <label class="wiz-label">Budget Limit</label>
+                    <div class="limit-input-wrap">
+                        <input type="number" id="wiz-budget" class="wiz-input" value="0" min="0" step="0.5" onchange="onConfigChanged()">
+                        <span class="limit-unit">USD</span>
+                    </div>
+                    <div style="font-size:0.7rem;color:var(--md-sys-color-on-surface-variant);margin-top:4px;">0 = unlimited</div>
+                </div>
+                <div class="wiz-field">
+                    <label class="wiz-label">Max Runtime</label>
+                    <div class="limit-input-wrap">
+                        <input type="number" id="wiz-runtime" class="wiz-input" value="0" min="0" step="1" onchange="onConfigChanged()">
+                        <span class="limit-unit">hours</span>
+                    </div>
+                    <div style="font-size:0.7rem;color:var(--md-sys-color-on-surface-variant);margin-top:4px;">0 = unlimited</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Estimate Sidebar -->
+    <div class="estimate-panel">
+        <div class="estimate-card">
+            <div class="estimate-header">
+                <span class="material-symbols-outlined">analytics</span>
+                <h3>Resource Estimate</h3>
+            </div>
+            <div class="estimate-body" id="estimate-body">
+                <div class="estimate-row">
+                    <span class="estimate-label"><span class="material-symbols-outlined">speed</span> Tasks / hour</span>
+                    <span class="estimate-value" id="est-tasks">--</span>
+                </div>
+                <div class="estimate-row">
+                    <span class="estimate-label"><span class="material-symbols-outlined">payments</span> Cost / hour</span>
+                    <span class="estimate-value" id="est-cost">--</span>
+                </div>
+                <div class="estimate-row">
+                    <span class="estimate-label"><span class="material-symbols-outlined">memory</span> RAM usage</span>
+                    <span class="estimate-value" id="est-ram">--</span>
+                </div>
+                <div class="estimate-row">
+                    <span class="estimate-label"><span class="material-symbols-outlined">timer</span> Budget lasts</span>
+                    <span class="estimate-value" id="est-budget-time">--</span>
+                </div>
+
+                <div class="estimate-divider"></div>
+
+                <div class="estimate-row">
+                    <span class="estimate-label"><span class="material-symbols-outlined">developer_board</span> CPU</span>
+                    <span class="estimate-value" id="est-cpu">--</span>
+                </div>
+                <div style="padding: 0 0 4px;">
+                    <div class="system-health-bar"><div class="system-health-fill good" id="cpu-bar" style="width:0%"></div></div>
+                </div>
+
+                <div class="estimate-row">
+                    <span class="estimate-label"><span class="material-symbols-outlined">memory_alt</span> System RAM</span>
+                    <span class="estimate-value" id="est-sys-ram">--</span>
+                </div>
+                <div style="padding: 0 0 4px;">
+                    <div class="system-health-bar"><div class="system-health-fill good" id="ram-bar" style="width:0%"></div></div>
+                </div>
+
+                <div class="estimate-row">
+                    <span class="estimate-label"><span class="material-symbols-outlined">group</span> Max recommended</span>
+                    <span class="estimate-value good" id="est-max-agents">--</span>
+                </div>
+
+                <div id="est-warning-wrap"></div>
+            </div>
+
+            <div class="deploy-button-wrap">
+                <button class="btn-deploy" id="btn-deploy" onclick="onDeployClick()">
+                    <span class="material-symbols-outlined">rocket_launch</span>
+                    Deploy Agents
+                </button>
+            </div>
+
+            <div class="deploy-confirm" id="deploy-confirm">
+                <p id="deploy-confirm-text">Deploy 5 agents to shadow-bridge?</p>
+                <div class="deploy-confirm-actions">
+                    <button class="btn btn-small btn-secondary" onclick="cancelDeploy()">Cancel</button>
+                    <button class="btn btn-small btn-primary" id="btn-confirm-deploy" onclick="confirmDeploy()">
+                        <span class="material-symbols-outlined" style="font-size:14px;">check</span> Confirm
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ---- State ----
+let providers = {};
+let presets = {};
+let projects = [];
+let selectedPreset = 'general';
+let estimateTimer = null;
+let deployments = [];
+
+// ---- Init ----
+document.addEventListener('DOMContentLoaded', async () => {
+    await Promise.all([
+        loadProviders(),
+        loadPresets(),
+        loadProjects(),
+        refreshDeployments(),
+    ]);
+    onConfigChanged();
+});
+
+// ---- Data Loading ----
+async function loadProviders() {
+    try {
+        const resp = await fetch('/api/deploy/providers');
+        providers = await resp.json();
+        const sel = document.getElementById('wiz-provider');
+        sel.innerHTML = '';
+        for (const [id, info] of Object.entries(providers)) {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = info.display;
+            sel.appendChild(opt);
+        }
+        // Default to gemini
+        sel.value = 'gemini';
+        onProviderChanged();
+    } catch (e) {
+        console.error('Failed to load providers:', e);
+    }
+}
+
+async function loadPresets() {
+    try {
+        const resp = await fetch('/api/deploy/presets');
+        presets = await resp.json();
+        const grid = document.getElementById('preset-grid');
+        grid.innerHTML = '';
+        for (const [id, info] of Object.entries(presets)) {
+            const card = document.createElement('div');
+            card.className = 'preset-card' + (id === selectedPreset ? ' selected' : '');
+            card.dataset.preset = id;
+            card.onclick = () => selectPreset(id);
+            card.innerHTML = `
+                <span class="material-symbols-outlined">${escapeHtml(info.icon)}</span>
+                <div class="preset-card-name">${escapeHtml(info.name)}</div>
+                <div class="preset-card-desc">${escapeHtml(info.description)}</div>
+            `;
+            grid.appendChild(card);
+        }
+    } catch (e) {
+        console.error('Failed to load presets:', e);
+    }
+}
+
+async function loadProjects() {
+    try {
+        const resp = await fetch('/api/deploy/projects');
+        const data = await resp.json();
+        projects = data.projects || [];
+        const sel = document.getElementById('wiz-project');
+        sel.innerHTML = '';
+        if (projects.length === 0) {
+            sel.innerHTML = '<option value="">No projects found</option>';
+            return;
+        }
+        for (const p of projects) {
+            const opt = document.createElement('option');
+            opt.value = p.path;
+            opt.textContent = p.name + (p.has_git ? '' : ' (no git)');
+            sel.appendChild(opt);
+        }
+    } catch (e) {
+        console.error('Failed to load projects:', e);
+    }
+}
+
+// ---- Provider / Model ----
+function onProviderChanged() {
+    const pid = document.getElementById('wiz-provider').value;
+    const info = providers[pid];
+    if (!info) return;
+
+    // Update model dropdown
+    const modelSel = document.getElementById('wiz-model');
+    modelSel.innerHTML = '';
+    for (const m of info.models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name + (m.cost_per_task > 0 ? ` ($${m.cost_per_task}/task)` : ' (free)');
+        modelSel.appendChild(opt);
+    }
+
+    // API key status
+    const keyStatus = document.getElementById('api-key-status');
+    if (info.has_api_key) {
+        keyStatus.className = 'api-key-status ok';
+        keyStatus.innerHTML = '<span class="material-symbols-outlined">check_circle</span> API key configured';
+    } else if (pid === 'ollama') {
+        keyStatus.className = 'api-key-status ok';
+        keyStatus.innerHTML = '<span class="material-symbols-outlined">check_circle</span> Local (no key needed)';
+    } else {
+        keyStatus.className = 'api-key-status missing';
+        keyStatus.innerHTML = '<span class="material-symbols-outlined">warning</span> No API key set';
+    }
+
+    onConfigChanged();
+}
+
+// ---- Preset Selection ----
+function selectPreset(id) {
+    selectedPreset = id;
+    document.querySelectorAll('.preset-card').forEach(c => {
+        c.classList.toggle('selected', c.dataset.preset === id);
+    });
+    onConfigChanged();
+}
+
+// ---- Agent Slider ----
+function onAgentSlider(val) {
+    document.getElementById('wiz-agents-value').textContent = val;
+    onConfigChanged();
+}
+
+// ---- Config Changed -> Update Estimate ----
+function onConfigChanged() {
+    clearTimeout(estimateTimer);
+    estimateTimer = setTimeout(fetchEstimate, 300);
+}
+
+async function fetchEstimate() {
+    const config = getConfig();
+    try {
+        const resp = await fetch('/api/deploy/estimate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        const est = await resp.json();
+        updateEstimateUI(est);
+    } catch (e) {
+        console.error('Estimate failed:', e);
+    }
+}
+
+function getConfig() {
+    const rulesText = document.getElementById('wiz-rules').value.trim();
+    const rules = rulesText ? rulesText.split('\n').filter(r => r.trim()) : [];
+    return {
+        project_path: document.getElementById('wiz-project').value,
+        agent_count: parseInt(document.getElementById('wiz-agents').value),
+        provider: document.getElementById('wiz-provider').value,
+        model: document.getElementById('wiz-model').value,
+        preset: selectedPreset,
+        custom_rules: rules,
+        budget_limit_usd: parseFloat(document.getElementById('wiz-budget').value) || 0,
+        max_runtime_hours: parseInt(document.getElementById('wiz-runtime').value) || 0,
+    };
+}
+
+function updateEstimateUI(est) {
+    document.getElementById('est-tasks').textContent = est.estimated_tasks_per_hour || '--';
+
+    const costHr = est.estimated_cost_per_hour;
+    const costEl = document.getElementById('est-cost');
+    costEl.textContent = costHr != null ? '$' + costHr.toFixed(3) : '--';
+    costEl.className = 'estimate-value' + (costHr > 1 ? ' warn' : '');
+
+    const ramMb = est.estimated_ram_mb;
+    const ramEl = document.getElementById('est-ram');
+    if (ramMb != null) {
+        ramEl.textContent = ramMb >= 1024 ? (ramMb / 1024).toFixed(1) + ' GB' : ramMb + ' MB';
+        ramEl.className = 'estimate-value' + (ramMb > 16000 ? ' warn' : '');
+    } else {
+        ramEl.textContent = '--';
+    }
+
+    const budgetTime = est.hours_until_budget;
+    const btEl = document.getElementById('est-budget-time');
+    if (budgetTime != null) {
+        btEl.textContent = budgetTime + 'h';
+        btEl.className = 'estimate-value' + (budgetTime < 1 ? ' warn' : ' good');
+    } else {
+        btEl.textContent = '\u221e';
+        btEl.className = 'estimate-value';
+    }
+
+    // System metrics
+    const m = est.system_metrics || {};
+    if (m.cpu_percent != null) {
+        const cpuEl = document.getElementById('est-cpu');
+        cpuEl.textContent = m.cpu_percent.toFixed(0) + '%';
+        cpuEl.className = 'estimate-value' + (m.cpu_percent > 90 ? ' bad' : m.cpu_percent > 70 ? ' warn' : ' good');
+        const cpuBar = document.getElementById('cpu-bar');
+        cpuBar.style.width = m.cpu_percent + '%';
+        cpuBar.className = 'system-health-fill ' + (m.cpu_percent > 90 ? 'bad' : m.cpu_percent > 70 ? 'warn' : 'good');
+    }
+
+    if (m.ram_percent != null) {
+        const ramSysEl = document.getElementById('est-sys-ram');
+        ramSysEl.textContent = m.ram_percent.toFixed(0) + '%';
+        ramSysEl.className = 'estimate-value' + (m.ram_percent > 85 ? ' bad' : m.ram_percent > 70 ? ' warn' : ' good');
+        const ramBar = document.getElementById('ram-bar');
+        ramBar.style.width = m.ram_percent + '%';
+        ramBar.className = 'system-health-fill ' + (m.ram_percent > 85 ? 'bad' : m.ram_percent > 70 ? 'warn' : 'good');
+    }
+
+    const maxAgents = est.max_recommended_agents;
+    document.getElementById('est-max-agents').textContent = maxAgents != null ? maxAgents : '--';
+
+    // Warnings
+    const warnWrap = document.getElementById('est-warning-wrap');
+    warnWrap.innerHTML = '';
+    if (!est.can_deploy) {
+        warnWrap.innerHTML = `
+            <div class="estimate-warning">
+                <span class="material-symbols-outlined">error</span>
+                <span>${escapeHtml(est.resource_warning || 'Cannot deploy: insufficient resources')}</span>
+            </div>`;
+        document.getElementById('btn-deploy').disabled = true;
+    } else {
+        document.getElementById('btn-deploy').disabled = false;
+        const agentCount = parseInt(document.getElementById('wiz-agents').value);
+        if (maxAgents && agentCount > maxAgents) {
+            warnWrap.innerHTML = `
+                <div class="estimate-warning">
+                    <span class="material-symbols-outlined">warning</span>
+                    <span>Requesting ${agentCount} agents exceeds recommended max of ${maxAgents}</span>
+                </div>`;
+        }
+    }
+}
+
+// ---- Deploy Flow ----
+function onDeployClick() {
+    const config = getConfig();
+    if (!config.project_path) {
+        showToast('Select a project first', 'error');
+        return;
+    }
+    const name = projects.find(p => p.path === config.project_path)?.name || config.project_path;
+    document.getElementById('deploy-confirm-text').textContent =
+        `Deploy ${config.agent_count} ${config.provider} agents to ${name}?`;
+    document.getElementById('deploy-confirm').classList.add('visible');
+}
+
+function cancelDeploy() {
+    document.getElementById('deploy-confirm').classList.remove('visible');
+}
+
+async function confirmDeploy() {
+    const btn = document.getElementById('btn-confirm-deploy');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-symbols-outlined loading-spin" style="font-size:14px;">autorenew</span> Deploying...';
+
+    const config = getConfig();
+    try {
+        const resp = await fetch('/api/deploy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(`Deployed ${data.agent_count} agents`, 'success');
+            document.getElementById('deploy-confirm').classList.remove('visible');
+            await refreshDeployments();
+        } else {
+            showToast('Deploy failed: ' + (data.error || 'Unknown'), 'error');
+        }
+    } catch (e) {
+        showToast('Deploy error: ' + e.message, 'error');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:14px;">check</span> Confirm';
+}
+
+// ---- Deployments List ----
+async function refreshDeployments() {
+    try {
+        const resp = await fetch('/api/deployments');
+        const data = await resp.json();
+        deployments = data.deployments || [];
+        renderDeployments();
+    } catch (e) {
+        console.error('Failed to load deployments:', e);
+    }
+}
+
+function renderDeployments() {
+    const container = document.getElementById('deploy-cards');
+    const emptyEl = document.getElementById('deploy-empty');
+    const liveDot = document.getElementById('live-dot');
+
+    const active = deployments.filter(d => !['stopped', 'failed'].includes(d.status));
+
+    if (deployments.length === 0) {
+        container.innerHTML = '';
+        container.appendChild(emptyEl);
+        emptyEl.style.display = '';
+        liveDot.style.display = 'none';
+        return;
+    }
+
+    emptyEl.style.display = 'none';
+    liveDot.style.display = active.length > 0 ? '' : 'none';
+
+    container.innerHTML = deployments.map(d => {
+        const cfg = d.config || {};
+        const statusClass = d.status || 'stopped';
+        return `
+        <div class="deploy-card ${statusClass}">
+            <div class="deploy-card-top">
+                <div class="deploy-card-info">
+                    <h4>${escapeHtml(cfg.project_path ? cfg.project_path.split('/').pop() : 'Unknown')}</h4>
+                    <div class="deploy-card-meta">${escapeHtml(cfg.provider || '')} / ${escapeHtml(cfg.model || '')} &middot; ${escapeHtml(cfg.preset || '')}</div>
+                </div>
+                <span class="deploy-card-status ${statusClass}">${escapeHtml(d.status)}</span>
+            </div>
+            <div class="deploy-card-stats">
+                <div class="deploy-stat">
+                    <div class="deploy-stat-value">${d.agent_count || 0}</div>
+                    <div class="deploy-stat-label">Agents</div>
+                </div>
+                <div class="deploy-stat">
+                    <div class="deploy-stat-value">${d.tasks_completed || 0}</div>
+                    <div class="deploy-stat-label">Done</div>
+                </div>
+                <div class="deploy-stat">
+                    <div class="deploy-stat-value">$${(d.estimated_cost_usd || 0).toFixed(2)}</div>
+                    <div class="deploy-stat-label">Cost</div>
+                </div>
+                <div class="deploy-stat">
+                    <div class="deploy-stat-value">${d.uptime || '--'}</div>
+                    <div class="deploy-stat-label">Uptime</div>
+                </div>
+            </div>
+            <div class="deploy-card-actions">
+                ${d.status === 'running' ? `
+                    <button class="btn btn-small btn-secondary" onclick="pauseDeployment('${d.id}')">
+                        <span class="material-symbols-outlined" style="font-size:14px;">pause</span> Pause
+                    </button>
+                    <button class="btn btn-small btn-danger" onclick="stopDeployment('${d.id}')">
+                        <span class="material-symbols-outlined" style="font-size:14px;">stop</span> Stop
+                    </button>
+                ` : d.status === 'paused' ? `
+                    <button class="btn btn-small btn-primary" onclick="resumeDeployment('${d.id}')">
+                        <span class="material-symbols-outlined" style="font-size:14px;">play_arrow</span> Resume
+                    </button>
+                    <button class="btn btn-small btn-danger" onclick="stopDeployment('${d.id}')">
+                        <span class="material-symbols-outlined" style="font-size:14px;">stop</span> Stop
+                    </button>
+                ` : `
+                    <span style="font-size:0.75rem;color:var(--md-sys-color-on-surface-variant);">Ended</span>
+                `}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function stopDeployment(id) {
+    if (!confirm('Stop this deployment?')) return;
+    try {
+        await fetch(`/api/deployments/${id}/stop`, { method: 'POST' });
+        showToast('Deployment stopped', 'info');
+        await refreshDeployments();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function pauseDeployment(id) {
+    try {
+        await fetch(`/api/deployments/${id}/pause`, { method: 'POST' });
+        showToast('Deployment paused', 'info');
+        await refreshDeployments();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function resumeDeployment(id) {
+    try {
+        await fetch(`/api/deployments/${id}/resume`, { method: 'POST' });
+        showToast('Deployment resumed', 'success');
+        await refreshDeployments();
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+// ---- Auto-refresh deployments ----
+setInterval(() => {
+    const active = deployments.some(d => ['running', 'paused', 'starting'].includes(d.status));
+    if (active) refreshDeployments();
+}, 10000);
+
+// ---- Utils ----
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function showToast(msg, type) {
+    // Use existing toast system if available
+    if (typeof addActivityItem === 'function') {
+        addActivityItem(msg, type);
+        return;
+    }
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast ' + (type || 'info');
+    toast.textContent = msg;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+}
+</script>
+{% endblock %}

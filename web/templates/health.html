@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% block title %}Shadow Web - System Health{% endblock %}
+{% block page_title %}System Health{% endblock %}
+
+{% block content %}
+<!-- Health Score Section -->
+<section class="section">
+    <h2>Health Score</h2>
+    <div class="privacy-grid">
+        <!-- Overall Score -->
+        <div class="privacy-card">
+            <div class="privacy-score-container">
+                <div class="privacy-score-ring">
+                    <svg viewBox="0 0 120 120">
+                        <circle class="ring-bg" cx="60" cy="60" r="50"/>
+                        <circle class="ring-fill" cx="60" cy="60" r="50" id="health-ring-fill"
+                                style="stroke-dasharray: 314; stroke-dashoffset: 314;"/>
+                    </svg>
+                    <div class="privacy-score-value" id="health-score">--</div>
+                </div>
+                <div class="privacy-score-label">Overall Health</div>
+                <div class="privacy-status" id="health-status">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Categories -->
+        <div class="privacy-card">
+            <h3 style="margin-bottom: 16px;">Category Breakdown</h3>
+            <div class="category-bars">
+                <div class="category-bar-item">
+                    <span class="category-label">API Reliability</span>
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-api"></div></div>
+                    <span class="category-value" id="val-api">--</span>
+                </div>
+                <div class="category-bar-item">
+                    <span class="category-label">Response Time</span>
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-perf"></div></div>
+                    <span class="category-value" id="val-perf">--</span>
+                </div>
+                <div class="category-bar-item">
+                    <span class="category-label">Agent Stability</span>
+                    <div class="progress-bar-bg"><div class="progress-bar-fill" id="bar-agent"></div></div>
+                    <span class="category-value" id="val-agent">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Stats -->
+        <div class="privacy-card">
+            <h3 style="margin-bottom: 16px;">Quick Stats</h3>
+            <div class="stat-items">
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-requests">--</span>
+                    <span class="stat-label">Requests (24h)</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-success-rate">--</span>
+                    <span class="stat-label">Success Rate</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-avg-time">--</span>
+                    <span class="stat-label">Avg Response</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-agents">--</span>
+                    <span class="stat-label">Active Agents</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Active Alerts Section -->
+<section class="section">
+    <h2>Active Alerts</h2>
+    <div id="alerts-container" class="alerts-list">
+        <div class="empty-state">Loading alerts...</div>
+    </div>
+</section>
+
+<!-- Crash Patterns Section -->
+<section class="section">
+    <h2>Top Crash Patterns</h2>
+    <div id="patterns-container" class="patterns-list">
+        <div class="empty-state">Loading patterns...</div>
+    </div>
+</section>
+
+<!-- Circuit Breaker Status -->
+<section class="section">
+    <h2>Circuit Breaker Status</h2>
+    <div id="circuit-container" class="circuit-grid">
+        <div class="empty-state">Loading...</div>
+    </div>
+</section>
+
+<style>
+.category-bars { display: flex; flex-direction: column; gap: 12px; }
+.category-bar-item { display: flex; align-items: center; gap: 8px; }
+.category-label { width: 120px; font-size: 13px; color: var(--text-secondary); }
+.category-value { width: 40px; text-align: right; font-weight: 600; font-size: 13px; }
+.progress-bar-bg { flex: 1; height: 8px; background: var(--bg-tertiary); border-radius: 4px; overflow: hidden; }
+.progress-bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+
+.stat-items { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.stat-item { text-align: center; }
+.stat-value { display: block; font-size: 24px; font-weight: 700; color: var(--text-primary); }
+.stat-label { display: block; font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+
+.alerts-list { display: flex; flex-direction: column; gap: 8px; }
+.alert-card { padding: 12px 16px; border-radius: 8px; border-left: 4px solid; }
+.alert-card.warning { border-color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+.alert-card.critical { border-color: #ef4444; background: rgba(239, 68, 68, 0.1); }
+.alert-card .alert-header { display: flex; justify-content: space-between; align-items: center; }
+.alert-card .alert-metric { font-weight: 600; }
+.alert-card .alert-severity { font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 600; }
+.alert-card.warning .alert-severity { background: #f59e0b; color: #000; }
+.alert-card.critical .alert-severity { background: #ef4444; color: #fff; }
+.alert-card .alert-message { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+.alert-card .alert-recommendation { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; font-style: italic; }
+
+.patterns-list { display: flex; flex-direction: column; gap: 8px; }
+.pattern-card { padding: 12px 16px; background: var(--bg-secondary); border-radius: 8px; }
+.pattern-card .pattern-header { display: flex; justify-content: space-between; }
+.pattern-card .pattern-error { font-weight: 600; color: var(--text-primary); }
+.pattern-card .pattern-count { font-size: 13px; color: var(--accent); font-weight: 600; }
+.pattern-card .pattern-file { font-size: 13px; color: var(--text-secondary); }
+.pattern-card .pattern-dates { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+
+.circuit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.circuit-card { padding: 16px; background: var(--bg-secondary); border-radius: 8px; text-align: center; }
+.circuit-card .circuit-name { font-weight: 600; text-transform: capitalize; margin-bottom: 8px; }
+.circuit-card .circuit-state { font-size: 13px; padding: 4px 12px; border-radius: 16px; display: inline-block; font-weight: 600; }
+.circuit-card .circuit-state.CLOSED { background: #22c55e; color: #000; }
+.circuit-card .circuit-state.OPEN { background: #ef4444; color: #fff; }
+.circuit-card .circuit-state.HALF_OPEN { background: #f59e0b; color: #000; }
+.circuit-card .circuit-stats { font-size: 11px; color: var(--text-tertiary); margin-top: 8px; }
+
+.empty-state { text-align: center; padding: 24px; color: var(--text-tertiary); }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadHealthScore();
+    loadAlerts();
+    loadPatterns();
+    loadCircuitBreakers();
+
+    // Auto-refresh every 30s
+    setInterval(loadHealthScore, 30000);
+});
+
+function getBarColor(value) {
+    if (value >= 80) return '#22c55e';
+    if (value >= 50) return '#f59e0b';
+    return '#ef4444';
+}
+
+async function loadHealthScore() {
+    try {
+        const resp = await fetch('/api/health/score');
+        const data = await resp.json();
+
+        // Update score ring
+        const score = data.overall || 0;
+        document.getElementById('health-score').textContent = Math.round(score);
+
+        const fill = document.getElementById('health-ring-fill');
+        const offset = 314 - (314 * score / 100);
+        fill.style.strokeDashoffset = offset;
+        fill.style.stroke = getBarColor(score);
+
+        document.getElementById('health-status').textContent =
+            (data.status || 'unknown').charAt(0).toUpperCase() + (data.status || '').slice(1);
+
+        // Update category bars
+        const cats = data.categories || {};
+        updateBar('bar-api', 'val-api', cats.api_reliability);
+        updateBar('bar-perf', 'val-perf', cats.response_performance);
+        updateBar('bar-agent', 'val-agent', cats.agent_stability);
+
+        // Update stats
+        const raw = data.raw || {};
+        document.getElementById('stat-requests').textContent = raw.total_requests || 0;
+        document.getElementById('stat-success-rate').textContent = (raw.success_rate || 0) + '%';
+        document.getElementById('stat-avg-time').textContent = (raw.avg_response_time_ms || 0) + 'ms';
+        document.getElementById('stat-agents').textContent =
+            (raw.active_agents || 0) + '/' + (raw.total_agents || 0);
+    } catch (e) {
+        console.error('Failed to load health score:', e);
+    }
+}
+
+function updateBar(barId, valId, value) {
+    const bar = document.getElementById(barId);
+    const val = document.getElementById(valId);
+    if (bar && val && value !== undefined) {
+        bar.style.width = value + '%';
+        bar.style.background = getBarColor(value);
+        val.textContent = Math.round(value);
+    }
+}
+
+async function loadAlerts() {
+    try {
+        const resp = await fetch('/api/health/alerts');
+        const data = await resp.json();
+        const container = document.getElementById('alerts-container');
+
+        if (!data.alerts || data.alerts.length === 0) {
+            container.innerHTML = '<div class="empty-state">No active alerts - system healthy</div>';
+            return;
+        }
+
+        container.innerHTML = data.alerts.map(a => `
+            <div class="alert-card ${(a.severity || '').toLowerCase()}">
+                <div class="alert-header">
+                    <span class="alert-metric">${a.metric_name || 'Unknown'}</span>
+                    <span class="alert-severity">${a.severity || '?'}</span>
+                </div>
+                <div class="alert-message">${a.message || ''}</div>
+                <div class="alert-recommendation">${a.recommendation || ''}</div>
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('alerts-container').innerHTML =
+            '<div class="empty-state">Failed to load alerts</div>';
+    }
+}
+
+async function loadPatterns() {
+    try {
+        const resp = await fetch('/api/health/patterns');
+        const data = await resp.json();
+        const container = document.getElementById('patterns-container');
+
+        if (!data.patterns || data.patterns.length === 0) {
+            container.innerHTML = '<div class="empty-state">No crash patterns recorded</div>';
+            return;
+        }
+
+        container.innerHTML = data.patterns.map(p => `
+            <div class="pattern-card">
+                <div class="pattern-header">
+                    <span class="pattern-error">${p.error_type || 'Unknown'}</span>
+                    <span class="pattern-count">${p.occurrence_count || 0}x</span>
+                </div>
+                <div class="pattern-file">${p.file_name || '?'}:${p.line_range || '?'}</div>
+                <div class="pattern-dates">
+                    First: ${p.first_seen || '?'} | Last: ${p.last_seen || '?'}
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('patterns-container').innerHTML =
+            '<div class="empty-state">Failed to load patterns</div>';
+    }
+}
+
+async function loadCircuitBreakers() {
+    try {
+        const resp = await fetch('/api/health/circuits');
+        const data = await resp.json();
+        const container = document.getElementById('circuit-container');
+
+        if (!data.circuits || Object.keys(data.circuits).length === 0) {
+            container.innerHTML = '<div class="empty-state">No circuit breaker data yet</div>';
+            return;
+        }
+
+        container.innerHTML = Object.entries(data.circuits).map(([name, info]) => `
+            <div class="circuit-card">
+                <div class="circuit-name">${name}</div>
+                <div class="circuit-state ${info.state || 'CLOSED'}">${info.state || 'CLOSED'}</div>
+                <div class="circuit-stats">
+                    ${info.totalSuccesses || 0} ok / ${info.totalFailures || 0} fail
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('circuit-container').innerHTML =
+            '<div class="empty-state">Failed to load circuit data</div>';
+    }
+}
+</script>
+{% endblock %}
