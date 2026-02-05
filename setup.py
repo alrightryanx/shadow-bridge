@@ -84,10 +84,11 @@ build_exe_options = {
         "web.services.video_progress",
         "web.services.video_error_handling",
         "web.services.comfyui_executor",
-        "web.services.music_service",
-        "web.routes.music",
+        # Old async-based music utils (music_service.py has its own RVC stubs)
         "web.utils.rvc_manager",
         "web.utils.music_generator",
+        # NOTE: music_service.py is designed to import audio_service dynamically
+        # so it doesn't require torch at module load time
     ],
     "zip_exclude_packages": ["sv_ttk"],
 }
