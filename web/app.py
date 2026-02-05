@@ -320,6 +320,10 @@ def create_app():
     def agents():
         return render_template("agents.html")
 
+    @app.route("/deploy")
+    def deploy():
+        return render_template("deploy.html")
+
     @app.route("/analytics")
     def analytics():
         return render_template("analytics.html")

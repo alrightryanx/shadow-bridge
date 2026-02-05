@@ -6084,6 +6084,158 @@ def _count_by_key(items: list, key: str) -> dict:
     return counts
 
 
+# ========== Deployment Wizard ==========
+
+
+@api_bp.route("/deploy/providers")
+@rate_limit
+@api_error_handler
+def deploy_providers():
+    """Get available providers and their models."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    return jsonify(wizard.get_providers())
+
+
+@api_bp.route("/deploy/presets")
+@rate_limit
+@api_error_handler
+def deploy_presets():
+    """Get available deployment presets."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    return jsonify(wizard.get_presets())
+
+
+@api_bp.route("/deploy/projects")
+@rate_limit
+@api_error_handler
+def deploy_projects():
+    """Discover available projects/repos."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    return jsonify({"projects": wizard.discover_projects()})
+
+
+@api_bp.route("/deploy/estimate", methods=["POST"])
+@rate_limit
+@api_error_handler
+def deploy_estimate():
+    """Estimate cost and resource usage for a deployment config."""
+    from ..services.deployment_wizard import get_deployment_wizard, DeploymentConfig
+    wizard = get_deployment_wizard()
+
+    data = request.get_json(silent=True) or {}
+    config = DeploymentConfig(
+        project_path=data.get("project_path", "C:/shadow"),
+        agent_count=int(data.get("agent_count", 5)),
+        provider=data.get("provider", "gemini"),
+        model=data.get("model", "gemini-3-flash-preview"),
+        preset=data.get("preset", "general"),
+        budget_limit_usd=float(data.get("budget_limit_usd", 0)),
+        max_runtime_hours=int(data.get("max_runtime_hours", 0)),
+    )
+    return jsonify(wizard.estimate(config))
+
+
+@api_bp.route("/deploy", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def deploy_start():
+    """Deploy an agent team to a project."""
+    from ..services.deployment_wizard import get_deployment_wizard, DeploymentConfig
+    wizard = get_deployment_wizard()
+
+    data = request.get_json(silent=True) or {}
+    config = DeploymentConfig(
+        project_path=data.get("project_path", "C:/shadow"),
+        agent_count=int(data.get("agent_count", 5)),
+        provider=data.get("provider", "gemini"),
+        model=data.get("model", "gemini-3-flash-preview"),
+        preset=data.get("preset", "general"),
+        custom_rules=data.get("custom_rules", []),
+        budget_limit_usd=float(data.get("budget_limit_usd", 0)),
+        max_runtime_hours=int(data.get("max_runtime_hours", 0)),
+        scan_tasks=data.get("scan_tasks", True),
+    )
+    result = wizard.deploy(config)
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
+
+
+@api_bp.route("/deployments")
+@rate_limit
+@api_error_handler
+def deployments_list():
+    """Get all deployments."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    return jsonify({"deployments": wizard.get_all_deployments()})
+
+
+@api_bp.route("/deployments/active")
+@rate_limit
+@api_error_handler
+def deployments_active():
+    """Get active deployments only."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    return jsonify({"deployments": wizard.get_active_deployments()})
+
+
+@api_bp.route("/deployments/<deployment_id>")
+@rate_limit
+@api_error_handler
+def deployment_status(deployment_id):
+    """Get deployment status."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    status = wizard.get_deployment_status(deployment_id)
+    if not status:
+        return jsonify({"error": "Deployment not found"}), 404
+    return jsonify(status)
+
+
+@api_bp.route("/deployments/<deployment_id>/stop", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def deployment_stop(deployment_id):
+    """Stop a deployment."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    result = wizard.stop_deployment(deployment_id)
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
+
+
+@api_bp.route("/deployments/<deployment_id>/pause", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def deployment_pause(deployment_id):
+    """Pause a deployment."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    result = wizard.pause_deployment(deployment_id)
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
+
+
+@api_bp.route("/deployments/<deployment_id>/resume", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def deployment_resume(deployment_id):
+    """Resume a paused deployment."""
+    from ..services.deployment_wizard import get_deployment_wizard
+    wizard = get_deployment_wizard()
+    result = wizard.resume_deployment(deployment_id)
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
+
+
 # ========== Mobile Sync (Push/Pull) ==========
 
 
