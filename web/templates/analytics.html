@@ -226,50 +226,60 @@ document.addEventListener('DOMContentLoaded', function() {
 // ========== Analytics Functions ==========
 
 async function loadPrivacyScore() {
-    const data = await api.getPrivacyScore();
+    try {
+        const data = await api.getPrivacyScore();
 
-    // Update score
-    const score = data.score || 0;
-    document.getElementById('privacy-score').textContent = score + '%';
+        // Update score - API returns privacy_score
+        const score = data.privacy_score || 0;
+        document.getElementById('privacy-score').textContent = score + '%';
 
-    // Update ring animation
-    const ringFill = document.getElementById('privacy-ring-fill');
-    const circumference = 2 * Math.PI * 50;
-    ringFill.style.strokeDasharray = circumference;
-    ringFill.style.strokeDashoffset = circumference * (1 - score / 100);
+        // Update ring animation
+        const ringFill = document.getElementById('privacy-ring-fill');
+        const circumference = 2 * Math.PI * 50;
+        ringFill.style.strokeDasharray = circumference;
+        ringFill.style.strokeDashoffset = circumference * (1 - score / 100);
 
-    // Update status
-    let status = 'Excellent';
-    let statusClass = 'status-excellent';
-    if (score < 50) { status = 'Poor'; statusClass = 'status-poor'; }
-    else if (score < 70) { status = 'Fair'; statusClass = 'status-fair'; }
-    else if (score < 90) { status = 'Good'; statusClass = 'status-good'; }
+        // Update status
+        let status = 'Excellent';
+        let statusClass = 'status-excellent';
+        if (score < 50) { status = 'Poor'; statusClass = 'status-poor'; }
+        else if (score < 70) { status = 'Fair'; statusClass = 'status-fair'; }
+        else if (score < 90) { status = 'Good'; statusClass = 'status-good'; }
 
-    const statusEl = document.getElementById('privacy-status');
-    statusEl.textContent = status;
-    statusEl.className = 'privacy-status ' + statusClass;
+        const statusEl = document.getElementById('privacy-status');
+        statusEl.textContent = status;
+        statusEl.className = 'privacy-status ' + statusClass;
 
-    // Update risk level
-    const riskLevel = data.risk_level || 'MINIMAL';
-    const riskBadge = document.getElementById('risk-badge');
-    document.getElementById('risk-level').textContent = riskLevel;
-    riskBadge.className = 'risk-badge risk-' + riskLevel.toLowerCase();
+        // Update risk level
+        const riskLevel = data.risk_level || 'MINIMAL';
+        const riskBadge = document.getElementById('risk-badge');
+        document.getElementById('risk-level').textContent = riskLevel;
+        riskBadge.className = 'risk-badge risk-' + riskLevel.toLowerCase();
 
-    document.getElementById('risk-violations').textContent = data.violations || 0;
-    document.getElementById('risk-warnings').textContent = data.warnings || 0;
+        document.getElementById('risk-violations').textContent = data.pii_access_count || 0;
+        document.getElementById('risk-warnings').textContent = data.encrypted_access_count || 0;
+    } catch (e) {
+        console.error('Failed to load privacy score:', e);
+    }
 }
 
 async function loadTokenUsage() {
-    const data = await api.getTokenUsage();
+    try {
+        const data = await api.getTokenUsage();
 
-    document.getElementById('total-tokens').textContent = formatNumber(data.total || 0);
-    document.getElementById('input-tokens').textContent = formatNumber(data.input || 0);
-    document.getElementById('output-tokens').textContent = formatNumber(data.output || 0);
-    document.getElementById('avg-tokens').textContent = formatNumber(data.average || 0);
+        document.getElementById('total-tokens').textContent = formatNumber(data.total_tokens || 0);
+        document.getElementById('input-tokens').textContent = formatNumber(data.input_tokens || 0);
+        document.getElementById('output-tokens').textContent = formatNumber(data.output_tokens || 0);
+        document.getElementById('avg-tokens').textContent = formatNumber(data.avg_per_query || 0);
+    } catch (e) {
+        console.error('Failed to load token usage:', e);
+    }
 }
 
 async function loadCategories() {
-    const categories = await api.getCategoryBreakdown();
+    try {
+    const raw = await api.getCategoryBreakdown();
+    const categories = raw.categories || raw;
     const container = document.getElementById('categories-container');
 
     if (!categories || categories.length === 0) {
@@ -309,6 +319,10 @@ async function loadCategories() {
             <span class="category-count">${c.count}</span>
         </div>
     `).join('');
+    } catch (e) {
+        console.error('Failed to load categories:', e);
+        document.getElementById('categories-container').innerHTML = '<div class="empty-state">Failed to load categories</div>';
+    }
 }
 
 function formatNumber(num) {
@@ -318,55 +332,75 @@ function formatNumber(num) {
 }
 
 async function loadUsage() {
-    const usage = await api.getUsageStats();
-    document.getElementById('usage-tier').textContent = usage.tier || 'Free';
-    document.getElementById('messages-used').textContent = usage.messages_used || 0;
-    document.getElementById('messages-limit').textContent = usage.messages_limit || 100;
-    document.getElementById('usage-progress').style.width = (usage.usage_percent || 0) + '%';
+    try {
+        const usage = await api.getUsageStats();
+        const used = usage.messages_used || 0;
+        const limit = usage.messages_limit || 100;
+        const pct = limit > 0 ? Math.round(used / limit * 100) : 0;
 
-    if (usage.reset_date) {
-        document.getElementById('reset-date').textContent = 'Resets: ' + usage.reset_date;
+        document.getElementById('usage-tier').textContent = (usage.tier || 'free').charAt(0).toUpperCase() + (usage.tier || 'free').slice(1);
+        document.getElementById('messages-used').textContent = used;
+        document.getElementById('messages-limit').textContent = limit;
+        document.getElementById('usage-progress').style.width = pct + '%';
+
+        if (usage.reset_date) {
+            document.getElementById('reset-date').textContent = 'Resets: ' + usage.reset_date;
+        }
+    } catch (e) {
+        console.error('Failed to load usage:', e);
     }
 }
 
 async function loadBackends() {
-    const backends = await api.getBackendUsage();
-    const container = document.getElementById('backends-container');
+    try {
+        const raw = await api.getBackendUsage();
+        const backends = Array.isArray(raw) ? raw : (raw.backends || []);
+        const container = document.getElementById('backends-container');
 
-    if (backends.length === 0) {
-        container.innerHTML = '<div class="empty-state">No backend usage data</div>';
-        return;
-    }
+        if (backends.length === 0) {
+            container.innerHTML = '<div class="empty-state">No backend usage data</div>';
+            return;
+        }
 
-    container.innerHTML = backends.map(b => `
-        <div class="backend-row">
-            <span class="backend-name">${escapeHtml(b.name)}</span>
-            <div class="backend-bar">
-                <div class="backend-fill" style="width: ${b.percent}%"></div>
+        container.innerHTML = backends.map(b => `
+            <div class="backend-row">
+                <span class="backend-name">${escapeHtml(b.name)}</span>
+                <div class="backend-bar">
+                    <div class="backend-fill" style="width: ${b.percent}%"></div>
+                </div>
+                <span class="backend-count">${b.count}</span>
             </div>
-            <span class="backend-count">${b.count}</span>
-        </div>
-    `).join('');
+        `).join('');
+    } catch (e) {
+        console.error('Failed to load backends:', e);
+        document.getElementById('backends-container').innerHTML = '<div class="empty-state">Failed to load backend data</div>';
+    }
 }
 
 async function loadActivity() {
-    const activity = await api.getActivityTimeline();
-    const container = document.getElementById('activity-container');
+    try {
+        const raw = await api.getActivityTimeline();
+        const activity = Array.isArray(raw) ? raw : (raw.activity || []);
+        const container = document.getElementById('activity-container');
 
-    if (activity.length === 0) {
-        container.innerHTML = '<div class="empty-state">No recent activity</div>';
-        return;
-    }
+        if (activity.length === 0) {
+            container.innerHTML = '<div class="empty-state">No recent activity</div>';
+            return;
+        }
 
-    container.innerHTML = activity.map(a => `
-        <div class="activity-item">
-            <div class="activity-dot"></div>
-            <div class="activity-content">
-                <span class="activity-text">${escapeHtml(a.description)}</span>
-                <span class="activity-time">${a.time_ago}</span>
+        container.innerHTML = activity.map(a => `
+            <div class="activity-item">
+                <div class="activity-dot"></div>
+                <div class="activity-content">
+                    <span class="activity-text">${escapeHtml(a.description)}</span>
+                    <span class="activity-time">${a.time_ago}</span>
+                </div>
             </div>
-        </div>
-    `).join('');
+        `).join('');
+    } catch (e) {
+        console.error('Failed to load activity:', e);
+        document.getElementById('activity-container').innerHTML = '<div class="empty-state">No recent activity</div>';
+    }
 }
 
 // ========== Health Functions ==========
