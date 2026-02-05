@@ -57,3 +57,7 @@ test_*.png
 # Backup/fixed copies
 *.backup
 *.fixed
+
+# Relocated to private shadow-android repo
+web/
+ouroboros/
