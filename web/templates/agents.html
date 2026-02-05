@@ -342,7 +342,7 @@
             </div>
         </div>
         <div class="monitor-section">
-            <h4>System Metrics</h4>
+            <h4>System Health</h4>
             <div class="metrics-cards">
                 <div class="metric-card">
                     <div class="metric-label">CPU Usage</div>
@@ -352,20 +352,109 @@
                     </div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Memory Usage</div>
+                    <div class="metric-label">Memory</div>
                     <div class="metric-value" id="metric-memory">0 MB</div>
                     <div class="metric-bar">
                         <div class="metric-bar-fill" id="metric-memory-bar" style="width: 0%"></div>
                     </div>
+                    <div class="metric-sub" id="metric-memory-detail"></div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Active Processes</div>
-                    <div class="metric-value" id="metric-processes">0</div>
+                    <div class="metric-label">Disk Free</div>
+                    <div class="metric-value" id="metric-disk">--</div>
+                    <div class="metric-bar">
+                        <div class="metric-bar-fill" id="metric-disk-bar" style="width: 0%"></div>
+                    </div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Uptime</div>
-                    <div class="metric-value" id="metric-uptime">0s</div>
+                    <div class="metric-label">Threads</div>
+                    <div class="metric-value" id="metric-threads">0</div>
+                    <div class="metric-sub" id="metric-threads-detail"></div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent Health Grid -->
+    <div class="monitor-section" style="margin-top: var(--spacing-lg);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--spacing-md);">
+            <h4 style="margin: 0;">Agent Health Grid</h4>
+            <div class="agent-grid-legend">
+                <span class="legend-item"><span class="legend-dot" style="background: var(--success);"></span>Idle</span>
+                <span class="legend-item"><span class="legend-dot" style="background: var(--accent);"></span>Working</span>
+                <span class="legend-item"><span class="legend-dot" style="background: var(--error);"></span>Crashed</span>
+                <span class="legend-item"><span class="legend-dot" style="background: var(--text-dim);"></span>Offline</span>
+            </div>
+        </div>
+        <div class="agent-health-grid" id="agent-health-grid">
+            <div class="empty-state-small">No agents to display</div>
+        </div>
+    </div>
+
+    <!-- Task Pipeline + Cost + Alerts in 3-col grid -->
+    <div class="monitor-3col" style="margin-top: var(--spacing-lg);">
+        <div class="monitor-section">
+            <h4>Task Pipeline</h4>
+            <div class="pipeline-funnel" id="task-pipeline">
+                <div class="pipeline-stage">
+                    <div class="pipeline-bar" style="width: 100%;">
+                        <span class="pipeline-label">Scanned</span>
+                        <span class="pipeline-count" id="pipeline-scanned">0</span>
+                    </div>
+                </div>
+                <div class="pipeline-stage">
+                    <div class="pipeline-bar queued" style="width: 80%;">
+                        <span class="pipeline-label">Queued</span>
+                        <span class="pipeline-count" id="pipeline-queued">0</span>
+                    </div>
+                </div>
+                <div class="pipeline-stage">
+                    <div class="pipeline-bar assigned" style="width: 60%;">
+                        <span class="pipeline-label">Assigned</span>
+                        <span class="pipeline-count" id="pipeline-assigned">0</span>
+                    </div>
+                </div>
+                <div class="pipeline-stage">
+                    <div class="pipeline-bar completed" style="width: 40%;">
+                        <span class="pipeline-label">Completed</span>
+                        <span class="pipeline-count" id="pipeline-completed">0</span>
+                    </div>
+                </div>
+                <div class="pipeline-stage">
+                    <div class="pipeline-bar failed" style="width: 20%;">
+                        <span class="pipeline-label">Failed</span>
+                        <span class="pipeline-count" id="pipeline-failed">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="monitor-section">
+            <h4>Cost Tracker</h4>
+            <div class="cost-tracker" id="cost-tracker">
+                <div class="cost-row">
+                    <span class="cost-label">Estimated Today</span>
+                    <span class="cost-value" id="cost-today">$0.00</span>
+                </div>
+                <div class="cost-row">
+                    <span class="cost-label">Tasks Completed</span>
+                    <span class="cost-value" id="cost-tasks">0</span>
+                </div>
+                <div class="cost-row">
+                    <span class="cost-label">Avg Cost/Task</span>
+                    <span class="cost-value" id="cost-per-task">$0.00</span>
+                </div>
+                <div class="cost-row" id="cost-budget-row" style="display: none;">
+                    <span class="cost-label">Budget Remaining</span>
+                    <span class="cost-value" id="cost-budget">--</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="monitor-section">
+            <h4>Alerts</h4>
+            <div class="alert-feed" id="alert-feed">
+                <div class="empty-state-small">No active alerts</div>
             </div>
         </div>
     </div>
@@ -2436,6 +2525,173 @@
 .briefing-actions button .material-symbols-outlined {
     font-size: 16px;
 }
+
+/* --- Monitoring Enhancements --- */
+
+.metric-sub {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    margin-top: 4px;
+}
+
+.metric-bar-fill.warning { background: var(--warning); }
+.metric-bar-fill.danger { background: var(--error); }
+
+/* Agent Health Grid */
+.agent-health-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.agent-tile {
+    width: 38px;
+    height: 38px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    position: relative;
+}
+
+.agent-tile:hover {
+    transform: scale(1.2);
+    box-shadow: 0 0 8px rgba(255,255,255,0.15);
+    z-index: 2;
+}
+
+.agent-tile.idle { background: color-mix(in srgb, var(--success) 25%, transparent); color: var(--success); border: 1px solid var(--success); }
+.agent-tile.working { background: color-mix(in srgb, var(--accent) 25%, transparent); color: var(--accent); border: 1px solid var(--accent); }
+.agent-tile.crashed { background: color-mix(in srgb, var(--error) 25%, transparent); color: var(--error); border: 1px solid var(--error); }
+.agent-tile.offline { background: var(--bg-hover); color: var(--text-dim); border: 1px solid var(--border); }
+
+.agent-tile-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 110%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    z-index: 10;
+    pointer-events: none;
+}
+.agent-tile:hover .agent-tile-tooltip { display: block; }
+
+.agent-grid-legend {
+    display: flex;
+    gap: 12px;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+/* 3-col layout for pipeline/cost/alerts */
+.monitor-3col {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: var(--spacing-lg);
+}
+
+@media (max-width: 1024px) {
+    .monitor-3col { grid-template-columns: 1fr; }
+}
+
+/* Task Pipeline */
+.pipeline-funnel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pipeline-stage {
+    display: flex;
+}
+
+.pipeline-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    transition: width 0.3s;
+}
+
+.pipeline-bar.queued { background: color-mix(in srgb, #58a6ff 20%, transparent); }
+.pipeline-bar.assigned { background: color-mix(in srgb, var(--warning) 20%, transparent); }
+.pipeline-bar.completed { background: color-mix(in srgb, var(--success) 20%, transparent); }
+.pipeline-bar.failed { background: color-mix(in srgb, var(--error) 20%, transparent); }
+
+.pipeline-label { color: var(--text-dim); }
+.pipeline-count { font-weight: 700; color: var(--text); }
+
+/* Cost Tracker */
+.cost-tracker {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.cost-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.cost-row:last-child { border-bottom: none; }
+.cost-label { color: var(--text-dim); font-size: 0.85rem; }
+.cost-value { font-weight: 700; font-size: 1rem; }
+
+/* Alert Feed */
+.alert-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.alert-item {
+    padding: 8px 12px;
+    border-left: 3px solid var(--text-dim);
+    border-radius: var(--radius-sm);
+    background: var(--bg-hover);
+    font-size: 0.8rem;
+}
+
+.alert-item.warning { border-left-color: var(--warning); }
+.alert-item.critical { border-left-color: var(--error); }
+.alert-item.info { border-left-color: var(--accent); }
+
+.alert-item .alert-time {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+}
 </style>
 {% endblock %}
 
@@ -2989,34 +3245,7 @@ function updateOverview(mergedAgentsList = null) {
     const compEl = document.getElementById('overview-completed-tasks');
     if (compEl) compEl.textContent = completedTasks;
 
-    // Update system metrics
-    let totalCpu = 0;
-    let totalMemory = 0;
-    agentsList.forEach(agent => {
-        totalCpu += agent.cpu_percent || 0;
-        totalMemory += agent.memory_mb || 0;
-    });
-
-    const cpuEl = document.getElementById('metric-cpu');
-    if (cpuEl) cpuEl.textContent = `${totalCpu.toFixed(1)}%`;
-    const cpuBar = document.getElementById('metric-cpu-bar');
-    if (cpuBar) cpuBar.style.width = `${Math.min(totalCpu, 100)}%`;
-    
-    const memEl = document.getElementById('metric-memory');
-    if (memEl) memEl.textContent = `${totalMemory.toFixed(0)} MB`;
-    const memBar = document.getElementById('metric-memory-bar');
-    if (memBar) memBar.style.width = `${Math.min(totalMemory / 10, 100)}%`;
-    
-    const procEl = document.getElementById('metric-processes');
-    if (procEl) procEl.textContent = totalAgents;
-
-    // Calculate max uptime
-    let maxUptime = 0;
-    agentsList.forEach(agent => {
-        if (agent.uptime_seconds > maxUptime) maxUptime = agent.uptime_seconds;
-    });
-    const uptimeEl = document.getElementById('metric-uptime');
-    if (uptimeEl) uptimeEl.textContent = formatUptime(maxUptime);
+    // System metrics now updated by monitoring service polling (fetchMonitoringData)
 }
 
 // Format uptime
@@ -4443,6 +4672,190 @@ async function confirmCreateRoutine() {
         console.error('Failed to create routine:', e);
         if (typeof showToast === 'function') showToast('Failed to create routine', 'error');
     }
+}
+
+// ==================== Monitoring Service Integration ====================
+
+let monitoringInterval = null;
+
+function startMonitoringPolling() {
+    if (monitoringInterval) return;
+    fetchMonitoringData();
+    monitoringInterval = setInterval(fetchMonitoringData, 10000); // 10s
+}
+
+function stopMonitoringPolling() {
+    if (monitoringInterval) {
+        clearInterval(monitoringInterval);
+        monitoringInterval = null;
+    }
+}
+
+async function fetchMonitoringData() {
+    try {
+        const [snapRes, alertsRes, agentsRes, tasksRes, costRes] = await Promise.all([
+            fetch('/api/monitoring/snapshot').then(r => r.json()).catch(() => null),
+            fetch('/api/monitoring/alerts').then(r => r.json()).catch(() => null),
+            fetch('/api/monitoring/agents').then(r => r.json()).catch(() => null),
+            fetch('/api/monitoring/tasks').then(r => r.json()).catch(() => null),
+            fetch('/api/monitoring/cost').then(r => r.json()).catch(() => null),
+        ]);
+
+        if (snapRes?.snapshot) updateSystemHealth(snapRes.snapshot);
+        if (alertsRes?.active) updateAlertFeed(alertsRes.active);
+        if (agentsRes?.agents) updateAgentHealthGrid(agentsRes.agents);
+        if (tasksRes?.pipeline) updateTaskPipeline(tasksRes.pipeline);
+        if (costRes?.cost) updateCostTracker(costRes.cost);
+    } catch (e) {
+        console.debug('Monitoring fetch error:', e);
+    }
+}
+
+function updateSystemHealth(snap) {
+    const sys = snap.system || {};
+    const agents = snap.agents || {};
+
+    // CPU
+    const cpuPct = sys.cpu_percent || 0;
+    const cpuEl = document.getElementById('metric-cpu');
+    const cpuBar = document.getElementById('metric-cpu-bar');
+    if (cpuEl) cpuEl.textContent = cpuPct.toFixed(1) + '%';
+    if (cpuBar) {
+        cpuBar.style.width = Math.min(cpuPct, 100) + '%';
+        cpuBar.className = 'metric-bar-fill' + (cpuPct > 90 ? ' danger' : cpuPct > 75 ? ' warning' : '');
+    }
+
+    // Memory
+    const memPct = sys.ram_percent || 0;
+    const memUsed = sys.ram_used_gb || 0;
+    const memTotal = sys.ram_total_gb || 0;
+    const memEl = document.getElementById('metric-memory');
+    const memBar = document.getElementById('metric-memory-bar');
+    const memDetail = document.getElementById('metric-memory-detail');
+    if (memEl) memEl.textContent = memPct.toFixed(0) + '%';
+    if (memBar) {
+        memBar.style.width = Math.min(memPct, 100) + '%';
+        memBar.className = 'metric-bar-fill' + (memPct > 90 ? ' danger' : memPct > 80 ? ' warning' : '');
+    }
+    if (memDetail) memDetail.textContent = memUsed.toFixed(1) + ' / ' + memTotal.toFixed(1) + ' GB';
+
+    // Disk
+    const diskFree = sys.disk_free_gb || 0;
+    const diskTotal = sys.disk_total_gb || 1;
+    const diskPct = ((diskTotal - diskFree) / diskTotal * 100);
+    const diskEl = document.getElementById('metric-disk');
+    const diskBar = document.getElementById('metric-disk-bar');
+    if (diskEl) diskEl.textContent = diskFree.toFixed(1) + ' GB';
+    if (diskBar) {
+        diskBar.style.width = Math.min(diskPct, 100) + '%';
+        diskBar.className = 'metric-bar-fill' + (diskFree < 2 ? ' danger' : diskFree < 5 ? ' warning' : '');
+    }
+
+    // Threads
+    const threads = sys.thread_count || 0;
+    const threadsEl = document.getElementById('metric-threads');
+    const threadsDetail = document.getElementById('metric-threads-detail');
+    if (threadsEl) threadsEl.textContent = threads;
+    if (threadsDetail) {
+        const agentCount = agents.total || 0;
+        threadsDetail.textContent = agentCount + ' agents active';
+    }
+}
+
+function updateAgentHealthGrid(agents) {
+    const grid = document.getElementById('agent-health-grid');
+    if (!grid) return;
+    if (!agents.length) {
+        grid.innerHTML = '<div class="empty-state-small">No agents to display</div>';
+        return;
+    }
+    const html = agents.map(a => {
+        const status = (a.status || 'offline').toLowerCase();
+        let cls = 'offline';
+        if (status === 'idle') cls = 'idle';
+        else if (status === 'working' || status === 'busy' || status === 'running') cls = 'working';
+        else if (status === 'crashed' || status === 'error' || status === 'failed') cls = 'crashed';
+
+        const label = (a.name || a.agent_id || '?').slice(0, 3).toUpperCase();
+        const tooltipText = (a.name || a.agent_id || '?') + ' - ' + status;
+        return `<div class="agent-tile ${cls}" title="${tooltipText}">
+            ${label}
+            <div class="agent-tile-tooltip">${tooltipText}</div>
+        </div>`;
+    }).join('');
+    grid.innerHTML = html;
+}
+
+function updateTaskPipeline(pipeline) {
+    const fields = {
+        'pipeline-scanned': pipeline.scanned || 0,
+        'pipeline-queued': pipeline.queued || pipeline.pending || 0,
+        'pipeline-assigned': pipeline.assigned || 0,
+        'pipeline-completed': pipeline.completed || 0,
+        'pipeline-failed': pipeline.failed || 0,
+    };
+    for (const [id, val] of Object.entries(fields)) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+    }
+
+    // Update tab badge
+    const total = (fields['pipeline-queued'] || 0) + (fields['pipeline-assigned'] || 0);
+    const badge = document.getElementById('tab-count-monitor');
+    if (badge) badge.textContent = total || '';
+}
+
+function updateCostTracker(cost) {
+    const todayEl = document.getElementById('cost-today');
+    const tasksEl = document.getElementById('cost-tasks');
+    const perTaskEl = document.getElementById('cost-per-task');
+    const budgetRow = document.getElementById('cost-budget-row');
+    const budgetEl = document.getElementById('cost-budget');
+
+    if (todayEl) todayEl.textContent = '$' + (cost.total_usd || 0).toFixed(2);
+    if (tasksEl) tasksEl.textContent = cost.tasks_completed || 0;
+    if (perTaskEl) perTaskEl.textContent = '$' + (cost.avg_cost_per_task || 0).toFixed(3);
+
+    if (cost.budget_limit_usd && cost.budget_limit_usd > 0) {
+        if (budgetRow) budgetRow.style.display = '';
+        if (budgetEl) {
+            const remaining = cost.budget_limit_usd - (cost.total_usd || 0);
+            budgetEl.textContent = '$' + Math.max(remaining, 0).toFixed(2);
+            budgetEl.style.color = remaining < 0 ? 'var(--error)' : '';
+        }
+    }
+}
+
+function updateAlertFeed(alerts) {
+    const feed = document.getElementById('alert-feed');
+    if (!feed) return;
+    if (!alerts.length) {
+        feed.innerHTML = '<div class="empty-state-small">No active alerts</div>';
+        return;
+    }
+    const html = alerts.map(a => {
+        const level = (a.level || 'info').toLowerCase();
+        const time = a.fired_at ? new Date(a.fired_at).toLocaleTimeString() : '';
+        return `<div class="alert-item ${level}">
+            <div>${a.message || a.alert_type || 'Alert'}</div>
+            <div class="alert-time">${time}</div>
+        </div>`;
+    }).join('');
+    feed.innerHTML = html;
+}
+
+// Start monitoring when monitor tab is opened
+const origSwitchMainTab = typeof switchMainTab === 'function' ? switchMainTab : null;
+if (origSwitchMainTab) {
+    const _origSwitch = switchMainTab;
+    switchMainTab = function(tab) {
+        _origSwitch(tab);
+        if (tab === 'monitor') {
+            startMonitoringPolling();
+        } else {
+            stopMonitoringPolling();
+        }
+    };
 }
 </script>
 {% endblock %}

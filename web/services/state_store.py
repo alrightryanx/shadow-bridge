@@ -157,6 +157,22 @@ class AgentStateStore:
             );
             CREATE INDEX IF NOT EXISTS idx_perf_agent ON agent_performance(agent_id);
             CREATE INDEX IF NOT EXISTS idx_perf_category ON agent_performance(task_category);
+
+            -- Per-project rules (forbidden files, allowed ops, coding standards)
+            CREATE TABLE IF NOT EXISTS project_rules (
+                project_id TEXT PRIMARY KEY,
+                project_path TEXT NOT NULL,
+                display_name TEXT,
+                forbidden_files_json TEXT,       -- JSON array of glob patterns
+                allowed_files_json TEXT,         -- JSON array of glob patterns (whitelist mode)
+                forbidden_operations_json TEXT,  -- JSON array of operation names
+                coding_standards TEXT,           -- injected into agent system prompts
+                max_file_changes_per_task INTEGER DEFAULT 0,  -- 0 = unlimited
+                require_tests INTEGER DEFAULT 0,              -- 0 or 1
+                custom_prompt_addendum TEXT,     -- extra text for agent prompts
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         conn.commit()
         logger.info(f"State store initialized at {self._db_path}")
@@ -715,6 +731,96 @@ class AgentStateStore:
                 d["metadata"] = {}
         else:
             d["metadata"] = {}
+        return d
+
+    # ---- Project Rules ----
+
+    def upsert_project_rules(self, project_id: str, project_path: str, **kwargs) -> bool:
+        """Create or update project rules."""
+        conn = self._get_conn()
+        now = datetime.utcnow().isoformat()
+
+        existing = conn.execute(
+            "SELECT project_id FROM project_rules WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+
+        if existing:
+            sets = ["updated_at = ?"]
+            vals = [now]
+            for col in (
+                "display_name", "forbidden_files_json", "allowed_files_json",
+                "forbidden_operations_json", "coding_standards",
+                "max_file_changes_per_task", "require_tests",
+                "custom_prompt_addendum",
+            ):
+                if col in kwargs:
+                    sets.append(f"{col} = ?")
+                    vals.append(kwargs[col])
+            vals.append(project_id)
+            conn.execute(
+                f"UPDATE project_rules SET {', '.join(sets)} WHERE project_id = ?",
+                vals,
+            )
+        else:
+            conn.execute(
+                """INSERT INTO project_rules
+                   (project_id, project_path, display_name,
+                    forbidden_files_json, allowed_files_json,
+                    forbidden_operations_json, coding_standards,
+                    max_file_changes_per_task, require_tests,
+                    custom_prompt_addendum, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    project_id, project_path,
+                    kwargs.get("display_name", ""),
+                    kwargs.get("forbidden_files_json", "[]"),
+                    kwargs.get("allowed_files_json", "[]"),
+                    kwargs.get("forbidden_operations_json", "[]"),
+                    kwargs.get("coding_standards", ""),
+                    kwargs.get("max_file_changes_per_task", 0),
+                    kwargs.get("require_tests", 0),
+                    kwargs.get("custom_prompt_addendum", ""),
+                    now, now,
+                ),
+            )
+        conn.commit()
+        return True
+
+    def get_project_rules(self, project_id: str) -> Optional[Dict]:
+        """Get rules for a specific project."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM project_rules WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return self._rules_row_to_dict(dict(row))
+
+    def get_all_project_rules(self) -> List[Dict]:
+        """Get all project rules."""
+        conn = self._get_conn()
+        rows = conn.execute("SELECT * FROM project_rules ORDER BY display_name").fetchall()
+        return [self._rules_row_to_dict(dict(r)) for r in rows]
+
+    def delete_project_rules(self, project_id: str) -> bool:
+        """Delete rules for a project."""
+        conn = self._get_conn()
+        conn.execute("DELETE FROM project_rules WHERE project_id = ?", (project_id,))
+        conn.commit()
+        return True
+
+    def _rules_row_to_dict(self, d: Dict) -> Dict:
+        """Convert a project_rules row to a dict with parsed JSON fields."""
+        import json as _json
+        for field in ("forbidden_files_json", "allowed_files_json", "forbidden_operations_json"):
+            raw = d.pop(field, "[]")
+            key = field.replace("_json", "")
+            try:
+                d[key] = _json.loads(raw) if raw else []
+            except (_json.JSONDecodeError, TypeError):
+                d[key] = []
         return d
 
     # ---- Utility ----

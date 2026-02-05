@@ -411,6 +411,7 @@ class DeploymentWizard:
                 provider=config.provider,
                 model=config.model,
                 agent_configs=agent_configs,
+                budget_limit_usd=config.budget_limit_usd,
             )
 
             # Track agent IDs from the loop

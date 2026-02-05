@@ -41,6 +41,7 @@ from web.services.subagent_loop import get_subagent_loop_controller, SubagentLoo
 from web.services.routine_scheduler import get_routine_scheduler
 from web.services.loop_intelligence import get_loop_intelligence
 from web.services.state_store import get_state_store
+from web.services.rules_engine import get_rules_engine
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,9 @@ class AutonomousLoop:
         self.efficiency_log: List[dict] = [] # Track task efficiency: {agent_id, task_id, duration_ms}
         self.estimated_cost_usd: float = 0.0  # Running cost estimate
         self._cost_by_provider: Dict[str, float] = {}  # provider -> cost
+        self._budget_limit_usd: float = 0.0  # 0 = unlimited
+        self._budget_alerts_sent: set = set()  # Track which % alerts fired (50, 80, 100)
+        self._budget_paused: bool = False  # True if budget limit reached
         self._last_build_time: float = 0.0
         self._last_deploy_time: float = 0.0
         self._last_build_skip_notice: float = 0.0
@@ -372,7 +376,8 @@ class AutonomousLoop:
 
     def start(self, agent_count: int = 5, focus: str = "backend-polish",
               provider: str = DEFAULT_PROVIDER, model: str = DEFAULT_MODEL,
-              agent_configs: Optional[List[dict]] = None):
+              agent_configs: Optional[List[dict]] = None,
+              budget_limit_usd: float = 0.0):
         """
         Start the autonomous loop.
 
@@ -382,6 +387,7 @@ class AutonomousLoop:
             provider: Default CLI provider for agents
             model: Default model for agents
             agent_configs: Optional per-agent config overrides
+            budget_limit_usd: Hard spending cap in USD (0 = unlimited)
         """
         if self.running:
             # If already running, stop first to apply new model/key
@@ -404,6 +410,11 @@ class AutonomousLoop:
         self._failure_streak = 0
         self._backoff_until = 0.0
         self._requires_manual_resume = False
+        self._budget_limit_usd = budget_limit_usd
+        self._budget_alerts_sent = set()
+        self._budget_paused = False
+        self.estimated_cost_usd = 0.0
+        self._cost_by_provider = {}
 
         # Resolve agent configs
         self.agent_configs = self._resolve_configs(
@@ -550,6 +561,11 @@ class AutonomousLoop:
             "estimated_cost_usd": round(self.estimated_cost_usd, 4),
             "cost_by_provider": {k: round(v, 4) for k, v in self._cost_by_provider.items()},
             "daily_task_limit": DAILY_TASK_LIMIT,
+            "budget_limit_usd": self._budget_limit_usd,
+            "budget_paused": self._budget_paused,
+            "budget_pct": round(
+                (self.estimated_cost_usd / self._budget_limit_usd) * 100, 1
+            ) if self._budget_limit_usd > 0 else 0,
         }
 
     def get_tasks(self) -> List[dict]:
@@ -742,20 +758,23 @@ class AutonomousLoop:
                     self.cycle_count += 1
                     logger.debug(f"Autonomous cycle #{self.cycle_count}")
 
-                    # 0. Check scheduled routines (every 10 cycles to avoid overhead)
+                    # 0. Check budget enforcement
+                    self._check_budget()
+
+                    # 0b. Check scheduled routines (every 10 cycles to avoid overhead)
                     if self.cycle_count % 10 == 1:
                         self._check_routines()
 
                     # 1. Scan if queue empty or stale
-                    if not self._backoff_active() and self._should_scan():
+                    if not self._backoff_active() and not self._budget_paused and self._should_scan():
                         self._do_scan()
-                        
+
                     # 2. Seek for tasks: Generate new ones if queue still empty
-                    if not self._backoff_active() and not any(t.get("status") == "pending" for t in self.task_queue):
+                    if not self._backoff_active() and not self._budget_paused and not any(t.get("status") == "pending" for t in self.task_queue):
                         self._generate_tasks()
 
-                    # 3. Assign tasks to idle agents
-                    if not self._backoff_active():
+                    # 3. Assign tasks to idle agents (blocked by budget)
+                    if not self._backoff_active() and not self._budget_paused:
                         self._assign_tasks(max_agents=max_agents, allowed_categories=allowed_categories)
 
                     # 4. Check for task completions
@@ -913,6 +932,21 @@ After the protocol markers, respond with a JSON list of tasks:
             if not task:
                 continue
                 
+            # ENFORCE RULES: Validate task against project rules
+            task_repo = task.get("repo", "")
+            if task_repo:
+                engine = get_rules_engine()
+                rules_ok, rules_reason = engine.validate_task(task_repo, task)
+                if not rules_ok:
+                    logger.warning(f"Task '{task.get('title')}' blocked by rules: {rules_reason}")
+                    task["status"] = "rules_blocked"
+                    self._broadcast_event("task_rules_blocked", {
+                        "task_id": task.get("id"),
+                        "task_title": task.get("title"),
+                        "reason": rules_reason,
+                    })
+                    continue
+
             # ENFORCE APPROVAL: Risky tasks (large scope) require manual approval
             if task.get("scope") == "large" and task.get("status") != "approved":
                 if task.get("status") != "awaiting_approval":
@@ -1007,6 +1041,41 @@ After the protocol markers, respond with a JSON list of tasks:
 
                 if slots is not None and assigned >= slots:
                     break
+
+    def _check_budget(self):
+        """Check if spending has hit budget thresholds. Pauses agents at limit."""
+        if self._budget_limit_usd <= 0:
+            return  # No budget limit
+
+        pct = (self.estimated_cost_usd / self._budget_limit_usd) * 100
+
+        # Fire alerts at 50%, 80%, 100%
+        for threshold in (50, 80, 100):
+            if pct >= threshold and threshold not in self._budget_alerts_sent:
+                self._budget_alerts_sent.add(threshold)
+                level = "info" if threshold < 80 else "warning" if threshold < 100 else "critical"
+                logger.warning(
+                    f"Budget alert: {pct:.0f}% of ${self._budget_limit_usd:.2f} "
+                    f"spent (${self.estimated_cost_usd:.4f})"
+                )
+                self._broadcast_event("budget_alert", {
+                    "threshold_pct": threshold,
+                    "spent_usd": round(self.estimated_cost_usd, 4),
+                    "limit_usd": self._budget_limit_usd,
+                    "level": level,
+                })
+
+        # Hard stop at 100%
+        if pct >= 100 and not self._budget_paused:
+            self._budget_paused = True
+            logger.critical(
+                f"Budget limit reached: ${self.estimated_cost_usd:.4f} / "
+                f"${self._budget_limit_usd:.2f}. Pausing all task assignments."
+            )
+            self._broadcast_event("budget_exceeded", {
+                "spent_usd": round(self.estimated_cost_usd, 4),
+                "limit_usd": self._budget_limit_usd,
+            })
 
     def _should_scan(self) -> bool:
         """Check if we need to rescan repos."""
@@ -1530,6 +1599,8 @@ Do not edit files outside the workspace root.
 
 {SCOPE_CONSTRAINTS}
 
+{self._get_project_rules_addendum(task)}
+
 INSTRUCTIONS:
 1. Read the file mentioned in the task
 2. Understand the surrounding code context
@@ -1560,6 +1631,18 @@ DO NOT use loops for:
 - Single, simple changes
 - Tasks with scope "small"
 """
+
+    def _get_project_rules_addendum(self, task: dict) -> str:
+        """Get project-specific rules addendum for a task prompt."""
+        repo = task.get("repo", "")
+        if not repo:
+            return ""
+        try:
+            engine = get_rules_engine()
+            return engine.get_prompt_addendum(repo)
+        except Exception as e:
+            logger.debug(f"Could not get rules addendum for {repo}: {e}")
+            return ""
 
     # ---- Broadcasting ----
 

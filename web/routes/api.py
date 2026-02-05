@@ -6236,6 +6236,208 @@ def deployment_resume(deployment_id):
     return jsonify(result), status_code
 
 
+# ========== Project Rules Engine ==========
+
+
+@api_bp.route("/rules", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def rules_list():
+    """List all project rules configurations."""
+    from ..services.rules_engine import get_rules_engine
+    engine = get_rules_engine()
+    rules = engine.get_all_rules()
+    return jsonify({
+        "success": True,
+        "rules": [
+            {
+                "project_id": r.project_id,
+                "project_path": r.project_path,
+                "display_name": r.display_name,
+                "forbidden_files": r.forbidden_files,
+                "allowed_files": r.allowed_files,
+                "forbidden_operations": r.forbidden_operations,
+                "coding_standards": r.coding_standards,
+                "max_file_changes_per_task": r.max_file_changes_per_task,
+                "require_tests": r.require_tests,
+                "custom_prompt_addendum": r.custom_prompt_addendum,
+            }
+            for r in rules
+        ],
+    })
+
+
+@api_bp.route("/rules/<project_id>", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def rules_get(project_id):
+    """Get rules for a specific project."""
+    from ..services.rules_engine import get_rules_engine
+    from ..services.state_store import get_state_store
+    store = get_state_store()
+    row = store.get_project_rules(project_id)
+    if not row:
+        return jsonify({"success": False, "error": "Project rules not found"}), 404
+    return jsonify({"success": True, "rules": row})
+
+
+@api_bp.route("/rules", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def rules_create_or_update():
+    """Create or update project rules."""
+    from ..services.rules_engine import get_rules_engine, ProjectRules
+    data = request.get_json()
+    if not data or not data.get("project_path"):
+        return jsonify({"success": False, "error": "project_path is required"}), 400
+
+    engine = get_rules_engine()
+    rules = engine.get_or_create_rules(data["project_path"], data.get("display_name", ""))
+
+    # Update fields from request
+    if "forbidden_files" in data:
+        rules.forbidden_files = data["forbidden_files"]
+    if "allowed_files" in data:
+        rules.allowed_files = data["allowed_files"]
+    if "forbidden_operations" in data:
+        rules.forbidden_operations = data["forbidden_operations"]
+    if "coding_standards" in data:
+        rules.coding_standards = data["coding_standards"]
+    if "max_file_changes_per_task" in data:
+        rules.max_file_changes_per_task = int(data["max_file_changes_per_task"])
+    if "require_tests" in data:
+        rules.require_tests = bool(data["require_tests"])
+    if "custom_prompt_addendum" in data:
+        rules.custom_prompt_addendum = data["custom_prompt_addendum"]
+    if "display_name" in data:
+        rules.display_name = data["display_name"]
+
+    engine.save_rules(rules)
+    return jsonify({"success": True, "project_id": rules.project_id})
+
+
+@api_bp.route("/rules/<project_id>", methods=["DELETE"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def rules_delete(project_id):
+    """Delete rules for a project."""
+    from ..services.state_store import get_state_store
+    store = get_state_store()
+    row = store.get_project_rules(project_id)
+    if not row:
+        return jsonify({"success": False, "error": "Project rules not found"}), 404
+
+    from ..services.rules_engine import get_rules_engine
+    engine = get_rules_engine()
+    engine.delete_rules(row["project_path"])
+    return jsonify({"success": True})
+
+
+@api_bp.route("/rules/validate", methods=["POST"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def rules_validate_task():
+    """Validate a task against project rules (dry-run)."""
+    from ..services.rules_engine import get_rules_engine
+    data = request.get_json()
+    if not data or not data.get("project_path") or not data.get("task"):
+        return jsonify({"success": False, "error": "project_path and task are required"}), 400
+
+    engine = get_rules_engine()
+    ok, reason = engine.validate_task(data["project_path"], data["task"])
+    return jsonify({"success": True, "allowed": ok, "reason": reason})
+
+
+# ========== Monitoring ==========
+
+
+@api_bp.route("/monitoring/snapshot", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def monitoring_snapshot():
+    """Get current system monitoring snapshot."""
+    from ..services.monitoring_service import get_monitoring_service
+    svc = get_monitoring_service()
+    return jsonify({"success": True, "snapshot": svc.get_snapshot()})
+
+
+@api_bp.route("/monitoring/alerts", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def monitoring_alerts():
+    """Get active and recent alerts."""
+    from ..services.monitoring_service import get_monitoring_service
+    svc = get_monitoring_service()
+    return jsonify({
+        "success": True,
+        "active": svc.get_active_alerts(),
+        "history": svc.get_alert_history(limit=50),
+    })
+
+
+@api_bp.route("/monitoring/agents", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def monitoring_agents():
+    """Get agent health grid data."""
+    from ..services.monitoring_service import get_monitoring_service
+    svc = get_monitoring_service()
+    return jsonify({"success": True, "agents": svc.get_agent_health_grid()})
+
+
+@api_bp.route("/monitoring/tasks", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def monitoring_tasks():
+    """Get task pipeline funnel data."""
+    from ..services.monitoring_service import get_monitoring_service
+    svc = get_monitoring_service()
+    return jsonify({"success": True, "pipeline": svc.get_task_pipeline()})
+
+
+@api_bp.route("/monitoring/cost", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def monitoring_cost():
+    """Get cost summary data."""
+    from ..services.monitoring_service import get_monitoring_service
+    svc = get_monitoring_service()
+    return jsonify({"success": True, "cost": svc.get_cost_summary()})
+
+
+@api_bp.route("/monitoring/locks", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def monitoring_locks():
+    """Get lock contention data."""
+    from ..services.monitoring_service import get_monitoring_service
+    svc = get_monitoring_service()
+    return jsonify({"success": True, "locks": svc.get_lock_contention()})
+
+
+@api_bp.route("/monitoring/history", methods=["GET"])
+@require_bridge_auth
+@rate_limit
+@api_error_handler
+def monitoring_history():
+    """Get metrics history for charts."""
+    from ..services.monitoring_service import get_monitoring_service
+    svc = get_monitoring_service()
+    minutes = request.args.get("minutes", 30, type=int)
+    return jsonify({"success": True, "history": svc.get_metrics_history(minutes=minutes)})
+
+
 # ========== Mobile Sync (Push/Pull) ==========
 
 
