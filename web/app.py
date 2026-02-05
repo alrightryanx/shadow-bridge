@@ -249,6 +249,17 @@ def create_app():
         print(f"Error registering Health dashboard routes: {e}")
         traceback.print_exc()
 
+    # Ouroboros Pipeline Dashboard
+    try:
+        from .routes.ouroboros_routes import ouroboros_bp
+
+        app.register_blueprint(ouroboros_bp)
+    except ImportError as e:
+        print(f"Warning: Ouroboros dashboard routes not available: {e}")
+    except Exception as e:
+        print(f"Error registering Ouroboros dashboard routes: {e}")
+        traceback.print_exc()
+
     # SECURITY: Add security headers to all responses
     @app.after_request
     def add_security_headers(response):
