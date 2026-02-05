@@ -19,6 +19,44 @@ Requirements:
 
 import os
 import sys
+from pathlib import Path
+
+# ---- Dynamic Path Detection for Relocated Modules ----
+# web/ and ouroboros/ have been moved to the private shadow-android repo.
+# Add shadow-android to sys.path so imports like `from web.services...` work.
+def _setup_module_paths():
+    """Add shadow-android directory to Python path for relocated modules."""
+    # Determine base directory (where shadow-bridge and shadow-android live)
+    if getattr(sys, 'frozen', False):
+        # Running as compiled exe
+        base_dir = Path(sys.executable).parent.parent
+    else:
+        # Running as script
+        base_dir = Path(__file__).parent.parent
+
+    # shadow-android should be a sibling directory
+    shadow_android_dir = base_dir / "shadow-android"
+
+    if shadow_android_dir.exists():
+        # Add to front of path so it takes precedence
+        shadow_android_str = str(shadow_android_dir)
+        if shadow_android_str not in sys.path:
+            sys.path.insert(0, shadow_android_str)
+    else:
+        # Fallback: check common locations
+        for fallback in [
+            Path("C:/shadow/shadow-android"),
+            Path.home() / "shadow" / "shadow-android",
+        ]:
+            if fallback.exists():
+                fallback_str = str(fallback)
+                if fallback_str not in sys.path:
+                    sys.path.insert(0, fallback_str)
+                break
+
+# Must be called before importing from web/ or ouroboros/
+_setup_module_paths()
+
 import json
 import time
 import socket
@@ -35,8 +73,6 @@ import ctypes
 import traceback
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-
-from pathlib import Path
 from io import BytesIO
 
 # Import Zeroconf for mDNS discovery
@@ -292,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.170"
+APP_VERSION = "1.172"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
