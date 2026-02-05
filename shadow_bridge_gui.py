@@ -292,7 +292,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.163"
+APP_VERSION = "1.166"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9009,12 +9009,30 @@ def _launch_ouroboros_refiner():
         return None
 
     github_token = os.environ.get("GITHUB_TOKEN")
+    # Fallback: read from config file if env var not set
+    if not github_token:
+        token_file = Path(HOME_DIR) / ".shadowai" / "github_token"
+        if token_file.exists():
+            github_token = token_file.read_text().strip()
+            log.info("Loaded GITHUB_TOKEN from config file")
     if not github_token:
         log.warning("GITHUB_TOKEN not set - Ouroboros Refiner will not start")
+        log.warning("Set env var or create ~/.shadowai/github_token file")
+        return None
+
+    # Find Python interpreter (sys.executable may be frozen ShadowBridge.exe)
+    import shutil
+    python_cmd = None
+    for candidate in ["C:/Windows/py.exe", "python", "python3"]:
+        if shutil.which(candidate):
+            python_cmd = candidate
+            break
+    if not python_cmd:
+        log.warning("Python interpreter not found - Ouroboros Refiner will not start")
         return None
 
     try:
-        log.info("Launching Ouroboros Refiner (--watch --interval 120)...")
+        log.info(f"Launching Ouroboros Refiner (--watch --interval 120) via {python_cmd}...")
         env = os.environ.copy()
         env["GITHUB_TOKEN"] = github_token
 
@@ -9025,7 +9043,7 @@ def _launch_ouroboros_refiner():
             startupinfo.wShowWindow = 0  # SW_HIDE
 
         proc = subprocess.Popen(
-            [sys.executable, str(refiner_script), "--watch", "--interval", "120"],
+            [python_cmd, str(refiner_script), "--watch", "--interval", "120"],
             env=env,
             startupinfo=startupinfo,
             stdout=subprocess.DEVNULL,
