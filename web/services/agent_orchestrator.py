@@ -49,17 +49,26 @@ agent_restart_counts: Dict[str, List[float]] = defaultdict(list)  # agent_id -> 
 agent_watchdog_thread: Optional[threading.Thread] = None
 agent_watchdog_stop_event = threading.Event()
 
-# Recovery config
-MAX_RESTARTS_PER_HOUR = 3
-RESTART_BACKOFF_SECONDS = [1, 2, 4, 8]
-WATCHDOG_CHECK_INTERVAL = 5
+# Recovery config (all env-configurable for scaling)
+MAX_RESTARTS_PER_HOUR = int(os.environ.get("AGENT_MAX_RESTARTS_PER_HOUR", "10"))
+RESTART_BACKOFF_SECONDS = [1, 2, 4, 8, 16, 30, 60]
+WATCHDOG_CHECK_INTERVAL = int(os.environ.get("AGENT_WATCHDOG_INTERVAL", "5"))
 
 # Agent data file path
 AGENTS_DATA_FILE = os.path.join(os.path.expanduser("~"), ".shadowai", "agents.json")
 TASK_MARKER_PATTERN = re.compile(r'^<<<(TASK_STARTED|TASK_PROGRESS|TASK_RESULT|TASK_DONE)\s+(\{.*\})>>>$')
 TASK_LOG_TAIL_LINES = 50
 TASK_ID_LENGTH = 12
-TASK_TIMEOUT_SECONDS = 600  # 10 minutes - tasks stuck longer are force-completed
+TASK_TIMEOUT_SECONDS = int(os.environ.get("AGENT_TASK_TIMEOUT", "1800"))  # 30 min default
+
+# Resource limits for spawning
+RESOURCE_CPU_LIMIT = float(os.environ.get("AGENT_CPU_LIMIT", "95"))  # percent
+RESOURCE_RAM_LIMIT = float(os.environ.get("AGENT_RAM_LIMIT", "90"))  # percent
+RESOURCE_DISK_MIN_GB = float(os.environ.get("AGENT_DISK_MIN_GB", "1.0"))  # GB free
+
+# Output log limits
+MAX_LOG_LINES_PER_AGENT = int(os.environ.get("AGENT_MAX_LOG_LINES", "1000"))
+STATUS_FETCH_POOL_SIZE = int(os.environ.get("AGENT_STATUS_POOL_SIZE", "50"))
 
 
 def _record_task_block(entry: Dict):
@@ -108,6 +117,55 @@ def _ensure_protocol_header(task_text: str, task_id: str, thread_id: str) -> str
     return f"{header}\n\n{task_text}"
 
 
+def check_system_resources() -> Dict:
+    """
+    Check if the system has enough resources to spawn another agent.
+
+    Returns:
+        Dict with 'can_spawn' bool, 'reason' str, and 'metrics' dict.
+    """
+    metrics = {}
+    try:
+        mem = psutil.virtual_memory()
+        metrics["ram_percent"] = round(mem.percent, 1)
+        metrics["ram_available_gb"] = round(mem.available / (1024 ** 3), 2)
+
+        cpu = psutil.cpu_percent(interval=0.5)
+        metrics["cpu_percent"] = round(cpu, 1)
+
+        disk = psutil.disk_usage(os.path.expanduser("~"))
+        metrics["disk_free_gb"] = round(disk.free / (1024 ** 3), 2)
+
+        metrics["active_agents"] = len(active_agents)
+        metrics["total_threads"] = threading.active_count()
+    except Exception as e:
+        logger.error(f"Error checking system resources: {e}")
+        return {"can_spawn": True, "reason": "", "metrics": metrics}
+
+    if metrics["cpu_percent"] > RESOURCE_CPU_LIMIT:
+        return {
+            "can_spawn": False,
+            "reason": f"CPU at {metrics['cpu_percent']}% (limit {RESOURCE_CPU_LIMIT}%)",
+            "metrics": metrics,
+        }
+
+    if metrics["ram_percent"] > RESOURCE_RAM_LIMIT:
+        return {
+            "can_spawn": False,
+            "reason": f"RAM at {metrics['ram_percent']}% (limit {RESOURCE_RAM_LIMIT}%)",
+            "metrics": metrics,
+        }
+
+    if metrics["disk_free_gb"] < RESOURCE_DISK_MIN_GB:
+        return {
+            "can_spawn": False,
+            "reason": f"Disk free {metrics['disk_free_gb']}GB (min {RESOURCE_DISK_MIN_GB}GB)",
+            "metrics": metrics,
+        }
+
+    return {"can_spawn": True, "reason": "", "metrics": metrics}
+
+
 def spawn_agent(
     device_id: str,
     name: str,
@@ -117,7 +175,8 @@ def spawn_agent(
     working_directory: Optional[str] = None,
     auto_accept_edits: bool = True,
     session_id: Optional[str] = None,
-    env: Optional[Dict[str, str]] = None
+    env: Optional[Dict[str, str]] = None,
+    skip_resource_check: bool = False
 ) -> Dict:
     """
     Spawn a new persistent AI agent.
@@ -136,6 +195,15 @@ def spawn_agent(
     Returns:
         Agent info dict with id, status, etc.
     """
+
+    # Resource check before spawning
+    if not skip_resource_check:
+        resource_status = check_system_resources()
+        if not resource_status["can_spawn"]:
+            raise RuntimeError(
+                f"Cannot spawn agent: {resource_status['reason']}. "
+                f"Active agents: {resource_status['metrics'].get('active_agents', '?')}"
+            )
 
     agent_id = str(uuid.uuid4())
 
@@ -205,19 +273,30 @@ def spawn_agent(
         # Create task queue
         agent_task_queues[agent_id] = queue.Queue()
 
-        # Start output monitoring thread
-        output_thread = threading.Thread(
-            target=monitor_agent_output,
-            args=(agent_id, process.stdout, process.stderr),
-            daemon=True
+        # Start output monitoring: spawn stdout/stderr readers directly
+        # instead of a wrapper thread that creates 2 sub-threads.
+        # This reduces per-agent threads from 4 to 3.
+        stdout_thread = threading.Thread(
+            target=_read_agent_stream,
+            args=(agent_id, process.stdout, "stdout", process),
+            daemon=True,
+            name=f"agent-stdout-{agent_id[:8]}"
         )
-        output_thread.start()
+        stderr_thread = threading.Thread(
+            target=_read_agent_stream,
+            args=(agent_id, process.stderr, "stderr", process),
+            daemon=True,
+            name=f"agent-stderr-{agent_id[:8]}"
+        )
+        stdout_thread.start()
+        stderr_thread.start()
 
         # Start task processing thread
         task_thread = threading.Thread(
             target=process_agent_tasks,
             args=(agent_id,),
-            daemon=True
+            daemon=True,
+            name=f"agent-task-{agent_id[:8]}"
         )
         task_thread.start()
 
@@ -549,7 +628,7 @@ def get_all_agents(device_id: Optional[str] = None) -> List[Dict]:
     
     # Use ThreadPoolExecutor to fetch statuses in parallel
     # This protects against any potential blocking I/O in get_agent_status
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(agent_ids), 10)) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(agent_ids), STATUS_FETCH_POOL_SIZE)) as executor:
         # Create a mapping of future to agent_id
         future_to_id = {executor.submit(get_agent_status, aid): aid for aid in agent_ids}
         
@@ -711,121 +790,113 @@ def update_task_status(agent_id: str, marker: Dict):
         _finalize_task(agent_id, done_status, elapsed_ms=elapsed_ms)
 
 
-def monitor_agent_output(agent_id: str, stdout, stderr):
+def _read_agent_stream(agent_id: str, stream, stream_type: str, process=None):
     """
-    Monitor agent output streams and log/broadcast.
+    Read a single output stream (stdout or stderr) from an agent process.
+    Runs as a daemon thread per stream. This replaces the old
+    monitor_agent_output wrapper which spawned sub-threads.
 
     Args:
         agent_id: Agent ID
-        stdout: stdout stream
-        stderr: stderr stream
+        stream: stdout or stderr stream
+        stream_type: "stdout" or "stderr"
+        process: subprocess.Popen (for exit detection on stream EOF)
     """
+    try:
+        for line in stream:
+            if not line:
+                continue
 
-    def read_stream(stream, stream_type):
-        try:
-            for line in stream:
-                if not line:
-                    continue
+            line = line.strip()
 
-                line = line.strip()
-
-                # Create log entry
-                log_entry = {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "stream": stream_type,
-                    "line": line
-                }
-
-                # Add to logs
-                agent_logs[agent_id].append(log_entry)
-
-                # Trim logs to max 1000 lines
-                if len(agent_logs[agent_id]) > 1000:
-                    agent_logs[agent_id] = agent_logs[agent_id][-1000:]
-
-                # Parse task markers
-                parsed_marker = parse_task_marker(line)
-                if parsed_marker:
-                    update_task_status(agent_id, parsed_marker)
-
-                # Parse subagent loop markers
-                try:
-                    loop_controller = get_subagent_loop_controller()
-                    loop_event = loop_controller.detect_loop_trigger(line)
-                    if loop_event:
-                        task_id = active_agents.get(agent_id, {}).get("current_task_id")
-                        loop_controller.handle_loop_event(agent_id, loop_event, task_id=task_id)
-                except Exception as e:
-                    logger.debug(f"Error handling loop marker: {e}")
-
-                # Broadcast output line
-                broadcast_agent_event("agent_output_line", {
-                    "agent_id": agent_id,
-                    "line": line,
-                    "stream": stream_type,
-                    "timestamp": log_entry["timestamp"]
-                })
-
-                # Send to session if linked
-                agent = active_agents.get(agent_id)
-                if agent and agent.get("session_id"):
-                    try:
-                        import requests
-                        session_id = agent["session_id"]
-                        agent_name = agent.get("name", "AI Agent")
-
-                        # Post to session endpoint
-                        requests.post(
-                            f"http://localhost:6767/api/sessions/{session_id}/agent-message",
-                            json={
-                                "agent_id": agent_id,
-                                "agent_name": agent_name,
-                                "content": line,
-                                "type": "error" if stream_type == "stderr" else "output"
-                            },
-                            timeout=2
-                        )
-                    except Exception as e:
-                        logger.debug(f"Failed to post agent output to session: {e}")
-
-        except Exception as e:
-            logger.error(f"Error reading {stream_type} for agent {agent_id}: {e}")
-
-    # Start threads for stdout and stderr
-    stdout_thread = threading.Thread(target=read_stream, args=(stdout, "stdout"), daemon=True)
-    stderr_thread = threading.Thread(target=read_stream, args=(stderr, "stderr"), daemon=True)
-
-    stdout_thread.start()
-    stderr_thread.start()
-
-    # Wait for both threads
-    stdout_thread.join()
-    stderr_thread.join()
-
-    # If the subprocess exited without TASK_DONE, mark task failed and capture tail logs.
-    agent = active_agents.get(agent_id)
-    process = agent.get("process") if agent else None
-    exit_code = process.poll() if process else None
-    state = agent_task_states.get(agent_id, {})
-    if exit_code is not None and not state.get("done_at") and (state or (agent and agent.get("current_task"))):
-        if not state and agent and agent.get("current_task"):
-            agent_task_states[agent_id] = {
-                "task": agent.get("current_task"),
-                "task_id": agent.get("current_task_id"),
-                "thread_id": agent.get("current_thread_id"),
-                "status": "running",
-                "started_at": datetime.utcnow().isoformat()
+            # Create log entry
+            log_entry = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "stream": stream_type,
+                "line": line
             }
-        tail_logs = [entry["line"] for entry in agent_logs.get(agent_id, [])[-TASK_LOG_TAIL_LINES:]]
-        _finalize_task(
-            agent_id,
-            "fail",
-            reason="process_exited_without_task_done",
-            exit_code=exit_code,
-            tail_logs=tail_logs
-        )
 
-    logger.info(f"Output monitoring stopped for agent {agent_id}")
+            # Add to logs
+            agent_logs[agent_id].append(log_entry)
+
+            # Trim logs (amortized: only trim when 50% over limit)
+            log_list = agent_logs[agent_id]
+            if len(log_list) > MAX_LOG_LINES_PER_AGENT * 1.5:
+                agent_logs[agent_id] = log_list[-MAX_LOG_LINES_PER_AGENT:]
+
+            # Parse task markers
+            parsed_marker = parse_task_marker(line)
+            if parsed_marker:
+                update_task_status(agent_id, parsed_marker)
+
+            # Parse subagent loop markers
+            try:
+                loop_controller = get_subagent_loop_controller()
+                loop_event = loop_controller.detect_loop_trigger(line)
+                if loop_event:
+                    task_id = active_agents.get(agent_id, {}).get("current_task_id")
+                    loop_controller.handle_loop_event(agent_id, loop_event, task_id=task_id)
+            except Exception as e:
+                logger.debug(f"Error handling loop marker: {e}")
+
+            # Broadcast output line
+            broadcast_agent_event("agent_output_line", {
+                "agent_id": agent_id,
+                "line": line,
+                "stream": stream_type,
+                "timestamp": log_entry["timestamp"]
+            })
+
+            # Send to session if linked
+            agent = active_agents.get(agent_id)
+            if agent and agent.get("session_id"):
+                try:
+                    import requests
+                    session_id = agent["session_id"]
+                    agent_name = agent.get("name", "AI Agent")
+                    requests.post(
+                        f"http://localhost:6767/api/sessions/{session_id}/agent-message",
+                        json={
+                            "agent_id": agent_id,
+                            "agent_name": agent_name,
+                            "content": line,
+                            "type": "error" if stream_type == "stderr" else "output"
+                        },
+                        timeout=2
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to post agent output to session: {e}")
+
+    except Exception as e:
+        logger.error(f"Error reading {stream_type} for agent {agent_id}: {e}")
+
+    # On stream EOF: if this is stdout, check for unfinished tasks (process exited)
+    # Only stdout does this to avoid double-finalization from both threads
+    if stream_type == "stdout" and process:
+        exit_code = process.poll()
+        agent = active_agents.get(agent_id)
+        state = agent_task_states.get(agent_id, {})
+        if exit_code is not None and not state.get("done_at"):
+            has_active_task = state or (agent and agent.get("current_task"))
+            if has_active_task:
+                if not state and agent and agent.get("current_task"):
+                    agent_task_states[agent_id] = {
+                        "task": agent.get("current_task"),
+                        "task_id": agent.get("current_task_id"),
+                        "thread_id": agent.get("current_thread_id"),
+                        "status": "running",
+                        "started_at": datetime.utcnow().isoformat()
+                    }
+                tail_logs = [entry["line"] for entry in agent_logs.get(agent_id, [])[-TASK_LOG_TAIL_LINES:]]
+                _finalize_task(
+                    agent_id,
+                    "fail",
+                    reason="process_exited_without_task_done",
+                    exit_code=exit_code,
+                    tail_logs=tail_logs
+                )
+
+    logger.info(f"Stream {stream_type} monitoring stopped for agent {agent_id}")
 
 
 def process_agent_tasks(agent_id: str):

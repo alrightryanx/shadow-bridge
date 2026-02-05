@@ -35,6 +35,7 @@ from web.services.agent_orchestrator import (
     agent_task_events,
     agent_task_states,
     broadcast_agent_event,
+    check_system_resources,
 )
 from web.services.subagent_loop import get_subagent_loop_controller, SubagentLoopController
 from web.services.routine_scheduler import get_routine_scheduler
@@ -107,6 +108,10 @@ COST_PER_TASK_ESTIMATE = {
     "claude": 0.025,       # Claude Sonnet ~$3/MTok input, $15/MTok output
     "codex": 0.015,        # o4-mini moderate pricing
 }
+
+# Staggered spawning config (for scaling to 100+ agents)
+SPAWN_BATCH_SIZE = int(get_config_value("SPAWN_BATCH_SIZE", "10") or 10)
+SPAWN_BATCH_DELAY = float(get_config_value("SPAWN_BATCH_DELAY", "5.0") or 5.0)
 
 PULSE_POLICY_FILE = get_config_value("PULSE_POLICY_FILE", "C:/shadow/.aidev/pulse_policy.json")
 PULSE_POLICY_START = "[PULSE_POLICY]"
@@ -1271,12 +1276,50 @@ After the protocol markers, respond with a JSON list of tasks:
     # ---- Agent Management ----
 
     def _spawn_team(self):
-        """Spawn the agent team based on configs."""
+        """Spawn the agent team based on configs, with staggered batching for scale.
+
+        Spawns agents in batches of SPAWN_BATCH_SIZE with SPAWN_BATCH_DELAY seconds
+        between batches. Checks system resources before each batch to prevent
+        overloading the machine.
+        """
         google_api_key = get_config_value("GOOGLE_API_KEY")
         anthropic_api_key = get_config_value("ANTHROPIC_API_KEY")
         openai_api_key = get_config_value("OPENAI_API_KEY")
 
-        for config in self.agent_configs:
+        total = len(self.agent_configs)
+        spawned = 0
+        failed = 0
+
+        for i, config in enumerate(self.agent_configs):
+            # Staggered batch delay: pause between batches
+            if i > 0 and i % SPAWN_BATCH_SIZE == 0:
+                logger.info(
+                    f"Spawned batch {i // SPAWN_BATCH_SIZE} "
+                    f"({spawned}/{total} agents up, {failed} failed). "
+                    f"Waiting {SPAWN_BATCH_DELAY}s before next batch..."
+                )
+                self._broadcast_event("spawn_batch_complete", {
+                    "batch": i // SPAWN_BATCH_SIZE,
+                    "spawned": spawned,
+                    "failed": failed,
+                    "total": total,
+                })
+                time.sleep(SPAWN_BATCH_DELAY)
+
+                # Resource check before next batch
+                resources = check_system_resources()
+                if not resources["can_spawn"]:
+                    logger.warning(
+                        f"Stopping team spawn at {spawned}/{total}: {resources['reason']}"
+                    )
+                    self._broadcast_event("spawn_halted", {
+                        "reason": resources["reason"],
+                        "spawned": spawned,
+                        "total": total,
+                        "metrics": resources["metrics"],
+                    })
+                    break
+
             try:
                 # Prepare environment for CLI authentication
                 env = {}
@@ -1311,10 +1354,22 @@ After the protocol markers, respond with a JSON list of tasks:
                     "status": "idle",
                 }
 
-                logger.info(f"Spawned agent: {config['name']} ({agent_info['id']}) using {config.get('model', DEFAULT_MODEL)}")
+                spawned += 1
+                logger.info(
+                    f"Spawned agent {spawned}/{total}: {config['name']} "
+                    f"({agent_info['id']}) using {config.get('model', DEFAULT_MODEL)}"
+                )
 
             except Exception as e:
+                failed += 1
                 logger.error(f"Failed to spawn agent {config['name']}: {e}")
+
+        logger.info(f"Team spawn complete: {spawned} agents up, {failed} failed out of {total}")
+        self._broadcast_event("spawn_complete", {
+            "spawned": spawned,
+            "failed": failed,
+            "total": total,
+        })
 
     def _resolve_configs(self, count: int, focus: str, provider: str,
                          model: str, overrides: Optional[List[dict]]) -> List[dict]:
