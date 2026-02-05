@@ -8,7 +8,7 @@ Provides API endpoints for the health dashboard:
 - Circuit breaker status (proxied from backend)
 """
 
-from flask import Blueprint, render_template, jsonify, request
+from flask import Blueprint, render_template, jsonify, request, redirect
 import sqlite3
 import os
 import json
@@ -35,8 +35,8 @@ def _get_db():
 
 @health_bp.route('/health')
 def health_dashboard():
-    """Render the health dashboard page."""
-    return render_template('health.html')
+    """Redirect to analytics page (health merged into analytics)."""
+    return redirect('/analytics')
 
 
 @health_bp.route('/api/health/score')
