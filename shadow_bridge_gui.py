@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.179"
+APP_VERSION = "1.184"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -8819,21 +8819,54 @@ def run_web_dashboard_server(open_browser: bool):
                 "Starting DataReceiver for key exchange in web-server mode (headless)..."
             )
 
+            # SECURITY: Load or generate headless approval PIN
+            headless_pin_path = os.path.join(HOME_DIR, ".shadowai", "headless_pin")
+            headless_pin = None
+            try:
+                if os.path.exists(headless_pin_path):
+                    with open(headless_pin_path, "r") as f:
+                        headless_pin = f.read().strip()
+                    if headless_pin:
+                        log.info(
+                            f"Headless approval PIN loaded from {headless_pin_path}"
+                        )
+                    else:
+                        headless_pin = None
+            except (IOError, OSError) as e:
+                log.error(f"Failed to read headless PIN file: {e}")
+
+            if not headless_pin:
+                log.warning(
+                    "[SECURITY] No headless approval PIN configured."
+                )
+                log.warning(
+                    f"[SECURITY] SSH key requests will be REJECTED in headless mode."
+                )
+                log.warning(
+                    f"[SECURITY] To enable headless approval, create {headless_pin_path} "
+                    f"with a PIN/token value."
+                )
+
             def headless_key_approval(device_id, device_name, ip):
-                """Auto-approve SSH keys in headless mode (web-server only)."""
+                """Approve SSH keys in headless mode only if PIN is configured."""
+                if not headless_pin:
+                    log.warning(
+                        f"HEADLESS MODE: REJECTING SSH key for {device_name} ({device_id}) from {ip} "
+                        f"- no headless_pin configured"
+                    )
+                    log.warning(
+                        f"[SECURITY] Create {headless_pin_path} with a PIN to enable headless approval"
+                    )
+                    return
+
                 log.warning(
-                    f"HEADLESS MODE: Auto-approving SSH key for {device_name} ({device_id}) from {ip}"
+                    f"HEADLESS MODE: Approving SSH key for {device_name} ({device_id}) from {ip} "
+                    f"(headless_pin configured)"
                 )
-                log.warning(
-                    "[WARN] Running in --web-server mode without GUI, auto-approving all SSH key requests"
-                )
-                log.warning(
-                    "[WARN] For manual approval, run ShadowBridge.exe without --web-server flag"
-                )
-                # Auto-approve the device
+                # Approve the device since PIN-based headless mode is opted in
                 if data_receiver_ref[0]:
                     result = data_receiver_ref[0].approve_device(device_id)
-                    log.info(f"Auto-approval result: {result}")
+                    log.info(f"Headless approval result: {result}")
 
             data_receiver = DataReceiver(
                 on_data_received=lambda device_id, projects: log.info(
