@@ -55,7 +55,6 @@ build_exe_options = {
         "web.utils",
         "shadow_bridge",
         "shadow_bridge.utils",
-        "shadow_bridge.web",
         "installer",
         "cryptography",
         "qrcode",

@@ -205,6 +205,24 @@ Dashboard URL: http://localhost:6767
 - **Safety system**: Gates voice interactions based on driving speed
 - **Android Auto**: Car App Library with voice-first screens
 
+## Database Operations
+
+When working with database operations, always verify schema compatibility before attempting inserts or updates:
+- **SQLite**: Run `PRAGMA table_info(table_name)` to check columns
+- **Room (Android)**: Verify entity classes match migration version
+- Proactive schema verification prevents debugging cycles from schema mismatch failures
+
+## Testing and Validation
+
+For swarm/agent systems: After making fixes, always run a contained test with a small subset before full deployment:
+- Capture logs from at least 2-3 agent cycles before declaring success
+- Establishing a 'wait for confirmation' pattern ensures work is truly complete
+
+When running live tests that spawn background processes or agents:
+- Use `tee` or explicit log files so results persist even if the session ends unexpectedly
+- Example: `python script.py 2>&1 | tee test_$(date +%s).log`
+- Persistent logging ensures no work is lost
+
 ## Network Architecture
 
 ```

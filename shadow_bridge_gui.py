@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.184"
+APP_VERSION = "1.186"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -488,7 +488,7 @@ try:
     HAS_TK = True
 except ImportError:
     HAS_TK = False
-    print("Error: tkinter not available")
+    log.critical("tkinter not available - cannot start GUI")
     sys.exit(1)
 
 # Try to import sv_ttk for modern Windows theming
@@ -8767,7 +8767,7 @@ def run_web_dashboard_server(open_browser: bool):
         lock_socket.listen(1)
     except OSError:
         # Another instance is running - just open browser to existing
-        print(f"{ENVIRONMENT} dashboard already running, opening browser...")
+        log.info(f"{ENVIRONMENT} dashboard already running, opening browser...")
         if open_browser:
             webbrowser.open(f"http://127.0.0.1:{WEB_PORT}")
         return
@@ -9306,7 +9306,7 @@ def main():
             sys.exit(0)
 
     if not HAS_PIL:
-        print("Missing pillow. Install with: pip install pillow")
+        log.critical("Missing pillow. Install with: pip install pillow")
         sys.exit(1)
 
     log.info(f"ShadowBridge {ENVIRONMENT} v{APP_VERSION} starting...")
