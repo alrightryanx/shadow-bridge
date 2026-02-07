@@ -379,7 +379,7 @@ class WorkerHTTPHandler(BaseHTTPRequestHandler):
     def _send_json(self, data: dict, status: int = 200):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", "http://localhost:6767")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
@@ -392,7 +392,7 @@ class WorkerHTTPHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", "http://localhost:6767")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -459,7 +459,7 @@ def main():
     parser = argparse.ArgumentParser(description="Shadow Agent Worker")
     parser.add_argument("--port", type=int, default=19400, help="HTTP server port (default: 19400)")
     parser.add_argument("--capacity", type=int, default=100, help="Max agents (default: 100)")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--coordinator", default="", help="Coordinator host:port for auto-registration")
     args = parser.parse_args()
 

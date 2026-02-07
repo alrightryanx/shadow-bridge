@@ -2,8 +2,10 @@ import sys
 import json
 import asyncio
 import os
+import subprocess
 import base64
 from pathlib import Path
+from urllib.parse import quote as urlquote
 
 try:
     from playwright.async_api import async_playwright
@@ -21,10 +23,10 @@ class BrowserAutomation:
         """Install playwright and browsers if missing."""
         if not HAS_PLAYWRIGHT:
             print("Installing Playwright...")
-            os.system(f"{sys.executable} -m pip install playwright")
-            os.system(f"{sys.executable} -m playwright install chromium")
+            subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
             return {"success": True, "message": "Playwright installed. Please restart the command."}
-        
+
         # Try to launch to verify
         try:
             async with async_playwright() as p:
@@ -33,7 +35,7 @@ class BrowserAutomation:
             return {"success": True, "message": "Browser environment ready"}
         except Exception as e:
             print(f"Browser setup failed: {e}")
-            os.system(f"{sys.executable} -m playwright install chromium")
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
             return {"success": True, "message": "Attempted to fix browser installation."}
 
     async def search_and_summarize(self, query):
@@ -47,7 +49,7 @@ class BrowserAutomation:
             
             try:
                 # Search Google
-                await page.goto(f"https://www.google.com/search?q={query}")
+                await page.goto(f"https://www.google.com/search?q={urlquote(query)}")
                 
                 # Get the first few results (titles and snippets)
                 results = []

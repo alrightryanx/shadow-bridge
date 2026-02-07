@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.186"
+APP_VERSION = "1.187"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -3342,13 +3342,16 @@ class CompanionRelayServer(threading.Thread):
     # SECURITY: Limit concurrent connections to prevent resource exhaustion
     MAX_WORKERS = 10
 
-    def __init__(self, on_status_change=None):
+    def __init__(self, on_status_change=None, approved_devices=None):
         super().__init__(daemon=True)
         self.running = True
         self.sock = None
         self.on_status_change = on_status_change
         self.bind_failed = False  # Track if port binding failed
         self.bind_error = None  # Store error message
+
+        # SECURITY: Reference to approved device set from DataReceiver
+        self._approved_devices = approved_devices
 
         # Connected clients
         self._plugin_conn = None  # Connection from Claude Code plugin
@@ -3549,27 +3552,47 @@ class CompanionRelayServer(threading.Thread):
                         text = payload.get("text", "")
                         action = payload.get("action", "")
 
-                        if action == "clipboard_sync" and text:
+                        # SECURITY: Check device is approved before allowing sensitive actions
+                        device_is_approved = (
+                            self._approved_devices is not None
+                            and device_id
+                            and device_id in self._approved_devices
+                        )
+
+                        if action == "clipboard_sync" and text and device_is_approved:
                             # Copy to Windows clipboard
                             self._copy_to_clipboard(text)
                             log.info(f"Reply copied to clipboard: {text[:50]}...")
+                        elif action == "clipboard_sync" and not device_is_approved:
+                            log.warning(f"Blocked clipboard_sync from unapproved device: {device_id}")
 
                         elif action == "terminal_inject" and text:
-                            # Inject text into terminal (preserves clipboard)
-                            auto_submit = payload.get("autoSubmit", True)
-                            success = self._inject_terminal_input(
-                                text, auto_submit=auto_submit
-                            )
-                            # Send result back to device
-                            result_msg = {
-                                "type": "terminal_inject_result",
-                                "success": success,
-                                "text": text[:50],
-                            }
-                            self._send_to_conn(conn, result_msg)
-                            log.info(
-                                f"Terminal inject {'succeeded' if success else 'failed'}: {text[:50]}..."
-                            )
+                            # SECURITY: Only approved devices can inject terminal commands
+                            if not device_is_approved:
+                                log.warning(
+                                    f"BLOCKED terminal_inject from unapproved device: {device_id}"
+                                )
+                                result_msg = {
+                                    "type": "terminal_inject_result",
+                                    "success": False,
+                                    "error": "Device not approved for terminal injection",
+                                }
+                                self._send_to_conn(conn, result_msg)
+                            else:
+                                auto_submit = payload.get("autoSubmit", True)
+                                success = self._inject_terminal_input(
+                                    text, auto_submit=auto_submit
+                                )
+                                # Send result back to device
+                                result_msg = {
+                                    "type": "terminal_inject_result",
+                                    "success": success,
+                                    "text": text[:50],
+                                }
+                                self._send_to_conn(conn, result_msg)
+                                log.info(
+                                    f"Terminal inject {'succeeded' if success else 'failed'}: {text[:50]}..."
+                                )
 
                         # Also relay to plugin
                         self._relay_to_plugin(message)
@@ -6029,8 +6052,11 @@ class ShadowBridgeApp:
     def start_companion_relay(self):
         """Start TCP relay server for Claude Code Companion feature."""
         try:
+            # Pass approved devices from DataReceiver for security checks
+            approved = getattr(self.data_receiver, '_approved_devices', None) if self.data_receiver else None
             self.companion_relay = CompanionRelayServer(
-                on_status_change=self.on_companion_status_change
+                on_status_change=self.on_companion_status_change,
+                approved_devices=approved,
             )
             self.companion_relay.start()
             log.info(f"Companion relay started on port {COMPANION_PORT}")
@@ -6050,8 +6076,10 @@ class ShadowBridgeApp:
     def start_companion_relay_thread(self):
         """Internal method to create new CompanionRelay thread for watchdog restart."""
         try:
+            approved = getattr(self.data_receiver, '_approved_devices', None) if self.data_receiver else None
             self.companion_relay = CompanionRelayServer(
-                on_status_change=self.on_companion_status_change
+                on_status_change=self.on_companion_status_change,
+                approved_devices=approved,
             )
             self.companion_relay.start()
             log.info(f"CompanionRelay restarted by watchdog")
