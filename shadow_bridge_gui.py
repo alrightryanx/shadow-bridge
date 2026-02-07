@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.196"
+APP_VERSION = "1.201"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2529,6 +2529,35 @@ class DataReceiver(threading.Thread):
                                     f"Marked {len(synced_sessions)} sessions as synced"
                                 )
                         send_sync_response({"success": True, "message": "Sync confirmed"})
+
+                    elif action == "sync_audits":
+                        try:
+                            from web.services.audit_service import get_audit_service
+                            svc = get_audit_service()
+                            audit_entries = payload.get("audit_entries", [])
+                            audit_traces = payload.get("audit_traces", [])
+                            count = 0
+                            for entry in audit_entries:
+                                svc.log_audit(
+                                    category=entry.get("category", "SYSTEM"),
+                                    severity=entry.get("severity", "INFO"),
+                                    summary=entry.get("summary", ""),
+                                    action=entry.get("action", ""),
+                                    resource=entry.get("related_entity_id", ""),
+                                    device_id=device_id,
+                                    details=entry if entry.get("details") else None,
+                                )
+                                count += 1
+                            log.info(
+                                f"Synced {count} audit entries from {device_name} "
+                                f"({len(audit_traces)} traces)"
+                            )
+                            send_sync_response(
+                                {"success": True, "message": f"Synced {count} audit entries"}
+                            )
+                        except Exception as e:
+                            log.error(f"sync_audits failed: {e}")
+                            send_sync_response({"success": False, "error": str(e)})
 
                     # ========== Intelligence Layer: Agent Persistence ==========
                     elif action == "save_conversation":
