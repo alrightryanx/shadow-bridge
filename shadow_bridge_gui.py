@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.187"
+APP_VERSION = "1.192"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2529,6 +2529,330 @@ class DataReceiver(threading.Thread):
                                     f"Marked {len(synced_sessions)} sessions as synced"
                                 )
                         send_sync_response({"success": True, "message": "Sync confirmed"})
+
+                    # ========== Intelligence Layer: Agent Persistence ==========
+                    elif action == "save_conversation":
+                        try:
+                            from web.services.state_store import get_state_store
+                            store = get_state_store()
+                            conv = payload.get("conversation", {})
+                            messages = payload.get("messages", [])
+                            conv["device_id"] = conv.get("device_id", device_id)
+                            conv["device_name"] = conv.get("device_name", device_name)
+                            store.save_conversation(conv)
+                            if messages:
+                                store.save_messages(conv.get("id", ""), messages)
+                            # Auto-index in vector store
+                            try:
+                                from web.services.vector_store import get_vector_store_v2
+                                vs = get_vector_store_v2()
+                                if vs:
+                                    title = conv.get("title", "")
+                                    content = " ".join(m.get("content", "") for m in messages if m.get("content"))
+                                    vs.index_document("conversation", conv.get("id", ""), title, content[:2000],
+                                                      collection="conversations")
+                            except Exception:
+                                pass
+                            self._send_response(conn, {"success": True, "message": "Conversation saved"})
+                        except Exception as e:
+                            log.error(f"save_conversation failed: {e}")
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "get_conversations":
+                        try:
+                            from web.services.state_store import get_state_store
+                            store = get_state_store()
+                            result = store.get_conversations(
+                                agent_id=payload.get("agent_id"),
+                                project_id=payload.get("project_id"),
+                                limit=payload.get("limit", 50),
+                                offset=payload.get("offset", 0),
+                            )
+                            self._send_response(conn, {"success": True, "conversations": result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "get_conversation_messages":
+                        try:
+                            from web.services.state_store import get_state_store
+                            store = get_state_store()
+                            result = store.get_messages(
+                                conversation_id=payload.get("conversation_id", ""),
+                                limit=payload.get("limit", 100),
+                                before_id=payload.get("before_id"),
+                            )
+                            self._send_response(conn, {"success": True, "messages": result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "sync_agent_memory":
+                        try:
+                            from web.services.state_store import get_state_store
+                            store = get_state_store()
+                            agent_id_mem = payload.get("agent_id", "")
+                            memories = payload.get("memories", [])
+                            result = store.sync_memories(agent_id_mem, memories)
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "search_conversations":
+                        try:
+                            from web.services.state_store import get_state_store
+                            store = get_state_store()
+                            query = payload.get("query", "")
+                            result = store.search_conversations(
+                                query=query,
+                                agent_id=payload.get("agent_id"),
+                                limit=payload.get("limit", 20),
+                            )
+                            self._send_response(conn, {"success": True, "results": result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    # ========== Intelligence Layer: Storage API ==========
+                    elif action == "storage_list":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.list_directory(
+                                path=payload.get("path", ""),
+                                recursive=payload.get("recursive", False),
+                                filter_glob=payload.get("filter_glob"),
+                                include_hidden=payload.get("include_hidden", False),
+                            )
+                            self._send_response(conn, {"success": True, "files": result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_read":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.read_file(
+                                path=payload.get("path", ""),
+                                encoding=payload.get("encoding", "utf-8"),
+                                offset=payload.get("offset"),
+                                limit=payload.get("limit"),
+                            )
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_write":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.write_file(
+                                path=payload.get("path", ""),
+                                content=payload.get("content", ""),
+                                encoding=payload.get("encoding", "utf-8"),
+                                create_dirs=payload.get("create_dirs", False),
+                            )
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_delete":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.delete_file(path=payload.get("path", ""))
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_search":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.search_files(
+                                query=payload.get("query", ""),
+                                root=payload.get("root"),
+                                name_pattern=payload.get("name_pattern"),
+                                content_search=payload.get("content_search", False),
+                                max_results=payload.get("max_results", 50),
+                            )
+                            self._send_response(conn, {"success": True, "results": result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_stat":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.get_file_stat(path=payload.get("path", ""))
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_roots":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.get_allowed_roots()
+                            self._send_response(conn, {"success": True, "roots": result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_stream_read":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.read_file_chunked(
+                                path=payload.get("path", ""),
+                                chunk_size=payload.get("chunk_size", 524288),
+                                chunk_index=payload.get("chunk_index", 0),
+                            )
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "storage_stream_write":
+                        try:
+                            from web.services.storage_service import get_storage_service
+                            svc = get_storage_service()
+                            result = svc.write_file_chunked(
+                                path=payload.get("path", ""),
+                                chunk_data=payload.get("chunk_data", ""),
+                                chunk_index=payload.get("chunk_index", 0),
+                                total_chunks=payload.get("total_chunks", 1),
+                                is_final=payload.get("is_final", False),
+                            )
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    # ========== Intelligence Layer: Vector Store ==========
+                    elif action == "vector_search":
+                        try:
+                            from web.services.vector_store import get_vector_store_v2
+                            vs = get_vector_store_v2()
+                            if not vs:
+                                self._send_response(conn, {"success": False, "error": "Vector store not available"})
+                            else:
+                                results = vs.hybrid_search(
+                                    query=payload.get("query", ""),
+                                    collections=payload.get("collections"),
+                                    limit=payload.get("limit", 10),
+                                    min_score=payload.get("min_score", 0.3),
+                                )
+                                self._send_response(conn, {
+                                    "success": True,
+                                    "results": [{"id": r.id, "content": r.content[:500], "score": r.score,
+                                                 "metadata": r.metadata, "source_type": r.source_type,
+                                                 "title": r.title, "collection": r.collection} for r in results],
+                                })
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "vector_index_directory":
+                        try:
+                            from web.services.vector_store import get_vector_store_v2
+                            vs = get_vector_store_v2()
+                            if not vs:
+                                self._send_response(conn, {"success": False, "error": "Vector store not available"})
+                            else:
+                                result = vs.index_directory(
+                                    path=payload.get("path", ""),
+                                    recursive=payload.get("recursive", True),
+                                )
+                                self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "vector_status":
+                        try:
+                            from web.services.vector_store import get_vector_store_v2
+                            vs = get_vector_store_v2()
+                            if not vs:
+                                self._send_response(conn, {"success": False, "error": "Vector store not available"})
+                            else:
+                                stats = vs.get_collection_stats()
+                                self._send_response(conn, {"success": True, "collections": stats})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "vector_build_context":
+                        try:
+                            from web.services.vector_store import get_vector_store_v2
+                            vs = get_vector_store_v2()
+                            if not vs:
+                                self._send_response(conn, {"success": False, "error": "Vector store not available"})
+                            else:
+                                context = vs.build_agent_context(
+                                    query=payload.get("query", ""),
+                                    agent_id=payload.get("agent_id"),
+                                    project_id=payload.get("project_id"),
+                                    max_tokens=payload.get("max_tokens", 4000),
+                                )
+                                self._send_response(conn, {"success": True, "context": context})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    # ========== Intelligence Layer: Ollama / LLM ==========
+                    elif action == "ollama_status":
+                        try:
+                            from web.services.llm_gateway import get_intelligence_hub
+                            hub = get_intelligence_hub()
+                            status = hub.ollama_manager.detect()
+                            gpu = hub.ollama_manager.get_gpu_info()
+                            recommended = hub.ollama_manager.recommend_models()
+                            self._send_response(conn, {
+                                "success": True, **status,
+                                "gpu": gpu, "recommended_models": recommended,
+                            })
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "ollama_pull":
+                        try:
+                            from web.services.llm_gateway import get_intelligence_hub
+                            hub = get_intelligence_hub()
+                            model_name = payload.get("model_name", "")
+                            result = hub.ollama_manager.pull_model(model_name)
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "ollama_chat":
+                        try:
+                            from web.services.llm_gateway import get_intelligence_hub
+                            hub = get_intelligence_hub()
+                            result = hub.ollama_chat(
+                                messages=payload.get("messages", []),
+                                model=payload.get("model"),
+                                system_prompt=payload.get("system_prompt"),
+                                use_rag=payload.get("use_rag", False),
+                                rag_query=payload.get("rag_query"),
+                            )
+                            self._send_response(conn, {"success": True, **result})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "llm_route":
+                        try:
+                            from web.services.llm_gateway import get_intelligence_hub
+                            hub = get_intelligence_hub()
+                            decision = hub.router.route(
+                                prompt=payload.get("prompt", ""),
+                                task_type=payload.get("task_type"),
+                                privacy_level=payload.get("privacy_level"),
+                                latency_requirement=payload.get("latency_requirement"),
+                            )
+                            self._send_response(conn, {"success": True, **decision})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
+                    elif action == "llm_stats":
+                        try:
+                            from web.services.llm_gateway import get_intelligence_hub
+                            hub = get_intelligence_hub()
+                            stats = hub.cost_tracker.get_stats()
+                            self._send_response(conn, {"success": True, **stats})
+                        except Exception as e:
+                            self._send_response(conn, {"success": False, "error": str(e)})
+
                     else:
                         self._send_response(conn, {"success": True, "message": "OK"})
 
