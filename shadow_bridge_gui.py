@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.201"
+APP_VERSION = "1.203"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2386,6 +2386,13 @@ class DataReceiver(threading.Thread):
                     elif "agents" in payload:
                         # Handle agents data from Android device
                         self._save_agents(device_id, device_name, ip, payload["agents"])
+
+                        # Sync to agent orchestrator for web API access
+                        try:
+                            from web.services.agent_orchestrator import get_orchestrator
+                            get_orchestrator().sync_agents(device_id, payload["agents"])
+                        except Exception:
+                            pass
 
                         # Broadcast to WebSocket clients for real-time web dashboard updates
                         try:
@@ -6413,6 +6420,13 @@ class ShadowBridgeApp:
             )
             self.companion_relay.start()
             log.info(f"Companion relay started on port {COMPANION_PORT}")
+
+            # Wire agent orchestrator to relay for command forwarding
+            try:
+                from web.services.agent_orchestrator import get_orchestrator
+                get_orchestrator().set_relay(self.companion_relay)
+            except Exception:
+                pass
 
             # Register with watchdog for auto-restart
             if self.watchdog:
