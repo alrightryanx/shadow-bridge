@@ -17,7 +17,14 @@ import os
 import base64
 
 # Add shadow-bridge to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _this_dir)
+
+# Also add shadow-android (sibling directory) for web.services.image_service imports
+_shadow_root = os.path.dirname(_this_dir)
+_shadow_android = os.path.join(_shadow_root, "shadow-android")
+if os.path.isdir(_shadow_android):
+    sys.path.insert(0, _shadow_android)
 
 
 def main():
