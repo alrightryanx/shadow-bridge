@@ -37,7 +37,23 @@ try {
 Stop-ShadowBridge
 
 Write-Host "Cleaning up previous builds and logs..."
-if (Test-Path "build") { Remove-Item -Path "build" -Recurse -Force }
+if (Test-Path "build") {
+    try {
+        Remove-Item -Path "build" -Recurse -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not remove build dir (file lock). Trying robocopy wipe..."
+        $emptyDir = "$env:TEMP\shadow_empty_$$"
+        New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+        robocopy $emptyDir "build\exe.win-amd64-3.13" /MIR /NFL /NDL /NJH /NJS 2>$null
+        Remove-Item $emptyDir -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path "build\exe.win-amd64-3.13") {
+            Write-Warning "Build dir still locked. Renaming and continuing..."
+            $ts = Get-Date -Format "yyyyMMddHHmmss"
+            Rename-Item "build" "build_old_$ts" -ErrorAction SilentlyContinue
+        }
+    }
+}
 # NOTE: dist directory is NOT cleared to preserve previous MSI builds
 $logFile = "$env:USERPROFILE\.shadowai\shadowbridge.log"
 try {
