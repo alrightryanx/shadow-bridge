@@ -2087,7 +2087,7 @@ class DataReceiver(threading.Thread):
                             removed_count += 1
                             continue
 
-                        if line.startswith("# Shadow device:"):
+                        if line.startswith(SSH_KEY_PREFIX) or line.startswith("# Shadow device:"):
                             skip_next = True
                             continue
 
@@ -7421,9 +7421,10 @@ class ShadowBridgeApp:
 
             last_error = "Unknown error"
             for command in commands:
+                # SECURITY: Use array form instead of shell=True
+                cmd_args = shlex.split(command) if isinstance(command, str) else command
                 proc = subprocess.Popen(
-                    command,
-                    shell=True,
+                    cmd_args,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
