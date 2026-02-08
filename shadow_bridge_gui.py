@@ -334,7 +334,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.211"
+APP_VERSION = "1.212"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -1863,6 +1863,19 @@ class DataReceiver(threading.Thread):
                     time.sleep(1)
                     continue
 
+                # Validate transcript path is under allowed directories
+                allowed_dirs = [
+                    os.path.expanduser("~"),
+                    os.environ.get("APPDATA", ""),
+                    os.environ.get("LOCALAPPDATA", ""),
+                    os.environ.get("TEMP", ""),
+                ]
+                real_path = os.path.realpath(self._transcript_path)
+                if not any(real_path.startswith(os.path.realpath(d)) for d in allowed_dirs if d):
+                    log.warning(f"Transcript path outside allowed directories: {real_path}")
+                    time.sleep(5)
+                    continue
+
                 current_size = os.path.getsize(self._transcript_path)
                 if current_size > self._transcript_last_pos:
                     # New content available
@@ -2033,8 +2046,9 @@ class DataReceiver(threading.Thread):
 
     def approve_device(self, device_id):
         """Approve a device for SSH key installation."""
-        self._approved_devices.add(device_id)
-        self._save_approved_devices()
+        with self._devices_lock:
+            self._approved_devices.add(device_id)
+            self._save_approved_devices()
         log.info(f"Device approved: {device_id}")
 
         # If there's a pending key for this device, install it now
@@ -3795,7 +3809,7 @@ class CompanionRelayServer(threading.Thread):
     # SECURITY: Limit concurrent connections to prevent resource exhaustion
     MAX_WORKERS = 10
 
-    def __init__(self, on_status_change=None, approved_devices=None):
+    def __init__(self, on_status_change=None, approved_devices=None, devices_lock=None):
         super().__init__(daemon=True)
         self.running = True
         self.sock = None
@@ -3803,8 +3817,9 @@ class CompanionRelayServer(threading.Thread):
         self.bind_failed = False  # Track if port binding failed
         self.bind_error = None  # Store error message
 
-        # SECURITY: Reference to approved device set from DataReceiver
+        # SECURITY: Reference to approved device set and lock from DataReceiver
         self._approved_devices = approved_devices
+        self._devices_lock = devices_lock
 
         # Connected clients
         self._plugin_conn = None  # Connection from Claude Code plugin
@@ -4006,11 +4021,19 @@ class CompanionRelayServer(threading.Thread):
                         action = payload.get("action", "")
 
                         # SECURITY: Check device is approved before allowing sensitive actions
-                        device_is_approved = (
-                            self._approved_devices is not None
-                            and device_id
-                            and device_id in self._approved_devices
-                        )
+                        if self._devices_lock:
+                            with self._devices_lock:
+                                device_is_approved = (
+                                    self._approved_devices is not None
+                                    and device_id
+                                    and device_id in self._approved_devices
+                                )
+                        else:
+                            device_is_approved = (
+                                self._approved_devices is not None
+                                and device_id
+                                and device_id in self._approved_devices
+                            )
 
                         if action == "clipboard_sync" and text and device_is_approved:
                             # Copy to Windows clipboard
@@ -4358,6 +4381,19 @@ class CompanionRelayServer(threading.Thread):
                     self._transcript_path
                 ):
                     time.sleep(1)
+                    continue
+
+                # Validate transcript path is under allowed directories
+                allowed_dirs = [
+                    os.path.expanduser("~"),
+                    os.environ.get("APPDATA", ""),
+                    os.environ.get("LOCALAPPDATA", ""),
+                    os.environ.get("TEMP", ""),
+                ]
+                real_path = os.path.realpath(self._transcript_path)
+                if not any(real_path.startswith(os.path.realpath(d)) for d in allowed_dirs if d):
+                    log.warning(f"Transcript path outside allowed directories: {real_path}")
+                    time.sleep(5)
                     continue
 
                 current_size = os.path.getsize(self._transcript_path)
@@ -6505,11 +6541,13 @@ class ShadowBridgeApp:
     def start_companion_relay(self):
         """Start TCP relay server for Claude Code Companion feature."""
         try:
-            # Pass approved devices from DataReceiver for security checks
+            # Pass approved devices and lock from DataReceiver for security checks
             approved = getattr(self.data_receiver, '_approved_devices', None) if self.data_receiver else None
+            devices_lock = getattr(self.data_receiver, '_devices_lock', None) if self.data_receiver else None
             self.companion_relay = CompanionRelayServer(
                 on_status_change=self.on_companion_status_change,
                 approved_devices=approved,
+                devices_lock=devices_lock,
             )
             self.companion_relay.start()
             log.info(f"Companion relay started on port {COMPANION_PORT}")
@@ -6537,9 +6575,11 @@ class ShadowBridgeApp:
         """Internal method to create new CompanionRelay thread for watchdog restart."""
         try:
             approved = getattr(self.data_receiver, '_approved_devices', None) if self.data_receiver else None
+            devices_lock = getattr(self.data_receiver, '_devices_lock', None) if self.data_receiver else None
             self.companion_relay = CompanionRelayServer(
                 on_status_change=self.on_companion_status_change,
                 approved_devices=approved,
+                devices_lock=devices_lock,
             )
             self.companion_relay.start()
             log.info(f"CompanionRelay restarted by watchdog")
