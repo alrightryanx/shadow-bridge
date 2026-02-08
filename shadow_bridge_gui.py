@@ -145,7 +145,11 @@ AGENT_MODE = "--mode" in sys.argv and "agent" in sys.argv
 PING_MODE = "--ping" in sys.argv
 AUTO_INSTALL = "--auto-install" in sys.argv
 HEADLESS_MODE = "--headless" in sys.argv
-TRUST_ALL = "--trust-all" in sys.argv
+# SECURITY: --trust-all only allowed in non-RELEASE builds to prevent accidental SSH key auto-approval
+_trust_all_requested = "--trust-all" in sys.argv
+TRUST_ALL = _trust_all_requested and ("--aidev" in sys.argv or "--debug" in sys.argv or os.environ.get("SHADOWAI_TESTING") == "1")
+if _trust_all_requested and not TRUST_ALL:
+    print("WARNING: --trust-all ignored in RELEASE mode (security risk). Use --aidev or --debug to enable.")
 TEST_MODE = os.environ.get("SHADOWAI_TESTING") == "1" or "PYTEST_CURRENT_TEST" in os.environ
 if AGENT_MODE:
     AIDEV_MODE = True
@@ -1388,8 +1392,14 @@ def check_for_updates():
                 download_url = asset.get("browser_download_url")
                 break
 
-        # Compare versions (simple string comparison works for X.XXX format)
-        if latest_tag and latest_tag > APP_VERSION:
+        # Compare versions using tuple comparison for correctness
+        def parse_version(v):
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except (ValueError, AttributeError):
+                return (0,)
+
+        if latest_tag and parse_version(latest_tag) > parse_version(APP_VERSION):
             return True, latest_tag, download_url
 
         return False, latest_tag, None
@@ -3132,6 +3142,10 @@ class DataReceiver(threading.Thread):
                             installed_count += 1
                             continue
 
+                    # Sanitize device name to prevent authorized_keys injection
+                    import re
+                    safe_device_name = re.sub(r'[^\w\s\-\.]', '', device_name)[:64]
+
                     # Append new key with comment
                     with open(auth_keys_file, "a", encoding="utf-8") as f:
                         # Add newline if file doesn't end with one
@@ -3144,7 +3158,7 @@ class DataReceiver(threading.Thread):
                                 if rf.read(1) != b"\n":
                                     f.write("\n")
                         f.write(
-                            f"{SSH_KEY_PREFIX} {device_name} - added {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"{SSH_KEY_PREFIX} {safe_device_name} - added {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                         )
                         f.write(f"{public_key}\n")
 
@@ -9246,7 +9260,9 @@ def run_web_dashboard_server(open_browser: bool):
     try:
         from web.app import create_app, socketio
 
-        host = "0.0.0.0"  # Allow external access
+        # SECURITY: Bind to localhost by default. Phone accesses web API via data port relay, not directly.
+        # Use --external-web flag to bind to 0.0.0.0 if LAN dashboard access is needed.
+        host = "0.0.0.0" if "--external-web" in sys.argv else "127.0.0.1"
         port = WEB_PORT
 
         # Check if port is already in use (main GUI may already be running DataReceiver)
@@ -9508,10 +9524,11 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     log.critical(f"Unhandled exception:\n{error_msg}")
 
-    # Save to desktop for easy retrieval
+    # Save to ~/.shadowai/ (not Desktop, which may sync to cloud storage)
     try:
-        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-        with open(os.path.join(desktop, "shadow_error.log"), "a") as f:
+        log_dir = os.path.join(os.path.expanduser("~"), ".shadowai")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "shadow_error.log"), "a") as f:
             f.write(f"\n--- {datetime.now()} ---\n{error_msg}\n")
     except Exception:
         pass
