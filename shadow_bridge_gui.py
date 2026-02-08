@@ -9720,6 +9720,18 @@ def _launch_ouroboros_verifier():
         return None
 
 
+def _launch_agent_daemon():
+    """Launch the agent daemon for autonomous task execution."""
+    try:
+        from agent_daemon import start_daemon, get_daemon
+        daemon = start_daemon(f"http://127.0.0.1:{WEB_PORT}")
+        log.info(f"Agent daemon started (polling http://127.0.0.1:{WEB_PORT})")
+        return daemon
+    except Exception as e:
+        log.error(f"Failed to start agent daemon: {e}")
+        return None
+
+
 def main():
     """Main entry point."""
     global DEBUG_BUILD, AIDEV_MODE, AGENT_MODE, _single_instance
@@ -9893,6 +9905,11 @@ def main():
         refiner_proc = _launch_ouroboros_refiner()
         verifier_proc = _launch_ouroboros_verifier()
 
+    # Start agent daemon for autonomous task execution
+    daemon_proc = None
+    if AIDEV_MODE:
+        daemon_proc = _launch_agent_daemon()
+
     try:
         app.run()
     finally:
@@ -9902,6 +9919,15 @@ def main():
         if verifier_proc and verifier_proc.poll() is None:
             log.info("Stopping Ouroboros Verifier...")
             verifier_proc.terminate()
+        if daemon_proc:
+            try:
+                from agent_daemon import get_daemon
+                daemon = get_daemon()
+                if daemon:
+                    daemon.stop()
+                    log.info("Agent daemon stopped.")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
