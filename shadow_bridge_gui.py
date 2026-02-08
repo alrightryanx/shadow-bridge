@@ -330,7 +330,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.208"
+APP_VERSION = "1.209"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2612,6 +2612,34 @@ class DataReceiver(threading.Thread):
                             log.error(f"sync_audits failed: {e}")
                             send_sync_response({"success": False, "error": str(e)})
 
+                    elif action == "sync_settings":
+                        try:
+                            from web.services.data_service import save_device_settings
+                            settings_payload = payload.get("settings", {})
+                            save_device_settings(device_id, device_name, settings_payload)
+                            log.info(
+                                f"Synced settings from {device_name}: "
+                                f"backend={settings_payload.get('active_backend')}, "
+                                f"model={settings_payload.get('model')}"
+                            )
+                            send_sync_response({"success": True, "message": "Settings synced"})
+                        except Exception as e:
+                            log.error(f"sync_settings failed: {e}")
+                            send_sync_response({"success": False, "error": str(e)})
+
+                    elif action == "sync_pull":
+                        # Phone requesting full data bundle (all pending items at once)
+                        try:
+                            from web.services.data_service import get_full_sync_bundle
+                            bundle = get_full_sync_bundle(device_id)
+                            log.info(
+                                f"Serving full sync bundle to {device_name}"
+                            )
+                            send_sync_response({"success": True, "bundle": bundle})
+                        except Exception as e:
+                            log.error(f"sync_pull failed: {e}")
+                            send_sync_response({"success": False, "error": str(e)})
+
                     # ========== Intelligence Layer: Agent Persistence ==========
                     elif action == "save_conversation":
                         try:
@@ -3186,6 +3214,8 @@ class DataReceiver(threading.Thread):
                         or project.get("project_id"),
                         "name": str(name),
                         "path": str(path) if path is not None else "",
+                        "description": project.get("description", ""),
+                        "updated_at": project.get("updated_at", 0),
                     }
                 )
 
