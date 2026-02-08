@@ -26,8 +26,12 @@ def create_app():
     # Register blueprints
     from web.routes.api import api_bp
     from web.routes.websocket import ws_bp
+    from web.routes.predictive import predictive_bp
+    from web.routes.ouroboros_api import ouroboros_bp
     app.register_blueprint(api_bp)
     app.register_blueprint(ws_bp)
+    app.register_blueprint(predictive_bp)
+    app.register_blueprint(ouroboros_bp)
 
     # Register auth middleware
     from web.middleware.auth import require_auth

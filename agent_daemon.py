@@ -111,6 +111,7 @@ class AgentDaemon:
         self._tasks_failed = 0
         self._started_at: Optional[float] = None
         self._lock = threading.Lock()
+        self._poll_count = 0
 
     # ---- Properties ----
 
@@ -177,6 +178,11 @@ class AgentDaemon:
                 if tasks:
                     # Process one task at a time
                     self._execute_task(tasks[0])
+
+                # Every 10th poll cycle, run routine detection
+                self._poll_count += 1
+                if self._poll_count % 10 == 0:
+                    self._run_routine_check()
             except Exception as e:
                 log.error(f"Daemon poll loop error: {e}")
 
@@ -373,6 +379,17 @@ class AgentDaemon:
             with self._lock:
                 self._current_task = None
                 self._current_process = None
+
+    def _run_routine_check(self):
+        """Execute active routines via the RoutineDetector. Non-blocking."""
+        try:
+            from web.services.routine_detector import get_routine_detector
+            detector = get_routine_detector()
+            triggered = detector.execute_active_routines()
+            if triggered:
+                log.info(f"Routine check triggered {len(triggered)} routines")
+        except Exception as e:
+            log.debug(f"Routine check failed: {e}")
 
     def _resolve_work_dir(self, project_dir: str) -> str:
         """Validate project directory against allowed roots. Falls back to home."""
