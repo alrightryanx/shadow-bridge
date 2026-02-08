@@ -112,8 +112,8 @@ class AgentProcess:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.process.kill()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Agent {self.agent_id} stop error: {e}")
         self.status = "stopped"
         logger.info(f"Agent {self.agent_id} stopped")
 
@@ -175,8 +175,8 @@ class AgentProcess:
                 # Detect task protocol markers
                 if "<<<TASK_DONE>>" in line or "<<<TASK_RESULT>>" in line:
                     self.current_task = ""
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Agent {self.agent_id} output read error: {e}")
 
         if self.status == "running":
             self.status = "crashed"
@@ -244,8 +244,8 @@ class WorkerManager:
             for agent in self._agents.values():
                 try:
                     agent.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Error stopping agent {agent.agent_id}: {e}")
             self._agents.clear()
 
     def spawn_agent(self, config: dict) -> dict:

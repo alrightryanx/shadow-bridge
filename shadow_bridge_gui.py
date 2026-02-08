@@ -334,7 +334,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.209"
+APP_VERSION = "1.210"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -4219,7 +4219,7 @@ class CompanionRelayServer(threading.Thread):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/sessions/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/sessions/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -4240,7 +4240,7 @@ class CompanionRelayServer(threading.Thread):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/cards/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/cards/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -4261,7 +4261,7 @@ class CompanionRelayServer(threading.Thread):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/collections/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/collections/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -4292,7 +4292,7 @@ class CompanionRelayServer(threading.Thread):
                     ).encode("utf-8")
 
                     req = urllib.request.Request(
-                        "http://127.0.0.1:6767/api/sessions/message",
+                        f"http://127.0.0.1:{WEB_PORT}/api/sessions/message",
                         data=payload,
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -6860,7 +6860,7 @@ class ShadowBridgeApp:
 
             # Open browser in separate thread if requested
             if open_browser:
-                url = "http://127.0.0.1:6767"
+                url = f"http://127.0.0.1:{WEB_PORT}"
                 monitor_thread = threading.Thread(
                     target=lambda: self._monitor_web_server_and_open(url, show_errors),
                     daemon=True,
@@ -6904,7 +6904,7 @@ class ShadowBridgeApp:
                     0,
                     lambda: messagebox.showerror(
                         "Web Dashboard Error",
-                        "Web server failed to start. Check if port 6767 is available.",
+                        f"Web server failed to start. Check if port {WEB_PORT} is available.",
                     ),
                 )
 
@@ -6914,7 +6914,7 @@ class ShadowBridgeApp:
         self, open_browser: bool, show_errors: bool
     ) -> bool:
         """Ensure the web dashboard server is running; optionally open browser."""
-        web_port = 6767
+        web_port = WEB_PORT
         web_url = f"http://127.0.0.1:{web_port}"
 
         try:
@@ -7064,7 +7064,7 @@ class ShadowBridgeApp:
                 import urllib.request
 
                 # Create a request to check local server
-                req = urllib.request.Request("http://127.0.0.1:6767")
+                req = urllib.request.Request(f"http://127.0.0.1:{WEB_PORT}")
                 with urllib.request.urlopen(req, timeout=1) as response:
                     pass
                 status = True
@@ -8046,7 +8046,7 @@ Or run in PowerShell (Admin):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/projects/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/projects/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -8407,7 +8407,7 @@ Or run in PowerShell (Admin):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/notes/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/notes/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -8490,7 +8490,7 @@ Or run in PowerShell (Admin):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/sessions/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/sessions/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -8512,7 +8512,7 @@ Or run in PowerShell (Admin):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/cards/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/cards/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -8534,7 +8534,7 @@ Or run in PowerShell (Admin):
 
                 data = json_module.dumps({"device_id": device_id}).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/collections/sync",
+                    f"http://127.0.0.1:{WEB_PORT}/api/collections/sync",
                     data=data,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -8566,7 +8566,7 @@ Or run in PowerShell (Admin):
                     }
                 ).encode("utf-8")
                 req = urllib.request.Request(
-                    "http://127.0.0.1:6767/api/sessions/message",
+                    f"http://127.0.0.1:{WEB_PORT}/api/sessions/message",
                     data=payload,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -9254,7 +9254,7 @@ def run_web_dashboard_server(open_browser: bool):
         # Another instance is running - just open browser to existing
         log.info(f"{ENVIRONMENT} dashboard already running, opening browser...")
         if open_browser:
-            webbrowser.open(f"http://127.0.0.1:{WEB_PORT}")
+            webbrowser.open(ff"http://127.0.0.1:{WEB_PORT}")
         return
 
     try:
@@ -9567,7 +9567,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         # Include fix suggestion info if available
         extra_msg = ""
         if suggestion_id:
-            extra_msg = "\n\n[*] Sentinel has a fix suggestion.\nView in dashboard: http://localhost:6767/ouroboros"
+            extra_msg = f"\n\n[*] Sentinel has a fix suggestion.\nView in dashboard: http://localhost:{WEB_PORT}/ouroboros"
 
         messagebox.showerror(
             "ShadowBridge Error",
