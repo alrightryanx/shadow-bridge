@@ -228,6 +228,18 @@ def daemon_status():
 
 # ---- Status Endpoint ----
 
+@api_bp.route('/websocket/clients', methods=['GET'])
+def websocket_clients():
+    """Get connected WebSocket clients and stale detection info."""
+    from web.routes.websocket import get_connected_clients_summary, get_stale_clients, get_connected_client_count
+    return jsonify({
+        'clients': get_connected_clients_summary(),
+        'stale_clients': get_stale_clients(),
+        'total_connected': get_connected_client_count(),
+        'timestamp': time.time(),
+    })
+
+
 @api_bp.route('/status', methods=['GET'])
 def get_status():
     """System status: version, uptime, counts."""
