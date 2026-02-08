@@ -106,6 +106,8 @@ try:
         get_pending_sync_items,
         mark_items_synced,
         save_sessions_from_device,
+        save_cards_from_device,
+        save_collections_from_device,
         append_session_message,
         upsert_session,
     )
@@ -328,7 +330,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.205"
+APP_VERSION = "1.208"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2545,6 +2547,22 @@ class DataReceiver(threading.Thread):
                                 )
                                 log.info(
                                     f"Marked {len(synced_sessions)} sessions as synced"
+                                )
+                            synced_cards = payload.get("synced_cards", [])
+                            synced_collections = payload.get("synced_collections", [])
+                            if synced_cards:
+                                mark_items_synced(
+                                    device_id, "cards", synced_cards
+                                )
+                                log.info(
+                                    f"Marked {len(synced_cards)} cards as synced"
+                                )
+                            if synced_collections:
+                                mark_items_synced(
+                                    device_id, "collections", synced_collections
+                                )
+                                log.info(
+                                    f"Marked {len(synced_collections)} collections as synced"
                                 )
                         send_sync_response({"success": True, "message": "Sync confirmed"})
 
