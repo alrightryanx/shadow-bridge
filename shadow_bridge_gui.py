@@ -334,7 +334,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.210"
+APP_VERSION = "1.211"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -446,8 +446,8 @@ if platform.system() == "Windows":
         try:
             # Fallback for older Windows
             ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"DPI awareness setup failed: {e}")
 
 
 def set_app_user_model_id(app_id):
@@ -456,8 +456,8 @@ def set_app_user_model_id(app_id):
         return
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"SetAppUserModelID failed: {e}")
 
 
 def apply_windows_11_theme(root):
@@ -639,8 +639,8 @@ def get_local_ip(wait=False):
                         and not ip.startswith("100.")
                     ):
                         candidate_ip = ip
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"IPv4 route detection failed: {e}")
 
                 # 2. Tailscale Fallback (If LAN unavailable or route points there)
                 if not candidate_ip:
@@ -659,8 +659,8 @@ def get_local_ip(wait=False):
                         # Exclude Link-Local (fe80:) as they require Scope IDs which are hard for clients
                         if not ip.startswith("fe80:") and not ip.startswith("::1"):
                             candidate_ip = ip
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(f"IPv6 route detection failed: {e}")
 
                 # 4. Fallback: Iterate all interfaces (AF_UNSPEC for v4 and v6)
                 if not candidate_ip:
@@ -725,8 +725,8 @@ def get_local_ip(wait=False):
                         elif ipv4_candidates:
                             candidate_ip = ipv4_candidates[0]
 
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(f"Interface enumeration failed: {e}")
 
                 # 5. Final Fallback
                 if not candidate_ip:
@@ -796,8 +796,8 @@ def get_tailscale_ip():
                         _cached_tailscale_ip = ip
                         log.info(f"Tailscale IP detected: {ip}")
                         return
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Tailscale detection failed: {e}")
 
             # If we get here, detection failed
             _cached_tailscale_ip = None
@@ -815,7 +815,8 @@ def get_hostname_local():
     try:
         hostname = socket.gethostname()
         return f"{hostname}.local"
-    except Exception:
+    except Exception as e:
+        log.debug(f"Hostname detection failed: {e}")
         return None
 
 
@@ -835,8 +836,8 @@ def get_zerotier_ip():
         if result.returncode == 0 and "200" in result.stdout:
             # ZeroTier is running, IPs would be in 'other' or 'local'
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"ZeroTier detection failed: {e}")
     return None
 
 
@@ -881,8 +882,8 @@ def find_ssh_port():
                             _cached_ssh_port = port
                             log.info(f"SSH port detected: {port}")
                             return
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(f"SSH port {port} check failed: {e}")
                     finally:
                         sock.close()
 
@@ -923,7 +924,8 @@ def find_ssh_port():
                                             sock.close()
                                         except ValueError:
                                             pass
-                    except Exception:
+                    except Exception as e:
+                        log.debug(f"sshd_config read failed ({config_path}): {e}")
                         continue
 
                 # Fallback: netstat (slowest)
@@ -970,8 +972,8 @@ def find_ssh_port():
                                             sock.close()
                                     except ValueError:
                                         continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"netstat SSH detection failed: {e}")
             finally:
                 if _cached_ssh_port == "Detecting...":
                     _cached_ssh_port = None
@@ -1009,7 +1011,8 @@ def check_ssh_running(port=22):
                 result = sock.connect_ex(("127.0.0.1", port))
                 _cached_ssh_status = result == 0
                 _last_ssh_check_time = time.time()
-            except Exception:
+            except Exception as e:
+                log.debug(f"SSH status check failed: {e}")
                 _cached_ssh_status = False
             finally:
                 sock.close()
@@ -2671,8 +2674,8 @@ class DataReceiver(threading.Thread):
                                     content = " ".join(m.get("content", "") for m in messages if m.get("content"))
                                     vs.index_document("conversation", conv.get("id", ""), title, content[:2000],
                                                       collection="conversations")
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                log.debug(f"Vector indexing failed for conversation: {e}")
                             self._send_response(conn, {"success": True, "message": "Conversation saved"})
                         except Exception as e:
                             log.error(f"save_conversation failed: {e}")
@@ -3035,8 +3038,8 @@ class DataReceiver(threading.Thread):
                             content = f.read()
                             if key_fingerprint in content:
                                 return True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(f"Failed to read SSH key file {fpath}: {e}")
 
             return False
         except Exception as e:
@@ -3311,8 +3314,8 @@ class DataReceiver(threading.Thread):
                     from web.routes.websocket import broadcast_projects_updated
 
                     broadcast_projects_updated(device_id)
-                except Exception:
-                    pass  # Web server may not be running
+                except Exception as e:
+                    log.debug(f"Projects broadcast skipped: {e}")
         except Exception:
             log.exception("Failed to save projects")
 
@@ -3422,8 +3425,8 @@ class DataReceiver(threading.Thread):
                     from web.routes.websocket import broadcast_notes_updated
 
                     broadcast_notes_updated(device_id)
-                except Exception:
-                    pass  # Web server may not be running
+                except Exception as e:
+                    log.debug(f"Notes broadcast skipped: {e}")
         except Exception:
             log.exception("Failed to save notes")
 
@@ -3530,8 +3533,8 @@ class DataReceiver(threading.Thread):
                     )
 
                 save_projects_state({"devices": devices})
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to migrate saved device: {e}")
 
     def stop(self):
         self.running = False
@@ -3590,8 +3593,8 @@ def load_projects_state():
                         }
                     },
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to load projects state: {e}")
 
     return {"version": 2, "updated": 0.0, "devices": {}}
 
@@ -3607,8 +3610,8 @@ def save_projects_state(state):
         }
         with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to save projects state: {e}")
 
 
 def load_notes_state():
@@ -3628,8 +3631,8 @@ def load_notes_state():
                         "updated": float(data.get("updated", 0)),
                         "devices": devices,
                     }
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to load notes state: {e}")
     return {"version": 1, "updated": 0.0, "devices": {}}
 
 
@@ -3644,8 +3647,8 @@ def save_notes_state(state):
         }
         with open(NOTES_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to save notes state: {e}")
 
 
 def load_agents_state():
@@ -3656,8 +3659,8 @@ def load_agents_state():
                 data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("devices"), dict):
                     return data
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to load agents state: {e}")
     return {"version": 1, "updated": 0.0, "devices": {}}
 
 
@@ -3672,8 +3675,8 @@ def save_agents_state(state):
         }
         with open(AGENTS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to save agents state: {e}")
 
 
 def load_tasks_state():
@@ -3684,8 +3687,8 @@ def load_tasks_state():
                 data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("devices"), dict):
                     return data
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to load tasks state: {e}")
     return {"version": 1, "updated": 0.0, "devices": {}}
 
 
@@ -3700,8 +3703,8 @@ def save_tasks_state(state):
         }
         with open(TASKS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to save tasks state: {e}")
 
 
 def load_automations_state():
@@ -3712,8 +3715,8 @@ def load_automations_state():
                 data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("devices"), dict):
                     return data
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to load automations state: {e}")
     return {"version": 1, "updated": 0.0, "devices": {}}
 
 
@@ -3728,8 +3731,8 @@ def save_automations_state(state):
         }
         with open(AUTOMATIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to save automations state: {e}")
 
 
 def get_note_content_from_cache(note_id):
@@ -3748,8 +3751,8 @@ def get_note_content_from_cache(note_id):
                             "content": content,
                             "updatedAt": note.get("updatedAt", 0),
                         }
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"Failed to get note content from cache: {e}")
     return None
 
 

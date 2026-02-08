@@ -45,11 +45,16 @@ logger = logging.getLogger("agent-worker")
 
 # ---- Agent Management ----
 
+VALID_PROVIDERS = {"claude", "anthropic", "gemini", "google", "codex", "openai", "ollama"}
+
+
 class AgentProcess:
     """Wraps a single agent subprocess."""
 
     def __init__(self, agent_id: str, name: str, specialty: str,
                  provider: str, model: str, project_path: str = ""):
+        if provider.lower() not in VALID_PROVIDERS:
+            raise ValueError(f"Invalid provider '{provider}'. Must be one of: {VALID_PROVIDERS}")
         self.agent_id = agent_id
         self.name = name
         self.specialty = specialty
