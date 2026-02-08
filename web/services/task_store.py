@@ -14,13 +14,20 @@ log = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = os.path.join(str(Path.home()), ".shadowai")
 TASK_STORE_FILE = "task_store.json"
 
+# Dead task cleanup defaults
+DEFAULT_LEASE_TIMEOUT = 900  # 15 minutes
+MAX_RETRIES = 3
+CLEANUP_INTERVAL = 60  # seconds
+
 
 class TaskStore:
     """Thread-safe in-memory task store backed by JSON file."""
 
-    def __init__(self, data_dir: Optional[str] = None):
+    def __init__(self, data_dir: Optional[str] = None,
+                 lease_timeout: int = DEFAULT_LEASE_TIMEOUT):
         self.data_dir = data_dir or DEFAULT_DATA_DIR
         self.file_path = os.path.join(self.data_dir, TASK_STORE_FILE)
+        self.lease_timeout = lease_timeout
         self._lock = threading.Lock()
         self.tasks: Dict[str, dict] = {}
         self.agents: Dict[str, dict] = {}
@@ -28,6 +35,7 @@ class TaskStore:
         self.events: Dict[str, List[dict]] = {}  # task_id -> list of events
         self._start_time = time.time()
         self._load()
+        self._start_cleanup_thread()
 
     def _load(self):
         """Load state from JSON file."""
@@ -60,6 +68,52 @@ class TaskStore:
         except Exception as e:
             log.warning(f"Failed to save task store: {e}")
 
+    # ---- Dead Task Cleanup ----
+
+    def _start_cleanup_thread(self):
+        """Start background thread that resets stale IN_PROGRESS tasks."""
+        t = threading.Thread(target=self._cleanup_loop, daemon=True,
+                             name="TaskStoreCleanup")
+        t.start()
+
+    def _cleanup_loop(self):
+        """Periodically check for stale tasks and reset them."""
+        while True:
+            time.sleep(CLEANUP_INTERVAL)
+            try:
+                self._cleanup_stale_tasks()
+            except Exception as e:
+                log.error(f"Cleanup loop error: {e}")
+
+    def _cleanup_stale_tasks(self):
+        """Find IN_PROGRESS tasks past their lease and reset or fail them."""
+        now = time.time()
+        with self._lock:
+            for task_id, task in list(self.tasks.items()):
+                if task.get("status") != "IN_PROGRESS":
+                    continue
+                claimed_at = task.get("claimed_at")
+                if not claimed_at:
+                    continue
+                lease = task.get("lease_timeout", self.lease_timeout)
+                if now - claimed_at <= lease:
+                    continue
+
+                retry_count = task.get("retry_count", 0)
+                if retry_count >= MAX_RETRIES:
+                    task["status"] = "FAILED"
+                    task["updated_at"] = now
+                    log.warning(f"Task {task_id} FAILED after {retry_count} retries")
+                else:
+                    task["status"] = "PENDING"
+                    task["executor"] = None
+                    task["claimed_at"] = None
+                    task["retry_count"] = retry_count + 1
+                    task["updated_at"] = now
+                    log.warning(f"Task {task_id} lease expired, reset to PENDING "
+                                f"(retry {task['retry_count']}/{MAX_RETRIES})")
+            self._save()
+
     # ---- Tasks ----
 
     def create_task(self, task_data: dict) -> dict:
@@ -84,6 +138,10 @@ class TaskStore:
                 "claimed_at": None,
                 "completed_at": None,
                 "tags": task_data.get("tags", []),
+                "retry_count": 0,
+                "lease_timeout": task_data.get("lease_timeout", self.lease_timeout),
+                "created_by": task_data.get("created_by"),
+                "source_ip": task_data.get("source_ip"),
             }
             self.tasks[task_id] = task
             self.events[task_id] = []
@@ -144,6 +202,17 @@ class TaskStore:
             task["status"] = "IN_PROGRESS"
             task["claimed_at"] = now
             task["updated_at"] = now
+            self._save()
+            return task
+
+    def heartbeat_task(self, task_id: str) -> Optional[dict]:
+        """Extend the lease on an active task by resetting claimed_at."""
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if not task or task.get("status") != "IN_PROGRESS":
+                return None
+            task["claimed_at"] = time.time()
+            task["updated_at"] = time.time()
             self._save()
             return task
 
@@ -246,6 +315,8 @@ class TaskStore:
                                if t.get("status") == "IN_PROGRESS"]),
             "completed": len([t for t in self.tasks.values()
                              if t.get("status") == "COMPLETED"]),
+            "failed": len([t for t in self.tasks.values()
+                          if t.get("status") == "FAILED"]),
             "total_agents": len(self.agents),
             "total_teams": len(self.teams),
             "uptime_seconds": time.time() - self._start_time,

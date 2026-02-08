@@ -7,6 +7,7 @@ Imported by shadow_bridge_gui.py via:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -15,9 +16,83 @@ import subprocess
 import logging
 import requests
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict, List, Any
 
 log = logging.getLogger("agent_daemon")
+
+# ---- Security: Environment Variable Allowlist ----
+# Only these env vars are passed to child processes.
+# Keys containing sensitive patterns are always blocked.
+ENV_ALLOWLIST = {
+    "PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "TMPDIR",
+    "SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "TERM",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "APPDATA", "LOCALAPPDATA",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+    "PYTHONPATH", "NODE_PATH", "GOPATH", "CARGO_HOME", "RUSTUP_HOME",
+}
+ENV_BLOCKED_PATTERNS = re.compile(
+    r"(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|AUTH|PRIVATE)",
+    re.IGNORECASE,
+)
+
+# ---- Security: Path Sandboxing ----
+DEFAULT_ALLOWED_ROOTS = [
+    str(Path.home()),
+    "C:\\shadow",
+    "/c/shadow",
+]
+
+# ---- Safety: Command Blocklist ----
+BLOCKED_COMMAND_PATTERNS = [
+    r"rm\s+-rf\s+/\s*$",
+    r"rm\s+-rf\s+/\w",        # rm -rf /etc, /usr, etc.
+    r"format\s+c:",
+    r"mkfs\b",
+    r"dd\s+if=",
+    r":\(\)\s*\{\s*:\|:\s*&\s*\}",  # fork bomb
+    r"chmod\s+777\s+/\s*$",
+    r"\|\s*sh\b",                     # pipe to shell
+    r"\|\s*bash\b",
+    r"curl\s+.*\|\s*(sh|bash)",       # curl | sh
+    r"wget\s+.*\|\s*(sh|bash)",
+]
+_blocked_re = [re.compile(p, re.IGNORECASE) for p in BLOCKED_COMMAND_PATTERNS]
+
+
+def _filter_env() -> Dict[str, str]:
+    """Return a filtered copy of os.environ with only allowed variables."""
+    filtered = {}
+    for key, value in os.environ.items():
+        if key.upper() in ENV_ALLOWLIST and not ENV_BLOCKED_PATTERNS.search(key):
+            filtered[key] = value
+    return filtered
+
+
+def _is_path_allowed(path: str, allowed_roots: List[str] = None) -> bool:
+    """Check if a path is within allowed roots (resolves symlinks)."""
+    if not path:
+        return False
+    roots = allowed_roots or DEFAULT_ALLOWED_ROOTS
+    try:
+        real = os.path.realpath(path)
+        for root in roots:
+            root_real = os.path.realpath(root)
+            if real.startswith(root_real):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_blocked_command(prompt: str) -> Optional[str]:
+    """Check if a prompt contains blocked command patterns. Returns match or None."""
+    for pattern in _blocked_re:
+        match = pattern.search(prompt)
+        if match:
+            return match.group(0)
+    return None
 
 
 class AgentDaemon:
@@ -155,6 +230,16 @@ class AgentDaemon:
         except Exception as e:
             log.debug(f"Failed to checkpoint task {task_id}: {e}")
 
+    def _heartbeat_task(self, task_id: str):
+        """POST /api/tasks/{id}/heartbeat — extend lease on active task."""
+        try:
+            requests.post(
+                f"{self.bridge_url}/api/tasks/{task_id}/heartbeat",
+                timeout=10,
+            )
+        except Exception as e:
+            log.debug(f"Failed to heartbeat task {task_id}: {e}")
+
     def _complete_task(self, task_id: str, result: Dict):
         """POST /api/tasks/{id}/complete — mark task finished with output."""
         try:
@@ -188,10 +273,12 @@ class AgentDaemon:
 
         Steps:
         1. Claim the task via the API
-        2. Determine which CLI tool to use (claude, codex, gemini)
-        3. Build the prompt from task title + description
-        4. Run the subprocess with timeout
-        5. Post periodic checkpoints and the final result
+        2. Check command safety blocklist
+        3. Refresh context (git pull if applicable)
+        4. Determine which CLI tool to use (claude, codex, gemini)
+        5. Build the prompt from task title + description
+        6. Run the subprocess with timeout
+        7. Post periodic checkpoints/heartbeats and the final result
         """
         task_id = task.get("id", "")
         title = task.get("title", "Untitled")
@@ -209,6 +296,19 @@ class AgentDaemon:
         timeout = int(task_input.get("timeout", task.get("timeout", 600)))
 
         log.info(f"Processing task: {title} ({task_id}) via {preferred_cli}")
+
+        # Safety: check command blocklist against prompt content
+        combined_text = f"{title} {description}"
+        blocked = _is_blocked_command(combined_text)
+        if blocked:
+            log.error(f"BLOCKED: Task {task_id} contains dangerous pattern: {blocked}")
+            self._complete_task(task_id, {
+                "output": f"Task blocked by safety filter: contains '{blocked}'",
+                "success": False,
+                "completed_at": datetime.now().isoformat(),
+            })
+            self._tasks_failed += 1
+            return
 
         # Step 1: Claim
         if not self._claim_task(task_id):
@@ -228,15 +328,21 @@ class AgentDaemon:
             # Step 3: Build prompt
             prompt = self._build_prompt(title, description)
 
+            # Step 4: Validate and prepare work directory
+            work_dir = self._resolve_work_dir(project_dir)
+
+            # Step 5: Context refresh — git pull if in a repo
+            self._refresh_context(work_dir)
+
             log.info(f"Executing via {cmd[0]} for task {task_id}")
             self._post_event(task_id, "EXECUTING",
                              f"Running {cmd[0]}...")
 
-            # Step 4: Run
-            output = self._run_subprocess(cmd, prompt, project_dir,
+            # Step 6: Run
+            output = self._run_subprocess(cmd, prompt, work_dir,
                                           task_id, timeout)
 
-            # Step 5: Complete
+            # Step 7: Complete
             self._complete_task(task_id, {
                 "output": output[:100_000],
                 "success": True,
@@ -268,11 +374,39 @@ class AgentDaemon:
                 self._current_task = None
                 self._current_process = None
 
+    def _resolve_work_dir(self, project_dir: str) -> str:
+        """Validate project directory against allowed roots. Falls back to home."""
+        if project_dir and os.path.isdir(project_dir) and _is_path_allowed(project_dir):
+            return project_dir
+        if project_dir:
+            log.warning(f"Project dir '{project_dir}' outside allowed roots, using home")
+        return os.path.expanduser("~")
+
+    def _refresh_context(self, work_dir: str):
+        """Run git pull --ff-only if work_dir is a git repo. Non-blocking."""
+        git_dir = os.path.join(work_dir, ".git")
+        if not os.path.isdir(git_dir):
+            return
+        try:
+            result = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd=work_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                log.info(f"Context refreshed: git pull in {work_dir}")
+            else:
+                log.debug(f"git pull non-zero exit in {work_dir}: {result.stderr[:200]}")
+        except Exception as e:
+            log.debug(f"Context refresh failed in {work_dir}: {e}")
+
     def _resolve_cli_command(self, preferred: str) -> List[str]:
         """Build the CLI command list for the preferred tool.
 
         Supported tools:
-          - claude  -> claude -p "<prompt>" --output-format json
+          - claude  -> claude -p "<prompt>" --output-format json --allowedTools ...
           - codex   -> codex exec "<prompt>"
           - gemini  -> gemini "<prompt>"
 
@@ -293,9 +427,12 @@ class AgentDaemon:
         for tool in order:
             cmd = tool_commands.get(tool)
             if cmd and self._command_exists(cmd[0]):
-                # Add output format flag for Claude
                 if tool == "claude":
-                    return cmd + ["--output-format", "json"]
+                    return cmd + [
+                        "--output-format", "json",
+                        "--allowedTools",
+                        "Edit,Write,Bash,Read,Glob,Grep",
+                    ]
                 return list(cmd)
 
         # Last resort: echo the prompt via Python
@@ -330,10 +467,10 @@ class AgentDaemon:
                         timeout: int = 600) -> str:
         """Run a CLI command with the given prompt, capturing output.
 
-        Posts checkpoint updates every 60 seconds while the process runs.
+        Posts checkpoint updates and heartbeats every 60 seconds.
+        Uses filtered environment variables for security.
         """
-        work_dir = cwd if cwd and os.path.isdir(cwd) else os.path.expanduser("~")
-        env = os.environ.copy()
+        env = _filter_env()
 
         # For the fallback Python echo, we pipe to stdin.
         # For real CLI tools, we append the prompt as an argument.
@@ -348,7 +485,7 @@ class AgentDaemon:
             stdin=subprocess.PIPE if is_fallback else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            cwd=work_dir,
+            cwd=cwd,
             env=env,
             text=True,
             errors="replace",
@@ -375,7 +512,7 @@ class AgentDaemon:
                 if line:
                     output_lines.append(line)
 
-                    # Periodic checkpoint
+                    # Periodic checkpoint + heartbeat
                     now = time.time()
                     if now - last_checkpoint > checkpoint_interval:
                         self._checkpoint_task(task_id, {
@@ -383,6 +520,7 @@ class AgentDaemon:
                             "partial_output": ''.join(output_lines)[:50_000],
                             "lines": len(output_lines),
                         })
+                        self._heartbeat_task(task_id)
                         last_checkpoint = now
 
             proc.wait(timeout=timeout)

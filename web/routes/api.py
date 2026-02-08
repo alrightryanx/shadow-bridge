@@ -37,6 +37,12 @@ def create_task():
     """Create a new task."""
     store = get_task_store()
     data = request.get_json(silent=True) or {}
+
+    # Track creator info
+    data["source_ip"] = request.remote_addr
+    if not data.get("created_by"):
+        data["created_by"] = request.remote_addr
+
     task = store.create_task(data)
 
     # Broadcast task created via WebSocket
@@ -94,6 +100,16 @@ def claim_task(task_id):
         pass
 
     return jsonify(task)
+
+
+@api_bp.route('/tasks/<task_id>/heartbeat', methods=['POST'])
+def heartbeat_task(task_id):
+    """Heartbeat to extend lease on an active task."""
+    store = get_task_store()
+    task = store.heartbeat_task(task_id)
+    if not task:
+        return jsonify({"error": "Task not found or not in progress"}), 404
+    return jsonify({"success": True, "task_id": task_id, "claimed_at": task.get("claimed_at")})
 
 
 @api_bp.route('/tasks/<task_id>/checkpoint', methods=['POST'])
@@ -260,6 +276,7 @@ def get_status():
             "pending": stats["pending"],
             "in_progress": stats["in_progress"],
             "completed": stats["completed"],
+            "failed": stats.get("failed", 0),
         },
         "agents": stats["total_agents"],
         "teams": stats["total_teams"],
