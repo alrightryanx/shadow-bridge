@@ -334,7 +334,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.212"
+APP_VERSION = "1.214"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9298,7 +9298,7 @@ def run_web_dashboard_server(open_browser: bool):
         # Another instance is running - just open browser to existing
         log.info(f"{ENVIRONMENT} dashboard already running, opening browser...")
         if open_browser:
-            webbrowser.open(ff"http://127.0.0.1:{WEB_PORT}")
+            webbrowser.open(f"http://127.0.0.1:{WEB_PORT}")
         return
 
     try:
