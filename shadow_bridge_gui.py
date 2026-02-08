@@ -328,7 +328,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.203"
+APP_VERSION = "1.205"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2391,15 +2391,15 @@ class DataReceiver(threading.Thread):
                         try:
                             from web.services.agent_orchestrator import get_orchestrator
                             get_orchestrator().sync_agents(device_id, payload["agents"])
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.warning(f"Agent orchestrator sync failed: {e}")
 
                         # Broadcast to WebSocket clients for real-time web dashboard updates
                         try:
                             from web.routes.websocket import broadcast_agents_updated
                             broadcast_agents_updated(device_id)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.debug(f"WebSocket broadcast skipped: {e}")
 
                         # Build response with bridge-side agents for bidirectional sync
                         response = {"success": True, "message": "Agents synced"}
@@ -2408,8 +2408,8 @@ class DataReceiver(threading.Thread):
                             bridge_agents = get_all_agents()
                             if bridge_agents:
                                 response["sync_to_device"] = {"agents": bridge_agents}
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.warning(f"Failed to include bridge agents in response: {e}")
                         send_sync_response(response)
                     elif "tasks" in payload:
                         # Handle tasks data
@@ -2420,7 +2420,18 @@ class DataReceiver(threading.Thread):
                         self._save_automations(
                             device_id, device_name, ip, payload["automations"]
                         )
-                        send_sync_response({"success": True, "message": "Automations synced"})
+                        # Bi-directional sync: Include pending automations from web
+                        response = {"success": True, "message": "Automations synced"}
+                        if SYNC_SERVICE_AVAILABLE:
+                            pending = get_pending_sync_items(device_id)
+                            if pending.get("automations"):
+                                response["sync_to_device"] = {
+                                    "automations": pending["automations"]
+                                }
+                                log.info(
+                                    f"Including {len(pending['automations'])} pending automations for sync to device"
+                                )
+                        send_sync_response(response)
                     elif "notes" in payload:
                         # Handle notes data (titles only, content fetched on-demand)
                         ip_candidates = payload.get("ip_candidates")
@@ -2543,8 +2554,25 @@ class DataReceiver(threading.Thread):
                             svc = get_audit_service()
                             audit_entries = payload.get("audit_entries", [])
                             audit_traces = payload.get("audit_traces", [])
+                            # Index traces by entry ID for lookup
+                            traces_by_entry = {}
+                            for trace in audit_traces:
+                                eid = trace.get("audit_entry_id", "")
+                                if eid:
+                                    traces_by_entry.setdefault(eid, []).append(trace)
                             count = 0
                             for entry in audit_entries:
+                                entry_id = entry.get("id", "")
+                                # Embed traces into details so get_traces() can reconstruct them
+                                details = entry.get("details") or {}
+                                if isinstance(details, str):
+                                    try:
+                                        details = json.loads(details)
+                                    except (json.JSONDecodeError, TypeError):
+                                        details = {}
+                                entry_traces = traces_by_entry.get(entry_id, [])
+                                if entry_traces:
+                                    details["traces"] = entry_traces
                                 svc.log_audit(
                                     category=entry.get("category", "SYSTEM"),
                                     severity=entry.get("severity", "INFO"),
@@ -2552,12 +2580,12 @@ class DataReceiver(threading.Thread):
                                     action=entry.get("action", ""),
                                     resource=entry.get("related_entity_id", ""),
                                     device_id=device_id,
-                                    details=entry if entry.get("details") else None,
+                                    details=details if details else None,
                                 )
                                 count += 1
                             log.info(
                                 f"Synced {count} audit entries from {device_name} "
-                                f"({len(audit_traces)} traces)"
+                                f"({len(audit_traces)} traces attached)"
                             )
                             send_sync_response(
                                 {"success": True, "message": f"Synced {count} audit entries"}
