@@ -206,6 +206,19 @@ class RoutineDetector:
             self._create_tasks_for_routine(routine, trigger_type=f"event:{event_type}")
             triggered.append(routine)
 
+            # Record trigger for ROI tracking
+            try:
+                from web.services.routine_roi import get_routine_roi
+                roi_tracker = get_routine_roi()
+                roi_tracker.record_trigger(
+                    routine_id=routine.get("id", routine.get("pattern_hash", "")),
+                    trigger_type=f"event:{event_type}",
+                    success=True,
+                    duration_ms=0,
+                )
+            except Exception as e:
+                log.debug(f"ROI tracking failed: {e}")
+
         if triggered:
             log.info(f"Event '{event_type}' triggered {len(triggered)} routines, "
                      f"created tasks for execution")
@@ -271,6 +284,19 @@ class RoutineDetector:
             # Create real tasks for the daemon to execute
             self._create_tasks_for_routine(routine, trigger_type=f"schedule:{frequency}")
             triggered.append(routine)
+
+            # Record trigger for ROI tracking
+            try:
+                from web.services.routine_roi import get_routine_roi
+                roi_tracker = get_routine_roi()
+                roi_tracker.record_trigger(
+                    routine_id=routine.get("id", routine.get("pattern_hash", "")),
+                    trigger_type="scheduled",
+                    success=True,
+                    duration_ms=0,
+                )
+            except Exception as e:
+                log.debug(f"ROI tracking failed: {e}")
 
         if triggered:
             log.info(f"Triggered {len(triggered)} active routines, "

@@ -101,6 +101,19 @@ class PredictiveEngine:
                             new_routines.append(routine)
                             existing_hashes.add(pattern_hash)
 
+        # Check auto-promotion for detected routines
+        try:
+            from web.services.routine_roi import get_routine_roi
+            roi_tracker = get_routine_roi()
+            for routine in new_routines:
+                rid = routine.get("id", routine.get("pattern_hash", ""))
+                confidence = routine.get("confidence", 0.0)
+                if roi_tracker.should_auto_promote(rid, confidence):
+                    routine["status"] = "active"
+                    log.info(f"Auto-promoting routine {rid} (ROI positive, confidence={confidence})")
+        except Exception as e:
+            log.debug(f"Auto-promotion check failed: {e}")
+
         log.info(f"Detected {len(new_routines)} new routines from {len(actions)} actions")
         return new_routines
 
