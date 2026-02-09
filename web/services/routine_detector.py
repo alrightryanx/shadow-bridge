@@ -53,6 +53,71 @@ class RoutineDetector:
             "dismissed_at": time.time(),
         })
 
+    def check_event_triggers(self, event_type: str, event_data: dict = None) -> List[dict]:
+        """Check if any routines should be triggered by an event.
+
+        Supports event-based triggers in addition to time-based frequency.
+        Event types: 'project_activated', 'build_completed', 'commit_pushed',
+                     'agent_idle', 'review_submitted', 'error_detected'
+
+        Returns list of routines that were triggered by this event.
+        """
+        if event_data is None:
+            event_data = {}
+        now = time.time()
+        active_routines = self._store.get_routines(status="active")
+        triggered = []
+
+        for routine in active_routines:
+            trigger_events = routine.get("trigger_events", [])
+            if not trigger_events or event_type not in trigger_events:
+                continue
+
+            # Cooldown: don't re-trigger within 5 minutes of last trigger
+            last_triggered = routine.get("last_triggered") or 0
+            if (now - last_triggered) < 300:
+                continue
+
+            actions = routine.get("actions", [])
+            if not actions:
+                continue
+
+            # Optional: check event filter conditions
+            conditions = routine.get("trigger_conditions", {})
+            if conditions:
+                match = all(
+                    event_data.get(k) == v
+                    for k, v in conditions.items()
+                )
+                if not match:
+                    continue
+
+            log.info(f"Event '{event_type}' triggered routine {routine['id']}: "
+                     f"{' -> '.join(a.get('type', '?') for a in actions)}")
+
+            self._store.update_routine(routine["id"], {
+                "last_triggered": now,
+                "trigger_count": routine.get("trigger_count", 0) + 1,
+            })
+
+            action_desc = " -> ".join(a.get("type", "?") for a in actions)
+            self._store.add_prediction(
+                signal_type="event_trigger",
+                predicted_action=action_desc,
+                confidence=routine.get("confidence", 0.8),
+                context={
+                    "routine_id": routine["id"],
+                    "event_type": event_type,
+                    "trigger_count": routine.get("trigger_count", 0) + 1,
+                },
+            )
+
+            triggered.append(routine)
+
+        if triggered:
+            log.info(f"Event '{event_type}' triggered {len(triggered)} routines")
+        return triggered
+
     def execute_active_routines(self) -> List[dict]:
         """Check all active routines and fire those that are due.
 
@@ -64,6 +129,10 @@ class RoutineDetector:
         triggered = []
 
         for routine in active_routines:
+            # Skip event-only routines (no time-based frequency)
+            if routine.get("trigger_events") and not routine.get("frequency"):
+                continue
+
             last_triggered = routine.get("last_triggered") or 0
             frequency = routine.get("frequency", "daily")
 

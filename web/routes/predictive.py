@@ -154,6 +154,47 @@ def resolve_prediction(prediction_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+@predictive_bp.route("/api/predictive/event", methods=["POST"])
+def report_event():
+    """POST /api/predictive/event - Report an event that may trigger routines.
+
+    Called by Android or agent_daemon when significant events occur.
+    Checks all active routines for matching event triggers.
+
+    Body:
+        event_type: One of 'project_activated', 'build_completed',
+                    'commit_pushed', 'agent_idle', 'review_submitted',
+                    'error_detected'
+        event_data: Optional dict of event context for condition matching
+    """
+    data = request.get_json(silent=True) or {}
+    event_type = data.get("event_type", "")
+    event_data = data.get("event_data", {})
+
+    if not event_type:
+        return jsonify({"error": "event_type required"}), 400
+
+    try:
+        from web.services.routine_detector import get_routine_detector
+        detector = get_routine_detector()
+        triggered = detector.check_event_triggers(event_type, event_data)
+
+        # Also record the event as a user action for pattern learning
+        from web.services.predictive_engine import get_predictive_engine
+        engine = get_predictive_engine()
+        engine.record_user_action(event_type, event_data.get("project_id", ""),
+                                  event_data)
+
+        return jsonify({
+            "event_type": event_type,
+            "routines_triggered": len(triggered),
+            "triggered_ids": [r.get("id", "") for r in triggered],
+        })
+    except Exception as e:
+        log.error(f"Failed to process event: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @predictive_bp.route("/api/predictive/analyze", methods=["POST"])
 def trigger_analysis():
     """POST /api/predictive/analyze - Trigger pattern analysis and prediction.
