@@ -143,80 +143,55 @@ def register_socketio_handlers(sio=None):
 
 # ---- Broadcast functions (imported by shadow_bridge_gui.py) ----
 
-def broadcast_agents_updated(device_id=None):
-    """Broadcast that agents have been updated."""
+def _broadcast(event_name, extra_data=None, log_message=None):
+    """Generic broadcast helper. Emits event_name with timestamp + extra_data."""
     try:
         sio = _get_socketio()
-        sio.emit('agents_updated', {
-            'device_id': device_id,
-            'timestamp': time.time(),
-        })
-        log.debug(f"Broadcast agents_updated for device {device_id}")
+        data = {'timestamp': time.time()}
+        if extra_data:
+            data.update(extra_data)
+        sio.emit(event_name, data)
+        if log_message:
+            log.debug(log_message)
     except Exception as e:
-        log.debug(f"agents_updated broadcast failed: {e}")
+        log.debug(f"{event_name} broadcast failed: {e}")
+
+
+def broadcast_agents_updated(device_id=None):
+    """Broadcast that agents have been updated."""
+    _broadcast('agents_updated',
+               extra_data={'device_id': device_id},
+               log_message=f"Broadcast agents_updated for device {device_id}")
 
 
 def broadcast_projects_updated(device_id=None):
     """Broadcast that projects have been updated."""
-    try:
-        sio = _get_socketio()
-        sio.emit('projects_updated', {
-            'device_id': device_id,
-            'timestamp': time.time(),
-        })
-        log.debug(f"Broadcast projects_updated for device {device_id}")
-    except Exception as e:
-        log.debug(f"projects_updated broadcast failed: {e}")
+    _broadcast('projects_updated',
+               extra_data={'device_id': device_id},
+               log_message=f"Broadcast projects_updated for device {device_id}")
 
 
 def broadcast_notes_updated(device_id=None):
     """Broadcast that notes have been updated."""
-    try:
-        sio = _get_socketio()
-        sio.emit('notes_updated', {
-            'device_id': device_id,
-            'timestamp': time.time(),
-        })
-        log.debug(f"Broadcast notes_updated for device {device_id}")
-    except Exception as e:
-        log.debug(f"notes_updated broadcast failed: {e}")
+    _broadcast('notes_updated',
+               extra_data={'device_id': device_id},
+               log_message=f"Broadcast notes_updated for device {device_id}")
 
 
 def broadcast_celebrate(message=""):
     """Broadcast a celebration event to web dashboard."""
-    try:
-        sio = _get_socketio()
-        sio.emit('celebrate', {
-            'message': message,
-            'timestamp': time.time(),
-        })
-        log.debug(f"Broadcast celebrate: {message}")
-    except Exception as e:
-        log.debug(f"celebrate broadcast failed: {e}")
+    _broadcast('celebrate',
+               extra_data={'message': message},
+               log_message=f"Broadcast celebrate: {message}")
 
 
 def broadcast_task_update(task_id, action, task_data):
     """Broadcast a task status change."""
-    try:
-        sio = _get_socketio()
-        sio.emit('task_update', {
-            'task_id': task_id,
-            'action': action,
-            'task': task_data,
-            'timestamp': time.time(),
-        })
-    except Exception as e:
-        log.debug(f"task_update broadcast failed: {e}")
+    _broadcast('task_update',
+               extra_data={'task_id': task_id, 'action': action, 'task': task_data})
 
 
 def broadcast_agent_event(task_id, event):
     """Broadcast a real-time agent execution event."""
-    try:
-        sio = _get_socketio()
-        sio.emit('agent_event', {
-            'task_id': task_id,
-            'event': event,
-            'timestamp': time.time(),
-        })
-    except Exception as e:
-        log.debug(f"agent_event broadcast failed: {e}")
+    _broadcast('agent_event',
+               extra_data={'task_id': task_id, 'event': event})

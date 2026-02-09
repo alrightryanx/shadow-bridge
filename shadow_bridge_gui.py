@@ -133,11 +133,12 @@ except ImportError:
 
 
 # Check for command modes
-IMAGE_MODE = len(sys.argv) > 1 and sys.argv[1] == "image"
-VIDEO_MODE = len(sys.argv) > 1 and sys.argv[1] == "video"
-AUDIO_MODE = len(sys.argv) > 1 and sys.argv[1] == "audio"
-ASSEMBLY_MODE = len(sys.argv) > 1 and sys.argv[1] == "assembly"
-BROWSER_MODE = len(sys.argv) > 1 and sys.argv[1] == "browser"
+_CLI_MODE = sys.argv[1] if len(sys.argv) > 1 else None
+IMAGE_MODE = _CLI_MODE == "image"
+VIDEO_MODE = _CLI_MODE == "video"
+AUDIO_MODE = _CLI_MODE == "audio"
+ASSEMBLY_MODE = _CLI_MODE == "assembly"
+BROWSER_MODE = _CLI_MODE == "browser"
 WEB_SERVER_MODE = "--web-server" in sys.argv
 DEBUG_BUILD = "--debug" in sys.argv
 AIDEV_MODE = "--aidev" in sys.argv
@@ -2299,6 +2300,21 @@ class DataReceiver(threading.Thread):
                                 response_payload["schema_warning"] = "Client sync schema is newer; some fields may be ignored."
                         self._send_response(conn, response_payload)
 
+                    def _build_sync_response(data_type, message=None):
+                        """Build a sync response with pending bi-directional items."""
+                        msg = message or f"{data_type.capitalize()} synced"
+                        response = {"success": True, "message": msg}
+                        if SYNC_SERVICE_AVAILABLE:
+                            pending = get_pending_sync_items(device_id)
+                            if pending.get(data_type):
+                                response["sync_to_device"] = {
+                                    data_type: pending[data_type]
+                                }
+                                log.info(
+                                    f"Including {len(pending[data_type])} pending {data_type} for sync to device"
+                                )
+                        return response
+
                     with self._devices_lock:
                         if raw_device_id:
                             self.ip_to_device_id[ip] = raw_device_id
@@ -2401,17 +2417,7 @@ class DataReceiver(threading.Thread):
                             self.on_data_received(device_id, payload["projects"])
 
                         # Bi-directional sync: Include pending items from web
-                        response = {"success": True, "message": "Projects synced"}
-                        if SYNC_SERVICE_AVAILABLE:
-                            pending = get_pending_sync_items(device_id)
-                            if pending.get("projects"):
-                                response["sync_to_device"] = {
-                                    "projects": pending["projects"]
-                                }
-                                log.info(
-                                    f"Including {len(pending['projects'])} pending projects for sync to device"
-                                )
-                        send_sync_response(response)
+                        send_sync_response(_build_sync_response("projects"))
                     elif "agents" in payload:
                         # Handle agents data from Android device
                         self._save_agents(device_id, device_name, ip, payload["agents"])
@@ -2450,17 +2456,7 @@ class DataReceiver(threading.Thread):
                             device_id, device_name, ip, payload["automations"]
                         )
                         # Bi-directional sync: Include pending automations from web
-                        response = {"success": True, "message": "Automations synced"}
-                        if SYNC_SERVICE_AVAILABLE:
-                            pending = get_pending_sync_items(device_id)
-                            if pending.get("automations"):
-                                response["sync_to_device"] = {
-                                    "automations": pending["automations"]
-                                }
-                                log.info(
-                                    f"Including {len(pending['automations'])} pending automations for sync to device"
-                                )
-                        send_sync_response(response)
+                        send_sync_response(_build_sync_response("automations"))
                     elif "notes" in payload:
                         # Handle notes data (titles only, content fetched on-demand)
                         ip_candidates = payload.get("ip_candidates")
@@ -2477,15 +2473,7 @@ class DataReceiver(threading.Thread):
                             self.on_notes_received(device_id, payload["notes"])
 
                         # Bi-directional sync: Include pending items from web
-                        response = {"success": True, "message": "Notes synced"}
-                        if SYNC_SERVICE_AVAILABLE:
-                            pending = get_pending_sync_items(device_id)
-                            if pending.get("notes"):
-                                response["sync_to_device"] = {"notes": pending["notes"]}
-                                log.info(
-                                    f"Including {len(pending['notes'])} pending notes for sync to device"
-                                )
-                        send_sync_response(response)
+                        send_sync_response(_build_sync_response("notes"))
                     elif action == "sync_sessions" or "sessions" in payload:
                         sessions_payload = payload.get("sessions", [])
                         if SYNC_SERVICE_AVAILABLE and isinstance(
@@ -2497,17 +2485,7 @@ class DataReceiver(threading.Thread):
                         if self.on_sessions_received:
                             self.on_sessions_received(device_id, sessions_payload)
 
-                        response = {"success": True, "message": "Sessions synced"}
-                        if SYNC_SERVICE_AVAILABLE:
-                            pending = get_pending_sync_items(device_id)
-                            if pending.get("sessions"):
-                                response["sync_to_device"] = {
-                                    "sessions": pending["sessions"]
-                                }
-                                log.info(
-                                    f"Including {len(pending['sessions'])} pending sessions for sync to device"
-                                )
-                        send_sync_response(response)
+                        send_sync_response(_build_sync_response("sessions"))
                     elif action == "sync_cards" or "cards" in payload:
                         cards_payload = payload.get("cards", [])
                         if SYNC_SERVICE_AVAILABLE and isinstance(cards_payload, list):
@@ -2515,15 +2493,7 @@ class DataReceiver(threading.Thread):
                         if self.on_cards_received:
                             self.on_cards_received(device_id, cards_payload)
 
-                        response = {"success": True, "message": "Cards synced"}
-                        if SYNC_SERVICE_AVAILABLE:
-                            pending = get_pending_sync_items(device_id)
-                            if pending.get("cards"):
-                                response["sync_to_device"] = {"cards": pending["cards"]}
-                                log.info(
-                                    f"Including {len(pending['cards'])} pending cards for sync to device"
-                                )
-                        send_sync_response(response)
+                        send_sync_response(_build_sync_response("cards"))
                     elif action == "sync_collections" or "collections" in payload:
                         collections_payload = payload.get("collections", [])
                         if SYNC_SERVICE_AVAILABLE and isinstance(
@@ -2533,64 +2503,16 @@ class DataReceiver(threading.Thread):
                         if self.on_collections_received:
                             self.on_collections_received(device_id, collections_payload)
 
-                        response = {"success": True, "message": "Collections synced"}
-                        if SYNC_SERVICE_AVAILABLE:
-                            pending = get_pending_sync_items(device_id)
-                            if pending.get("collections"):
-                                response["sync_to_device"] = {
-                                    "collections": pending["collections"]
-                                }
-                                log.info(
-                                    f"Including {len(pending['collections'])} pending collections for sync to device"
-                                )
-                        send_sync_response(response)
+                        send_sync_response(_build_sync_response("collections"))
                     elif action == "sync_confirm":
                         # Android confirming it received and saved web-created items
                         if SYNC_SERVICE_AVAILABLE:
-                            synced_projects = payload.get("synced_projects", [])
-                            synced_notes = payload.get("synced_notes", [])
-                            synced_automations = payload.get("synced_automations", [])
-                            synced_sessions = payload.get("synced_sessions", [])
-                            if synced_projects:
-                                mark_items_synced(
-                                    device_id, "projects", synced_projects
-                                )
-                                log.info(
-                                    f"Marked {len(synced_projects)} projects as synced"
-                                )
-                            if synced_notes:
-                                mark_items_synced(device_id, "notes", synced_notes)
-                                log.info(f"Marked {len(synced_notes)} notes as synced")
-                            if synced_automations:
-                                mark_items_synced(
-                                    device_id, "automations", synced_automations
-                                )
-                                log.info(
-                                    f"Marked {len(synced_automations)} automations as synced"
-                                )
-                            if synced_sessions:
-                                mark_items_synced(
-                                    device_id, "sessions", synced_sessions
-                                )
-                                log.info(
-                                    f"Marked {len(synced_sessions)} sessions as synced"
-                                )
-                            synced_cards = payload.get("synced_cards", [])
-                            synced_collections = payload.get("synced_collections", [])
-                            if synced_cards:
-                                mark_items_synced(
-                                    device_id, "cards", synced_cards
-                                )
-                                log.info(
-                                    f"Marked {len(synced_cards)} cards as synced"
-                                )
-                            if synced_collections:
-                                mark_items_synced(
-                                    device_id, "collections", synced_collections
-                                )
-                                log.info(
-                                    f"Marked {len(synced_collections)} collections as synced"
-                                )
+                            for _sync_type in ("projects", "notes", "automations",
+                                                "sessions", "cards", "collections"):
+                                _synced_items = payload.get(f"synced_{_sync_type}", [])
+                                if _synced_items:
+                                    mark_items_synced(device_id, _sync_type, _synced_items)
+                                    log.info(f"Marked {len(_synced_items)} {_sync_type} as synced")
                         send_sync_response({"success": True, "message": "Sync confirmed"})
 
                     elif action == "sync_audits":

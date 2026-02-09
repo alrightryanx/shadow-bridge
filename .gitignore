@@ -61,3 +61,4 @@ test_*.png
 # Relocated to private shadow-android repo
 web/
 ouroboros/
+build2/
