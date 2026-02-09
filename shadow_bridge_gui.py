@@ -110,6 +110,7 @@ try:
         save_collections_from_device,
         append_session_message,
         upsert_session,
+        save_protocol_snapshot_from_device,
     )
 
     SYNC_SERVICE_AVAILABLE = True
@@ -335,7 +336,7 @@ elif ENVIRONMENT == "AIDEV":
     NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.222"
+APP_VERSION = "1.225"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2421,6 +2422,13 @@ class DataReceiver(threading.Thread):
                     elif "agents" in payload:
                         # Handle agents data from Android device
                         self._save_agents(device_id, device_name, ip, payload["agents"])
+                        protocol_snapshot = payload.get("protocol_snapshot")
+
+                        if SYNC_SERVICE_AVAILABLE and isinstance(protocol_snapshot, dict):
+                            try:
+                                save_protocol_snapshot_from_device(device_id, protocol_snapshot)
+                            except Exception as e:
+                                log.warning(f"Protocol snapshot save failed: {e}")
 
                         # Sync to agent orchestrator for web API access
                         try:
@@ -2431,8 +2439,10 @@ class DataReceiver(threading.Thread):
 
                         # Broadcast to WebSocket clients for real-time web dashboard updates
                         try:
-                            from web.routes.websocket import broadcast_agents_updated
+                            from web.routes.websocket import broadcast_agents_updated, broadcast_protocol_updated
                             broadcast_agents_updated(device_id)
+                            if isinstance(protocol_snapshot, dict):
+                                broadcast_protocol_updated(device_id)
                         except Exception as e:
                             log.debug(f"WebSocket broadcast skipped: {e}")
 
@@ -2548,6 +2558,12 @@ class DataReceiver(threading.Thread):
                                     resource=entry.get("related_entity_id", ""),
                                     device_id=device_id,
                                     details=details if details else None,
+                                    source_entry_id=entry.get("id"),
+                                    source_timestamp=entry.get("timestamp"),
+                                    source_entry_hash=entry.get("entry_hash"),
+                                    source_previous_hash=entry.get("previous_hash"),
+                                    backend_type=entry.get("backend_type"),
+                                    success=bool(entry.get("success", True)),
                                 )
                                 count += 1
                             log.info(
@@ -4863,16 +4879,46 @@ class DiscoveryServer(threading.Thread):
         self.zeroconf = None
         self.service_infos = []  # Store multiple service infos
 
+    @staticmethod
+    def _sanitize_mdns_txt_properties(raw_properties):
+        """Sanitize TXT records to avoid invalid/empty keys crashing NSD clients."""
+        sanitized = {}
+        if not isinstance(raw_properties, dict):
+            return sanitized
+
+        for key, value in raw_properties.items():
+            if key is None:
+                continue
+            key_text = str(key).strip()
+            if not key_text:
+                continue
+
+            if isinstance(value, bytes):
+                try:
+                    value_text = value.decode("utf-8", errors="ignore")
+                except Exception:
+                    value_text = ""
+            elif value is None:
+                value_text = ""
+            else:
+                value_text = str(value)
+            sanitized[key_text] = value_text
+
+        return sanitized
+
     def run(self):
         # 1. Register mDNS services
         if HAS_ZEROCONF:
             try:
                 self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
-                desc = {
+                raw_desc = {
                     "username": self.connection_info.get("username", "root"),
                     "version": str(self.connection_info.get("version", 1)),
                     "mode": self.connection_info.get("mode", "local"),
                 }
+                desc = self._sanitize_mdns_txt_properties(raw_desc)
+                if not desc:
+                    desc = {"version": "1"}
 
                 hostname = socket.gethostname()
                 # Use non-blocking IP detection - returns cached value or starts background detection
