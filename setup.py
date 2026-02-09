@@ -51,6 +51,7 @@ build_exe_options = {
         "web",
         "web.routes",
         "web.services",
+        "web.middleware",
         "web.models",
         "web.utils",
         "shadow_bridge",
