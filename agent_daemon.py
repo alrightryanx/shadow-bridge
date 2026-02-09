@@ -202,10 +202,15 @@ class AgentDaemon:
                                     continue  # Already running
                             self._start_worker(task)
 
-                # Every 10th poll cycle, run routine detection
+                # Periodic autonomous work
                 self._poll_count += 1
+                # Every 10th poll (~5 min): routine detection + prediction-to-task
                 if self._poll_count % 10 == 0:
                     self._run_routine_check()
+                    self._run_prediction_to_task()
+                # Every 60th poll (~30 min): health scans
+                if self._poll_count % 60 == 0:
+                    self._run_health_scan()
             except Exception as e:
                 log.error(f"Daemon poll loop error: {e}")
 
@@ -435,15 +440,140 @@ class AgentDaemon:
                 self._current_process = None
 
     def _run_routine_check(self):
-        """Execute active routines via the RoutineDetector. Non-blocking."""
+        """Execute active routines via the RoutineDetector.
+
+        Triggered routines now auto-create tasks in TaskStore, which the
+        daemon's main poll loop will pick up on the next cycle.
+        """
         try:
             from web.services.routine_detector import get_routine_detector
             detector = get_routine_detector()
             triggered = detector.execute_active_routines()
             if triggered:
-                log.info(f"Routine check triggered {len(triggered)} routines")
+                log.info(f"Routine check triggered {len(triggered)} routines "
+                         f"(tasks created in store)")
+            # Also scan for new routine patterns every time
+            detector.scan_for_routines()
         except Exception as e:
             log.debug(f"Routine check failed: {e}")
+
+    def _run_health_scan(self):
+        """Run code health analysis on known project directories.
+
+        Pushes health findings as tasks to TaskStore. Called every 20th
+        poll cycle (~10 minutes at default 30s interval).
+        """
+        try:
+            from web.services.code_health_monitor import get_code_health_monitor
+            monitor = get_code_health_monitor()
+
+            # Scan known project directories
+            project_dirs = self._discover_project_dirs()
+            total_tasks = 0
+            for project_id, project_dir in project_dirs.items():
+                try:
+                    created = monitor.push_health_tasks_to_store(
+                        project_id, project_dir)
+                    total_tasks += len(created)
+                except Exception as e:
+                    log.debug(f"Health scan failed for {project_id}: {e}")
+
+            if total_tasks > 0:
+                log.info(f"Health scan created {total_tasks} tasks "
+                         f"across {len(project_dirs)} projects")
+        except Exception as e:
+            log.debug(f"Health scan failed: {e}")
+
+    def _discover_project_dirs(self) -> Dict[str, str]:
+        """Discover project directories from TaskStore's known projects
+        and well-known paths."""
+        projects = {}
+
+        # Always include the main shadow repos
+        shadow_root = os.path.realpath("C:\\shadow")
+        for name in ("shadow-android", "shadow-bridge"):
+            path = os.path.join(shadow_root, name)
+            if os.path.isdir(path):
+                projects[name] = path
+
+        # Check TaskStore for project_dir references in recent tasks
+        try:
+            from web.services.task_store import get_task_store
+            store = get_task_store()
+            all_tasks = store.list_tasks()[:100]
+            for task in all_tasks:
+                inp = task.get("input", {})
+                pdir = inp.get("project_dir") or inp.get("working_directory", "")
+                pid = inp.get("project_id", "")
+                if pdir and os.path.isdir(pdir) and pid:
+                    projects[pid] = pdir
+        except Exception:
+            pass
+
+        return projects
+
+    def _run_prediction_to_task(self):
+        """Convert high-confidence predictions to tasks proactively.
+
+        Runs server-side so tasks are created even when no Android device
+        is connected. Deduplicates against existing pending tasks.
+        """
+        try:
+            from web.services.predictive_engine import get_predictive_engine
+            from web.services.task_store import get_task_store
+            engine = get_predictive_engine()
+            store = get_task_store()
+
+            predictions = engine.get_predictions(limit=5, min_confidence=0.8)
+            if not predictions:
+                return
+
+            # Check existing tasks for dedup
+            existing = store.list_tasks(status="PENDING")
+            existing_pred_ids = set()
+            for t in existing:
+                inp = t.get("input", {})
+                pid = inp.get("prediction_id")
+                if pid:
+                    existing_pred_ids.add(pid)
+
+            created = 0
+            for pred in predictions:
+                pred_id = pred.get("id", "")
+                if pred_id in existing_pred_ids:
+                    continue
+                if pred.get("outcome"):  # Already resolved
+                    continue
+
+                action = pred.get("predicted_action", "Unknown action")
+                confidence = pred.get("confidence", 0)
+                context = pred.get("context", {})
+
+                task_data = {
+                    "title": f"Predicted: {action}",
+                    "description": (
+                        f"High-confidence prediction ({confidence:.0%}): {action}\n"
+                        f"Signal: {pred.get('signal_type', 'unknown')}\n"
+                        f"Context: {json.dumps(context, default=str)[:500]}"
+                    ),
+                    "priority": "HIGH" if confidence >= 0.9 else "NORMAL",
+                    "tags": ["predictive", f"confidence:{confidence:.2f}"],
+                    "input": {
+                        "source": "predictive_engine",
+                        "prediction_id": pred_id,
+                        "predicted_action": action,
+                        "confidence": confidence,
+                        "project_id": context.get("project_id", ""),
+                    },
+                    "created_by": "predictive_engine",
+                }
+                store.create_task(task_data)
+                created += 1
+
+            if created:
+                log.info(f"Created {created} tasks from predictions")
+        except Exception as e:
+            log.debug(f"Prediction-to-task failed: {e}")
 
     def _resolve_work_dir(self, project_dir: str) -> str:
         """Validate project directory against allowed roots. Falls back to home."""

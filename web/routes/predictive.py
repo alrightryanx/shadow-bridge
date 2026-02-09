@@ -82,6 +82,21 @@ def record_action():
         from web.services.predictive_engine import get_predictive_engine
         engine = get_predictive_engine()
         action = engine.record_user_action(action_type, project_id, metadata)
+
+        # Auto-check event triggers for known event types
+        event_types = {"project_activated", "build_completed", "commit_pushed",
+                       "agent_idle", "review_submitted", "error_detected",
+                       "task_completed", "task_created", "agent_paused",
+                       "agent_resumed", "briefing_generated"}
+        if action_type in event_types:
+            try:
+                from web.services.routine_detector import get_routine_detector
+                detector = get_routine_detector()
+                detector.check_event_triggers(action_type,
+                                              {"project_id": project_id, **metadata})
+            except Exception as e2:
+                log.debug(f"Event trigger check failed: {e2}")
+
         return jsonify(action)
     except Exception as e:
         log.error(f"Failed to record action: {e}")

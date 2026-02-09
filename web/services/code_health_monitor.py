@@ -382,6 +382,65 @@ class CodeHealthMonitor:
 
         return tasks
 
+    def push_health_tasks_to_store(self, project_id: str,
+                                     project_dir: str) -> List[dict]:
+        """Run health analysis and push findings as real tasks to TaskStore.
+
+        Called periodically by AgentDaemon. Deduplicates by checking for
+        existing open tasks with matching category + project_id.
+        """
+        from web.services.task_store import get_task_store
+        store = get_task_store()
+
+        # Run analysis
+        results = self.analyze_project_health(project_dir)
+        self.cache_project_health(project_id, results)
+
+        # Generate task suggestions
+        suggestions = self.generate_health_tasks(project_id, results)
+        if not suggestions:
+            return []
+
+        # Check existing tasks for deduplication
+        existing = (store.list_tasks(status="PENDING")
+                    + store.list_tasks(status="IN_PROGRESS"))
+        existing_keys = set()
+        for t in existing:
+            inp = t.get("input", {})
+            if inp.get("source") == "code_health":
+                existing_keys.add(f"{inp.get('category', '')}:{inp.get('project_id', '')}")
+
+        created = []
+        for suggestion in suggestions:
+            dedup_key = f"{suggestion['category']}:{project_id}"
+            if dedup_key in existing_keys:
+                continue
+
+            task_data = {
+                "title": suggestion["title"],
+                "description": suggestion["description"],
+                "priority": suggestion["priority"],
+                "tags": ["health", f"project:{project_id}",
+                         f"category:{suggestion['category']}"],
+                "input": {
+                    "source": "code_health",
+                    "category": suggestion["category"],
+                    "project_id": project_id,
+                    "project_dir": project_dir,
+                    "health_score": results.get("health_score", 0),
+                },
+                "created_by": "code_health_monitor",
+            }
+            task = store.create_task(task_data)
+            created.append(task)
+            log.info(f"Health task created: {task['id']} - {suggestion['title']} "
+                     f"for project {project_id}")
+
+        if created:
+            log.info(f"Created {len(created)} health tasks for project {project_id} "
+                     f"(score: {results.get('health_score', '?')})")
+        return created
+
     # ---- Aggregate Queries ----
 
     def get_health_context(self) -> dict:

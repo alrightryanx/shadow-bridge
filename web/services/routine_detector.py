@@ -2,17 +2,51 @@
 
 Detects repeating manual action patterns and offers to automate them.
 Integrates with PredictiveEngine for pattern data and PredictiveStore
-for persistence.
+for persistence. When routines fire, creates tasks in TaskStore for
+the AgentDaemon to execute.
 """
 
 import logging
 import time
+import uuid
 from typing import List, Optional
 
 from web.services.predictive_engine import get_predictive_engine
 from web.services.predictive_store import get_predictive_store
 
 log = logging.getLogger(__name__)
+
+# Map routine action types to task descriptions for the daemon
+_ACTION_TASK_TEMPLATES = {
+    "generate_briefing": {
+        "title": "Generate project briefing",
+        "description": "Analyze recent activity and produce a briefing summary.",
+    },
+    "run_tests": {
+        "title": "Run project test suite",
+        "description": "Execute the project's test suite and report results.",
+    },
+    "update_dependencies": {
+        "title": "Check and update dependencies",
+        "description": "Review project dependencies for security updates and staleness.",
+    },
+    "code_review": {
+        "title": "Review recent code changes",
+        "description": "Audit recent commits for quality, security, and style issues.",
+    },
+    "git_cleanup": {
+        "title": "Git repository cleanup",
+        "description": "Commit uncommitted files, clean stale branches, verify repo health.",
+    },
+    "generate_todos": {
+        "title": "Generate TODO tasks from project analysis",
+        "description": "Analyze project state and generate actionable improvement tasks.",
+    },
+    "health_check": {
+        "title": "Run project health check",
+        "description": "Analyze project health: build, deps, docs, git status.",
+    },
+}
 
 
 class RoutineDetector:
@@ -21,6 +55,62 @@ class RoutineDetector:
     def __init__(self):
         self._engine = get_predictive_engine()
         self._store = get_predictive_store()
+        self._task_store = None  # Lazy-loaded to avoid circular imports
+
+    def _get_task_store(self):
+        """Lazy-load TaskStore to avoid circular imports."""
+        if self._task_store is None:
+            from web.services.task_store import get_task_store
+            self._task_store = get_task_store()
+        return self._task_store
+
+    def _create_tasks_for_routine(self, routine: dict, trigger_type: str = "time") -> List[dict]:
+        """Convert a triggered routine's actions into TaskStore tasks.
+
+        Each action in the routine becomes a real task that the AgentDaemon
+        will pick up and execute via CLI tools.
+        """
+        store = self._get_task_store()
+        actions = routine.get("actions", [])
+        created_tasks = []
+
+        for action in actions:
+            action_type = action.get("type", "unknown")
+            template = _ACTION_TASK_TEMPLATES.get(action_type, {})
+
+            project_id = (action.get("project_id")
+                          or routine.get("project_id", ""))
+            project_dir = action.get("project_dir", "")
+
+            task_data = {
+                "title": template.get("title", f"Routine action: {action_type}"),
+                "description": (
+                    template.get("description", f"Execute routine action: {action_type}")
+                    + f"\n\nProject: {project_id}" if project_id else ""
+                ),
+                "priority": "NORMAL",
+                "tags": ["routine", f"trigger:{trigger_type}",
+                         f"routine_id:{routine.get('id', '?')}"],
+                "input": {
+                    "action_type": action_type,
+                    "project_id": project_id,
+                    "routine_id": routine.get("id"),
+                    "routine_name": routine.get("name", ""),
+                    "source": "routine_detector",
+                    **{k: v for k, v in action.items()
+                       if k not in ("type", "project_id", "project_dir")},
+                },
+                "created_by": "routine_detector",
+            }
+            if project_dir:
+                task_data["input"]["working_directory"] = project_dir
+
+            created = store.create_task(task_data)
+            created_tasks.append(created)
+            log.info(f"Created task {created['id']} for routine "
+                     f"{routine.get('id', '?')} action: {action_type}")
+
+        return created_tasks
 
     def scan_for_routines(self, lookback_days: int = 14) -> List[dict]:
         """Scan action history for repeating patterns.
@@ -112,10 +202,13 @@ class RoutineDetector:
                 },
             )
 
+            # Create real tasks for the daemon to execute
+            self._create_tasks_for_routine(routine, trigger_type=f"event:{event_type}")
             triggered.append(routine)
 
         if triggered:
-            log.info(f"Event '{event_type}' triggered {len(triggered)} routines")
+            log.info(f"Event '{event_type}' triggered {len(triggered)} routines, "
+                     f"created tasks for execution")
         return triggered
 
     def execute_active_routines(self) -> List[dict]:
@@ -175,10 +268,13 @@ class RoutineDetector:
                 },
             )
 
+            # Create real tasks for the daemon to execute
+            self._create_tasks_for_routine(routine, trigger_type=f"schedule:{frequency}")
             triggered.append(routine)
 
         if triggered:
-            log.info(f"Triggered {len(triggered)} active routines")
+            log.info(f"Triggered {len(triggered)} active routines, "
+                     f"created tasks for execution")
         return triggered
 
     def get_routine_summary(self) -> dict:
