@@ -285,6 +285,153 @@ def get_status():
     })
 
 
+# ---- Vector Store Endpoints ----
+
+@api_bp.route('/vector/search', methods=['GET', 'POST'])
+def vector_search():
+    """Semantic search across vector store collections.
+
+    POST body: {"query": "...", "collection": "shadowai_memory", "top_k": 5}
+    GET params: ?q=...&limit=5&types=note,project
+    Returns: {"results": [{"content": "...", "score": 0.95, "metadata": {...}}]}
+    """
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        query = data.get('query', '')
+        collection = data.get('collection')
+        top_k = min(int(data.get('top_k', 5)), 50)
+        source_types = None
+    else:
+        query = request.args.get('q', '')
+        collection = request.args.get('collection')
+        top_k = min(int(request.args.get('limit', request.args.get('top_k', 5))), 50)
+        types_str = request.args.get('types', '')
+        source_types = [t.strip() for t in types_str.split(',') if t.strip()] if types_str else None
+
+    if not query:
+        return jsonify({"error": "query field required"}), 400
+
+    try:
+        from web.services.vector_store import get_vector_store_v2
+        store = get_vector_store_v2()
+        if store is None:
+            return jsonify({"error": "Vector store not available", "results": []}), 503
+
+        collections = [collection] if collection else None
+        results = store.hybrid_search(query, collections=collections, limit=top_k)
+
+        # Filter by source_type if requested via GET ?types= parameter
+        if source_types:
+            results = [r for r in results if r.source_type in source_types]
+
+        return jsonify({
+            "results": [
+                {
+                    "id": r.id,
+                    "content": r.content,
+                    "score": r.score,
+                    "metadata": r.metadata,
+                    "source_type": r.source_type,
+                    "source_id": r.source_id,
+                    "title": r.title,
+                    "collection": r.collection,
+                }
+                for r in results
+            ],
+            "count": len(results),
+        })
+    except Exception as e:
+        log.error(f"Vector search failed: {e}")
+        return jsonify({"error": str(e), "results": []}), 500
+
+
+@api_bp.route('/vector/index', methods=['POST'])
+def vector_index():
+    """Index a document into the vector store.
+
+    Body: {"content": "...", "metadata": {...}, "collection": "shadowai_memory",
+           "source_type": "...", "source_id": "...", "title": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    content = data.get('content', '')
+    if not content:
+        return jsonify({"error": "content field required"}), 400
+
+    source_type = data.get('source_type', 'android')
+    source_id = data.get('source_id', f"doc_{int(time.time())}")
+    title = data.get('title', '')
+    metadata = data.get('metadata', {})
+    collection = data.get('collection', 'shadowai_memory')
+
+    try:
+        from web.services.vector_store import get_vector_store_v2
+        store = get_vector_store_v2()
+        if store is None:
+            return jsonify({"error": "Vector store not available", "success": False}), 503
+
+        success = store.index_document(
+            source_type=source_type,
+            source_id=source_id,
+            title=title,
+            content=content,
+            metadata=metadata,
+            collection=collection,
+        )
+        return jsonify({"success": success})
+    except Exception as e:
+        log.error(f"Vector index failed: {e}")
+        return jsonify({"error": str(e), "success": False}), 500
+
+
+@api_bp.route('/vector/context', methods=['POST'])
+def vector_context():
+    """Build agent context from vector store search results.
+
+    Body: {"query": "...", "max_tokens": 4000}
+    Returns: {"context": "## Relevant Context\\n..."}
+    """
+    data = request.get_json(silent=True) or {}
+    query = data.get('query', '')
+    if not query:
+        return jsonify({"error": "query field required"}), 400
+
+    max_tokens = min(int(data.get('max_tokens', 4000)), 16000)
+
+    try:
+        from web.services.vector_store import get_vector_store_v2
+        store = get_vector_store_v2()
+        if store is None:
+            return jsonify({"error": "Vector store not available", "context": ""}), 503
+
+        context = store.build_agent_context(query, max_tokens=max_tokens)
+        return jsonify({"context": context})
+    except Exception as e:
+        log.error(f"Vector context build failed: {e}")
+        return jsonify({"error": str(e), "context": ""}), 500
+
+
+@api_bp.route('/vector/status', methods=['GET'])
+def vector_status():
+    """Get vector store availability and statistics."""
+    try:
+        from web.services.vector_store import get_vector_store_v2
+        store = get_vector_store_v2()
+        if store is None:
+            return jsonify({"available": False, "error": "Vector store not initialized"})
+
+        stats = store.get_collection_stats()
+        total = sum(s["count"] for s in stats.values())
+        return jsonify({
+            "available": True,
+            "document_count": total,
+            "collections": stats,
+            "embedding_model": "all-MiniLM-L6-v2",
+        })
+    except Exception as e:
+        log.error(f"Vector status failed: {e}")
+        return jsonify({"available": False, "error": str(e)})
+
+
 # ---- Health & Tech Debt Endpoints ----
 
 @api_bp.route('/health/ci-status', methods=['GET'])
