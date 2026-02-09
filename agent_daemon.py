@@ -99,6 +99,8 @@ class AgentDaemon:
     """Persistent background daemon that polls for tasks and executes them
     via CLI tools (Claude Code, Codex, Gemini CLI)."""
 
+    MAX_CONCURRENT_TASKS = 3  # Worker pool size for parallel task execution
+
     def __init__(self, bridge_url: str = "http://127.0.0.1:6767",
                  poll_interval: int = 30):
         self.bridge_url = bridge_url.rstrip('/')
@@ -107,6 +109,8 @@ class AgentDaemon:
         self._thread: Optional[threading.Thread] = None
         self._current_task: Optional[Dict] = None
         self._current_process: Optional[subprocess.Popen] = None
+        # Worker pool: tracks active tasks by task_id -> (thread, process)
+        self._active_workers: Dict[str, Dict[str, Any]] = {}
         self._tasks_completed = 0
         self._tasks_failed = 0
         self._started_at: Optional[float] = None
@@ -124,11 +128,16 @@ class AgentDaemon:
     @property
     def status(self) -> Dict[str, Any]:
         """Status dict consumed by the /api/daemon/status endpoint."""
+        with self._lock:
+            active_titles = [w.get("title", "?") for w in self._active_workers.values()]
         return {
             "running": self.is_running,
             "bridge_url": self.bridge_url,
             "current_task": (self._current_task.get("title")
                              if self._current_task else None),
+            "active_tasks": active_titles,
+            "active_task_count": len(active_titles),
+            "max_concurrent": self.MAX_CONCURRENT_TASKS,
             "tasks_completed": self._tasks_completed,
             "tasks_failed": self._tasks_failed,
             "uptime_seconds": (int(time.time() - self._started_at)
@@ -167,17 +176,31 @@ class AgentDaemon:
     # ---- Main Loop ----
 
     def _poll_loop(self):
-        """Main loop: GET /api/tasks/pending, claim one, execute, post results.
+        """Main loop: GET /api/tasks/pending, claim up to MAX_CONCURRENT_TASKS,
+        execute in parallel worker threads, post results.
         Runs in a background thread until stop() is called."""
         # Brief initial delay so the web server can finish starting
         time.sleep(5)
 
         while self._running:
             try:
-                tasks = self._fetch_pending_tasks()
-                if tasks:
-                    # Process one task at a time
-                    self._execute_task(tasks[0])
+                # Clean up finished workers
+                self._cleanup_finished_workers()
+
+                # Determine available capacity
+                with self._lock:
+                    available_slots = self.MAX_CONCURRENT_TASKS - len(self._active_workers)
+
+                if available_slots > 0:
+                    tasks = self._fetch_pending_tasks()
+                    if tasks:
+                        tasks_to_start = tasks[:available_slots]
+                        for task in tasks_to_start:
+                            task_id = task.get("id", "")
+                            with self._lock:
+                                if task_id in self._active_workers:
+                                    continue  # Already running
+                            self._start_worker(task)
 
                 # Every 10th poll cycle, run routine detection
                 self._poll_count += 1
@@ -191,6 +214,37 @@ class AgentDaemon:
                 if not self._running:
                     return
                 time.sleep(1)
+
+    def _start_worker(self, task: Dict):
+        """Spawn a worker thread to execute a single task."""
+        task_id = task.get("id", "")
+        title = task.get("title", "Untitled")
+
+        def worker():
+            try:
+                self._execute_task(task)
+            except Exception as e:
+                log.error(f"Worker error for task {task_id}: {e}")
+            finally:
+                with self._lock:
+                    self._active_workers.pop(task_id, None)
+
+        t = threading.Thread(target=worker, daemon=True,
+                             name=f"Worker-{task_id[:8]}")
+        with self._lock:
+            self._active_workers[task_id] = {
+                "thread": t, "title": title, "started_at": time.time()
+            }
+        t.start()
+        log.info(f"Started worker for task: {title} ({task_id})")
+
+    def _cleanup_finished_workers(self):
+        """Remove entries for workers whose threads have finished."""
+        with self._lock:
+            finished = [tid for tid, w in self._active_workers.items()
+                        if not w["thread"].is_alive()]
+            for tid in finished:
+                del self._active_workers[tid]
 
     # ---- API Helpers ----
 

@@ -146,7 +146,14 @@ class PredictiveEngine:
             current_hour, current_dow, min_count=MIN_PATTERN_OCCURRENCES
         )
         for pattern in time_patterns:
-            confidence = min(0.5 + (pattern["count"] * 0.03), 0.95)
+            base_confidence = min(0.5 + (pattern["count"] * 0.03), 0.95)
+            # Adjust confidence based on historical prediction accuracy
+            accuracy = pattern.get("prediction_accuracy")
+            if accuracy is not None and (pattern.get("prediction_hits", 0) +
+                                          pattern.get("prediction_misses", 0)) >= 3:
+                confidence = base_confidence * (0.5 + 0.5 * accuracy)
+            else:
+                confidence = base_confidence
             pred = self._store.add_prediction(
                 signal_type="temporal_pattern",
                 predicted_action=pattern["action_type"],
@@ -244,8 +251,65 @@ class PredictiveEngine:
 
     def resolve_prediction(self, prediction_id: str, outcome: str,
                            feedback: Optional[str] = None) -> Optional[dict]:
-        """Resolve a prediction with outcome feedback."""
-        return self._store.resolve_prediction(prediction_id, outcome, feedback)
+        """Resolve a prediction with outcome feedback.
+
+        Also adjusts confidence for the originating signal using Bayesian updating:
+        - Accepted outcomes increase confidence of similar future predictions
+        - Rejected outcomes decrease confidence
+        """
+        result = self._store.resolve_prediction(prediction_id, outcome, feedback)
+        if result is None:
+            return None
+
+        # Bayesian confidence adjustment based on outcome
+        signal_type = result.get("signal_type", "")
+        action = result.get("predicted_action", "")
+        old_confidence = result.get("confidence", 0.5)
+        learning_rate = 0.05
+
+        if outcome in ("accepted", "resolved"):
+            # Increase confidence for this signal pattern
+            adjustment = learning_rate * (1.0 - old_confidence)
+        elif outcome in ("rejected", "failed"):
+            # Decrease confidence for this signal pattern
+            adjustment = -learning_rate * old_confidence
+        else:
+            return result
+
+        # Apply adjustment to the originating routine's confidence
+        if signal_type == "routine":
+            routine_id = result.get("context", {}).get("routine_id")
+            if routine_id:
+                routine = self._store.detected_routines.get(routine_id)
+                if routine:
+                    new_conf = max(0.1, min(0.99,
+                                            routine["confidence"] + adjustment))
+                    self._store.update_routine(routine_id,
+                                               {"confidence": new_conf})
+                    log.info(f"Routine {routine_id} confidence: "
+                             f"{routine['confidence']:.2f} -> {new_conf:.2f}")
+
+        # Update accuracy stats in the temporal pattern if applicable
+        if signal_type == "temporal_pattern":
+            ctx = result.get("context", {})
+            hour = ctx.get("hour")
+            dow = ctx.get("day_of_week")
+            if hour is not None and dow is not None:
+                pattern_key = f"{action}:{hour}:{dow}"
+                pattern = self._store.temporal_patterns.get(pattern_key)
+                if pattern:
+                    hits = pattern.get("prediction_hits", 0)
+                    misses = pattern.get("prediction_misses", 0)
+                    if outcome in ("accepted", "resolved"):
+                        pattern["prediction_hits"] = hits + 1
+                    else:
+                        pattern["prediction_misses"] = misses + 1
+                    total = pattern["prediction_hits"] + pattern["prediction_misses"]
+                    if total > 0:
+                        pattern["prediction_accuracy"] = round(
+                            pattern["prediction_hits"] / total, 3)
+
+        return result
 
 
 # ---- Singleton ----
