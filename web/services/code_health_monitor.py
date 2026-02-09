@@ -514,3 +514,173 @@ def get_code_health_monitor() -> CodeHealthMonitor:
     if _monitor is None:
         _monitor = CodeHealthMonitor()
     return _monitor
+
+
+# ---- Standalone CI/CD and Tech Debt Functions ----
+
+import re
+from datetime import datetime, timedelta
+
+
+def detect_build_failures(repo_path=None, since_days=7):
+    """
+    Detect recent build failures by parsing git log for failure patterns.
+    Returns list of detected failures with error context.
+    """
+    if repo_path is None:
+        repo_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    failures = []
+
+    try:
+        since_date = (datetime.now() - timedelta(days=since_days)).strftime('%Y-%m-%d')
+        result = subprocess.run(
+            ['git', 'log', f'--since={since_date}', '--oneline', '--all'],
+            capture_output=True, text=True, cwd=repo_path, timeout=30
+        )
+
+        if result.returncode != 0:
+            return failures
+
+        # Look for fix/hotfix commits that indicate prior failures
+        fix_patterns = [
+            r'fix[:\s]',
+            r'hotfix[:\s]',
+            r'bugfix[:\s]',
+            r'revert[:\s]',
+            r'broken',
+            r'crash',
+            r'error',
+        ]
+
+        for line in result.stdout.strip().split('\n'):
+            if not line.strip():
+                continue
+            line_lower = line.lower()
+            for pattern in fix_patterns:
+                if re.search(pattern, line_lower):
+                    commit_hash = line.split()[0] if line.split() else ''
+                    failures.append({
+                        'commit': commit_hash,
+                        'message': line,
+                        'pattern': pattern,
+                        'detected_at': datetime.now().isoformat()
+                    })
+                    break
+    except Exception as e:
+        failures.append({
+            'error': str(e),
+            'detected_at': datetime.now().isoformat()
+        })
+
+    return failures
+
+
+def get_ci_status(repo_path=None):
+    """
+    Get overall CI/CD health status.
+    """
+    failures = detect_build_failures(repo_path)
+    recent_failures = [f for f in failures if 'error' not in f]
+
+    health = 'HEALTHY'
+    if len(recent_failures) > 5:
+        health = 'CRITICAL'
+    elif len(recent_failures) > 2:
+        health = 'DEGRADED'
+
+    return {
+        'status': health,
+        'recent_failure_count': len(recent_failures),
+        'failures': recent_failures[:10],
+        'checked_at': datetime.now().isoformat()
+    }
+
+
+def calculate_tech_debt_score(repo_path=None, since_days=30):
+    """
+    Score files by change frequency x bug correlation x complexity.
+    Formula: (changeFreq * 0.4 + bugCorrelation * 0.4 + complexity * 0.2)
+    Returns top files sorted by debt score.
+    """
+    if repo_path is None:
+        repo_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    file_stats = {}
+
+    try:
+        since_date = (datetime.now() - timedelta(days=since_days)).strftime('%Y-%m-%d')
+
+        # Get all changed files with their commit messages
+        result = subprocess.run(
+            ['git', 'log', f'--since={since_date}', '--name-only', '--pretty=format:COMMIT:%s'],
+            capture_output=True, text=True, cwd=repo_path, timeout=60
+        )
+
+        if result.returncode != 0:
+            return []
+
+        current_message = ''
+        is_bug_fix = False
+        bug_patterns = re.compile(r'fix|bug|crash|error|hotfix|revert', re.IGNORECASE)
+
+        for line in result.stdout.strip().split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('COMMIT:'):
+                current_message = line[7:]
+                is_bug_fix = bool(bug_patterns.search(current_message))
+            else:
+                # It's a file path
+                filepath = line
+                if filepath not in file_stats:
+                    file_stats[filepath] = {
+                        'change_count': 0,
+                        'bug_fix_count': 0,
+                        'filepath': filepath
+                    }
+                file_stats[filepath]['change_count'] += 1
+                if is_bug_fix:
+                    file_stats[filepath]['bug_fix_count'] += 1
+
+        if not file_stats:
+            return []
+
+        # Normalize and score
+        max_changes = max(s['change_count'] for s in file_stats.values()) or 1
+        max_bugs = max(s['bug_fix_count'] for s in file_stats.values()) or 1
+
+        scored = []
+        for filepath, stats in file_stats.items():
+            change_freq = stats['change_count'] / max_changes
+            bug_correlation = stats['bug_fix_count'] / max_bugs
+
+            # Estimate complexity by file extension and size
+            complexity = 0.5  # default
+            ext = os.path.splitext(filepath)[1].lower()
+            if ext in ['.kt', '.java', '.py', '.ts', '.tsx']:
+                # Try to get file size as rough complexity proxy
+                full_path = os.path.join(repo_path, filepath)
+                if os.path.exists(full_path):
+                    try:
+                        size = os.path.getsize(full_path)
+                        complexity = min(size / 50000, 1.0)  # Normalize: 50KB = max complexity
+                    except OSError:
+                        pass
+
+            debt_score = (change_freq * 0.4) + (bug_correlation * 0.4) + (complexity * 0.2)
+
+            scored.append({
+                'filepath': filepath,
+                'debt_score': round(debt_score, 3),
+                'change_count': stats['change_count'],
+                'bug_fix_count': stats['bug_fix_count'],
+                'complexity': round(complexity, 3)
+            })
+
+        scored.sort(key=lambda x: x['debt_score'], reverse=True)
+        return scored[:20]
+
+    except Exception as e:
+        return [{'error': str(e)}]

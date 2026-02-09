@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 
 from web.services.task_store import get_task_store
@@ -282,3 +283,31 @@ def get_status():
         "teams": stats["total_teams"],
         "timestamp": time.time(),
     })
+
+
+# ---- Health & Tech Debt Endpoints ----
+
+@api_bp.route('/health/ci-status', methods=['GET'])
+def ci_status():
+    """CI/CD health status endpoint."""
+    try:
+        from web.services.code_health_monitor import get_ci_status
+        status = get_ci_status()
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'UNKNOWN'}), 500
+
+
+@api_bp.route('/health/tech-debt', methods=['GET'])
+def tech_debt():
+    """Technical debt scoring endpoint."""
+    try:
+        from web.services.code_health_monitor import calculate_tech_debt_score
+        scores = calculate_tech_debt_score()
+        return jsonify({
+            'files': scores[:10],
+            'total_files_analyzed': len(scores),
+            'generated_at': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
