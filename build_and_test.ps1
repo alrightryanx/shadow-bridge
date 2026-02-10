@@ -113,7 +113,7 @@ if ($installProcess.ExitCode -ne 0) {
     if (Test-Path $installedPath) {
         Write-Host "Launching installed app..."
         Stop-ShadowBridge # Ensure no zombie process
-        Start-Process $installedPath -ArgumentList "--aidev"
+        Start-Process $installedPath
         
         # 7. Wait and Collect Logs
         Write-Host "Waiting 10 seconds for app to initialize..."

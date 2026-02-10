@@ -142,28 +142,20 @@ ASSEMBLY_MODE = _CLI_MODE == "assembly"
 BROWSER_MODE = _CLI_MODE == "browser"
 WEB_SERVER_MODE = "--web-server" in sys.argv
 DEBUG_BUILD = "--debug" in sys.argv
-AIDEV_MODE = "--aidev" in sys.argv
 AGENT_MODE = "--mode" in sys.argv and "agent" in sys.argv
 PING_MODE = "--ping" in sys.argv
 AUTO_INSTALL = "--auto-install" in sys.argv
 HEADLESS_MODE = "--headless" in sys.argv
 # SECURITY: --trust-all only allowed in non-RELEASE builds to prevent accidental SSH key auto-approval
 _trust_all_requested = "--trust-all" in sys.argv
-TRUST_ALL = _trust_all_requested and ("--aidev" in sys.argv or "--debug" in sys.argv or os.environ.get("SHADOWAI_TESTING") == "1")
+TRUST_ALL = _trust_all_requested and ("--debug" in sys.argv or os.environ.get("SHADOWAI_TESTING") == "1")
 if _trust_all_requested and not TRUST_ALL:
-    print("WARNING: --trust-all ignored in RELEASE mode (security risk). Use --aidev or --debug to enable.")
+    print("WARNING: --trust-all ignored in RELEASE mode (security risk). Use --debug to enable.")
 TEST_MODE = os.environ.get("SHADOWAI_TESTING") == "1" or "PYTEST_CURRENT_TEST" in os.environ
-if AGENT_MODE:
-    AIDEV_MODE = True
 
 # Environment Tier Detection
-if AIDEV_MODE:
-    ENVIRONMENT = "AIDEV"
-    DATA_PORT = 19304
-    WEB_PORT = 6769
-    COMPANION_PORT = 19306
-    DB_NAME = "shadow_aidev.db"
-elif DEBUG_BUILD:
+# Environment Tier Detection
+if DEBUG_BUILD:
     ENVIRONMENT = "DEBUG"
     DATA_PORT = 19294
     WEB_PORT = 6768
@@ -284,7 +276,7 @@ if (
 
 # Setup logging to file
 HOME_DIR = os.path.expanduser("~")
-LOG_DIR = os.path.join(HOME_DIR, ".shadowai_aidev" if AIDEV_MODE else ".shadowai")
+LOG_DIR = os.path.join(HOME_DIR, ".shadowai")
 LOG_FILE = os.path.join(LOG_DIR, "shadowbridge.log")
 WEB_LOG_FILE = os.path.join(LOG_DIR, "shadowbridge_web.log")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -324,19 +316,15 @@ if IS_WINDOWS:
 DISCOVERY_PORT = 19283
 if ENVIRONMENT == "DEBUG":
     DISCOVERY_PORT = 19293
-elif ENVIRONMENT == "AIDEV":
-    DISCOVERY_PORT = 19303
 
 DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 # DATA_PORT, WEB_PORT, COMPANION_PORT are set above based on environment
 NOTE_CONTENT_PORT = 19285
 if ENVIRONMENT == "DEBUG":
     NOTE_CONTENT_PORT = 19295
-elif ENVIRONMENT == "AIDEV":
-    NOTE_CONTENT_PORT = 19305
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.225"
+APP_VERSION = "1.229"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9272,9 +9260,9 @@ def run_web_dashboard_server(open_browser: bool):
     try:
         from web.app import create_app, socketio
 
-        # SECURITY: Bind to localhost by default. Phone accesses web API via data port relay, not directly.
-        # Use --external-web flag to bind to 0.0.0.0 if LAN dashboard access is needed.
-        host = "0.0.0.0" if "--external-web" in sys.argv else "127.0.0.1"
+        # SECURITY: Bind to all interfaces by default to allow phone access.
+        # Use --local-web flag to bind to 127.0.0.1 if strict local access is needed.
+        host = "127.0.0.1" if "--local-web" in sys.argv else "0.0.0.0"
         port = WEB_PORT
 
         # Check if port is already in use (main GUI may already be running DataReceiver)
