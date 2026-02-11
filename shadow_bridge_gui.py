@@ -154,19 +154,12 @@ if _trust_all_requested and not TRUST_ALL:
 TEST_MODE = os.environ.get("SHADOWAI_TESTING") == "1" or "PYTEST_CURRENT_TEST" in os.environ
 
 # Environment Tier Detection
-# Environment Tier Detection
-if DEBUG_BUILD:
-    ENVIRONMENT = "DEBUG"
-    DATA_PORT = 19294
-    WEB_PORT = 6768
-    COMPANION_PORT = 19296
-    DB_NAME = "shadow_debug.db"
-else:
-    ENVIRONMENT = "RELEASE"
-    DATA_PORT = 19284
-    WEB_PORT = 6767
-    COMPANION_PORT = 19286
-    DB_NAME = "shadow_ai.db"
+# shadowbridge should always be RELEASE
+ENVIRONMENT = "RELEASE"
+DATA_PORT = 19284
+WEB_PORT = 6767
+COMPANION_PORT = 19286
+DB_NAME = "shadow_ai.db"
 
 SSH_KEY_PREFIX = f"# Shadow {ENVIRONMENT} device:"
 
@@ -314,17 +307,13 @@ if IS_WINDOWS:
 
 # Configuration
 DISCOVERY_PORT = 19283
-if ENVIRONMENT == "DEBUG":
-    DISCOVERY_PORT = 19293
 
 DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 # DATA_PORT, WEB_PORT, COMPANION_PORT are set above based on environment
 NOTE_CONTENT_PORT = 19285
-if ENVIRONMENT == "DEBUG":
-    NOTE_CONTENT_PORT = 19295
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.229"
+APP_VERSION = "1.230"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9241,10 +9230,6 @@ def run_web_dashboard_server(open_browser: bool):
     """Run the web dashboard server (used by the --web-server mode)."""
     # Single-instance check using dynamic lock port
     web_lock_port = 6766
-    if ENVIRONMENT == "DEBUG":
-        web_lock_port = 6776
-    elif ENVIRONMENT == "AIDEV":
-        web_lock_port = 6786
 
     lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -9702,10 +9687,6 @@ def main():
         if HAS_SINGLETON:
             lock_name = f"ShadowBridge{ENVIRONMENT}"
             instance_port = 19287
-            if ENVIRONMENT == "DEBUG":
-                instance_port = 19297
-            elif ENVIRONMENT == "AIDEV":
-                instance_port = 19307
 
             inst = SingleInstance(lock_name, port=instance_port)
             if not inst.acquire():
@@ -9770,10 +9751,6 @@ def main():
         # Use different lock names and ports for side-by-side instances
         lock_name = f"ShadowBridge{ENVIRONMENT}"
         instance_port = 19287
-        if ENVIRONMENT == "DEBUG":
-            instance_port = 19297
-        elif ENVIRONMENT == "AIDEV":
-            instance_port = 19307
 
         _single_instance = SingleInstance(lock_name, port=instance_port)
         if not _single_instance.acquire():
@@ -9786,10 +9763,6 @@ def main():
     else:
         # Fallback to simple socket check
         lock_port = 19287
-        if ENVIRONMENT == "DEBUG":
-            lock_port = 19297
-        elif ENVIRONMENT == "AIDEV":
-            lock_port = 19307
 
         lock_socket = check_single_instance(port=lock_port)
         if lock_socket is None:
