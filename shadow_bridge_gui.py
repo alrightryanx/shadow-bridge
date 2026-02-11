@@ -313,7 +313,7 @@ DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 NOTE_CONTENT_PORT = 19285
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.231"
+APP_VERSION = "1.232"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -5301,6 +5301,7 @@ class ShadowBridgeApp:
         self.web_process = None
         self.web_server_thread = None
         self.tray_icon = None
+        self.pending_approval_dialogs = set()  # Track device_ids with open approval dialogs
         self.selected_device_id = "__ALL__"  # '__ALL__' or a device_id
         self.devices = load_projects_state().get(
             "devices", {}
@@ -8070,6 +8071,13 @@ Or run in PowerShell (Admin):
     def on_key_approval_needed(self, device_id, device_name, ip):
         """Called when a new device requests SSH key installation - requires user approval."""
         log.info(f"Key approval needed for: {device_name} ({device_id}) from {ip}")
+
+        # Prevent duplicate dialogs for the same device
+        if device_id in self.pending_approval_dialogs:
+            log.debug(f"Approval dialog already showing for {device_id}, skipping duplicate")
+            return
+
+        self.pending_approval_dialogs.add(device_id)
         # Schedule dialog on main thread
         self.root.after(
             0, lambda: self._show_key_approval_dialog(device_id, device_name, ip)
@@ -8124,6 +8132,9 @@ Or run in PowerShell (Admin):
 
         except Exception as e:
             log.error(f"Error showing key approval dialog: {e}")
+        finally:
+            # Always remove from pending set when dialog closes
+            self.pending_approval_dialogs.discard(device_id)
 
     def _show_success_celebration(self, device_name):
         """Show an exciting success celebration with sound and visual feedback."""
