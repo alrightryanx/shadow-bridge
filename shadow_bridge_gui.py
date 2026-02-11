@@ -313,7 +313,7 @@ DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 NOTE_CONTENT_PORT = 19285
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.230"
+APP_VERSION = "1.231"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -529,6 +529,8 @@ def get_all_ips():
     try:
         # Get all IPs from hostname
         hostname = socket.gethostname()
+        # Use a short timeout for getaddrinfo to prevent hangs
+        # Note: socket.AF_INET filters for IPv4 which is what we primarily need for SSH
         all_ips = socket.getaddrinfo(hostname, None, socket.AF_INET)
 
         for item in all_ips:
@@ -552,8 +554,26 @@ def get_all_ips():
             else:
                 ips["other"].append(ip)
         log.debug(f"get_all_ips: Found {len(all_ips)} IPs via getaddrinfo")
+    except socket.timeout:
+        log.warning("get_all_ips: getaddrinfo timed out")
     except Exception as e:
         log.warning(f"get_all_ips: getaddrinfo failed: {e}")
+
+    # Fallback to a faster interface enumeration if getaddrinfo fails or returns nothing
+    if not ips["local"] and not ips["tailscale"]:
+        try:
+            # On Windows, ipconfig /all is a reliable fallback
+            if platform.system() == "Windows":
+                 # Use a fast check for IPv4 patterns
+                 output = subprocess.check_output("ipconfig", creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).decode(errors='ignore')
+                 import re
+                 for ip in re.findall(r"IPv4 Address[ .]*: ([0-9.]+)", output):
+                     if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
+                         if ip not in ips["local"]: ips["local"].append(ip)
+                    elif ip.startswith("100."):
+                         if ip not in ips["tailscale"]: ips["tailscale"].append(ip)
+        except Exception as e:
+            log.debug(f"ipconfig fallback failed: {e}")
 
     # Also try socket method for primary IP
     try:
