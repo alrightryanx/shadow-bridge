@@ -313,7 +313,7 @@ DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 NOTE_CONTENT_PORT = 19285
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.232"
+APP_VERSION = "1.233"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -570,7 +570,7 @@ def get_all_ips():
                  for ip in re.findall(r"IPv4 Address[ .]*: ([0-9.]+)", output):
                      if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
                          if ip not in ips["local"]: ips["local"].append(ip)
-                    elif ip.startswith("100."):
+                     elif ip.startswith("100."):
                          if ip not in ips["tailscale"]: ips["tailscale"].append(ip)
         except Exception as e:
             log.debug(f"ipconfig fallback failed: {e}")
