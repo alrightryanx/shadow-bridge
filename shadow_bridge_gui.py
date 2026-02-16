@@ -313,7 +313,7 @@ DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 NOTE_CONTENT_PORT = 19285
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.235"
+APP_VERSION = "1.237"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -2427,6 +2427,15 @@ class DataReceiver(threading.Thread):
                             except Exception as e:
                                 log.warning(f"Protocol snapshot save failed: {e}")
 
+                        # Sync adaptive rules from device
+                        adaptive_rules = payload.get("adaptive_rules")
+                        if adaptive_rules and isinstance(adaptive_rules, list):
+                            try:
+                                from web.services.data_service import sync_adaptive_rules_from_device
+                                sync_adaptive_rules_from_device(device_id, adaptive_rules)
+                            except Exception as e:
+                                log.warning(f"Adaptive rules sync failed: {e}")
+
                         # Sync to agent orchestrator for web API access
                         try:
                             from web.services.agent_orchestrator import get_orchestrator
@@ -2449,9 +2458,25 @@ class DataReceiver(threading.Thread):
                             from web.services.agent_orchestrator import get_all_agents
                             bridge_agents = get_all_agents()
                             if bridge_agents:
-                                response["sync_to_device"] = {"agents": bridge_agents}
+                                if "sync_to_device" not in response:
+                                    response["sync_to_device"] = {}
+                                response["sync_to_device"]["agents"] = bridge_agents
                         except Exception as e:
                             log.warning(f"Failed to include bridge agents in response: {e}")
+
+                        # Include pending adaptive rules for sync back to device
+                        try:
+                            from web.services.data_service import get_pending_adaptive_rules, mark_adaptive_rules_synced
+                            pending_rules = get_pending_adaptive_rules(device_id)
+                            if pending_rules:
+                                if "sync_to_device" not in response:
+                                    response["sync_to_device"] = {}
+                                response["sync_to_device"]["adaptive_rules"] = pending_rules
+                                rule_ids = [r.get("id") for r in pending_rules if r.get("id")]
+                                mark_adaptive_rules_synced(rule_ids)
+                        except Exception as e:
+                            log.warning(f"Failed to include pending rules in response: {e}")
+
                         send_sync_response(response)
                     elif "tasks" in payload:
                         # Handle tasks data
