@@ -313,7 +313,7 @@ DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 NOTE_CONTENT_PORT = 19285
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.234"
+APP_VERSION = "1.235"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -9706,11 +9706,10 @@ def _launch_agent_daemon():
 
 def main():
     """Main entry point."""
-    global DEBUG_BUILD, AIDEV_MODE, AGENT_MODE, _single_instance
+    global DEBUG_BUILD, AGENT_MODE, _single_instance
 
     # Refresh flags from current argv (in case they were modified or for clarity)
     DEBUG_BUILD = "--debug" in sys.argv
-    AIDEV_MODE = "--aidev" in sys.argv
     AGENT_MODE = "--mode" in sys.argv and "agent" in sys.argv
     PING_MODE = "--ping" in sys.argv
 
@@ -9755,7 +9754,7 @@ def main():
 
     if AGENT_MODE:
         log.info("Running in ShadowAgent mode (Headless)")
-        # Headless mode for AIDEV agents.
+        # Headless mode for agents.
         # Starts web server without browser and without tray GUI.
 
         # Check for existing instance
@@ -9858,17 +9857,12 @@ def main():
         log.info("Running in Headless mode (window hidden)")
         app.root.withdraw()
 
-    # Launch Ouroboros Refiner in AIDEV mode (auto-fix GitHub issues)
+    # Launch Ouroboros Refiner (manual trigger only in release)
     refiner_proc = None
     verifier_proc = None
-    if AIDEV_MODE:
-        refiner_proc = _launch_ouroboros_refiner()
-        verifier_proc = _launch_ouroboros_verifier()
 
     # Start agent daemon for autonomous task execution
     daemon_proc = None
-    if AIDEV_MODE:
-        daemon_proc = _launch_agent_daemon()
 
     try:
         app.run()

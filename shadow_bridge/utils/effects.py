@@ -2,6 +2,9 @@ import tkinter as tk
 import random
 import winsound
 import ctypes
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ConfettiEffect:
     def __init__(self, root):
@@ -35,8 +38,8 @@ class ConfettiEffect:
                     hwnd = int(self.top.frame(), 16)
                     style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
                     ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
-                except:
-                    pass
+                except (ValueError, OSError, AttributeError) as e:
+                    logger.debug(f"Failed to set window transparency: {e}")
 
             self.canvas = tk.Canvas(self.top, bg="white", highlightthickness=0, bd=0)
             self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -88,7 +91,8 @@ class ConfettiEffect:
                 self.canvas.coords(p["id"], p["x"], p["y"], p["x"] + p["size"], p["y"] + p["size"])
                 
             self.root.after(20, self._animate)
-        except:
+        except Exception as e:
+            logger.debug(f"Animation error: {e}")
             self.stop()
 
     def stop(self):
@@ -97,8 +101,8 @@ class ConfettiEffect:
             if self.top:
                 self.top.destroy()
                 self.top = None
-        except:
-            pass
+        except tk.TclError as e:
+            logger.debug(f"Error destroying confetti window: {e}")
         self.particles = []
 
 def play_ping_sound():
