@@ -5773,7 +5773,7 @@ class ShadowBridgeApp:
 
         self.broadcast_status_label = tk.Label(
             status_stack,
-            text="â— Broadcasting",
+            text="\u25cf Broadcasting",
             bg=COLORS["bg_surface"],
             fg=COLORS["success"],
             font=("Segoe UI", 8, "bold"),
@@ -6437,19 +6437,19 @@ class ShadowBridgeApp:
             if hasattr(self, "broadcast_status_label"):
                 if active_devices:
                     self.broadcast_status_label.configure(
-                        text=f"â— {len(active_devices)} Connected", fg=COLORS["success"]
+                        text=f"\u25cf {len(active_devices)} Connected", fg=COLORS["success"]
                     )
                 elif self.is_broadcasting and ssh_ok:
                     self.broadcast_status_label.configure(
-                        text="â— Broadcasting", fg=COLORS["success"]
+                        text="\u25cf Broadcasting", fg=COLORS["success"]
                     )
                 elif ssh_ok:
                     self.broadcast_status_label.configure(
-                        text="â— Ready", fg=COLORS["warning"]
+                        text="\u25cf Ready", fg=COLORS["warning"]
                     )
                 else:
                     self.broadcast_status_label.configure(
-                        text="â— No SSH", fg=COLORS["error"]
+                        text="\u25cf No SSH", fg=COLORS["error"]
                     )
 
             # Update connected devices display - only refresh periodically to reduce CPU usage
@@ -7149,7 +7149,7 @@ class ShadowBridgeApp:
                 self.root.after(
                     0,
                     lambda: self.broadcast_status_label.configure(
-                        text="â— Broadcasting", fg=COLORS["success"]
+                        text="\u25cf Broadcasting", fg=COLORS["success"]
                     )
                     if hasattr(self, "broadcast_status_label")
                     else None,
@@ -7173,7 +7173,7 @@ class ShadowBridgeApp:
                 self.root.after(
                     0,
                     lambda: self.broadcast_status_label.configure(
-                        text="â— Broadcast Failed", fg=COLORS["error"]
+                        text="\u25cf Broadcast Failed", fg=COLORS["error"]
                     )
                     if hasattr(self, "broadcast_status_label")
                     else None,
@@ -7203,7 +7203,7 @@ class ShadowBridgeApp:
             self.is_broadcasting = True
             if hasattr(self, "broadcast_status_label"):
                 self.broadcast_status_label.configure(
-                    text="â— Broadcasting", fg=COLORS["success"]
+                    text="\u25cf Broadcasting", fg=COLORS["success"]
                 )
             log.info(f"DiscoveryServer restarted by watchdog")
             return self.discovery_server
@@ -7212,7 +7212,7 @@ class ShadowBridgeApp:
             self.is_broadcasting = False
             if hasattr(self, "broadcast_status_label"):
                 self.broadcast_status_label.configure(
-                    text="â— Broadcast Failed", fg=COLORS["error"]
+                    text="\u25cf Broadcast Failed", fg=COLORS["error"]
                 )
             return None
 
@@ -7225,7 +7225,7 @@ class ShadowBridgeApp:
         # Update status label
         if hasattr(self, "broadcast_status_label"):
             self.broadcast_status_label.configure(
-                text="â— Stopped", fg=COLORS["text_muted"]
+                text="\u25cf Stopped", fg=COLORS["text_muted"]
             )
 
     def install_tool(self, tool_id, name, spec):
@@ -7950,9 +7950,9 @@ Or run in PowerShell (Admin):
         device = active[0]
         name = device.get("name") or device.get("id") or "Unknown"
         if len(active) > 1:
-            new_text = f"â— {name} +{len(active) - 1}"
+            new_text = f"\u25cf {name} +{len(active) - 1}"
         else:
-            new_text = f"â— {name}"
+            new_text = f"\u25cf {name}"
 
         current_text = self.connected_device_label.cget("text")
         if current_text != new_text:
@@ -8723,7 +8723,7 @@ Or run in PowerShell (Admin):
         # Expand indicator
         expand_label = tk.Label(
             header,
-            text="â–¶",
+            text="\u25b6",
             bg=COLORS["bg_input"],
             fg=COLORS["text_dim"],
             font=("Segoe UI", 8),
@@ -8887,12 +8887,12 @@ Or run in PowerShell (Admin):
             if card._is_expanded:
                 # Collapse
                 content_frame.pack_forget()
-                expand_label.configure(text="â–¶")
+                expand_label.configure(text="\u25b6")
                 card._is_expanded = False
             else:
                 # Expand
                 content_frame.pack(fill=tk.X, pady=(6, 0))
-                expand_label.configure(text="â–¼")
+                expand_label.configure(text="\u25bc")
                 card._is_expanded = True
 
                 # Load content if not already loaded
