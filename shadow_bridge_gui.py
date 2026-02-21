@@ -417,13 +417,13 @@ COLORS = {
 }
 
 # Enable DPI awareness on Windows BEFORE importing tkinter
+# Level 1 = System DPI Aware: crisp text, Windows handles scaling.
+# Level 2 = Per-Monitor V2: causes tkinter to double-scale all widgets.
 if platform.system() == "Windows":
     try:
-        # Windows 10 1607+ Per-Monitor DPI awareness
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         try:
-            # Fallback for older Windows
             ctypes.windll.user32.SetProcessDPIAware()
         except Exception as e:
             log.debug(f"DPI awareness setup failed: {e}")
@@ -5248,6 +5248,8 @@ class ShadowBridgeApp:
         try:
             set_app_user_model_id("ShadowBridge")
             self.root = tk.Tk()
+            # Force tk scaling to 1.0 so widgets/fonts aren't inflated by DPI
+            self.root.tk.call('tk', 'scaling', 1.0)
             # Set background IMMEDIATELY to prevent white flash
             self.root.configure(bg=COLORS["bg_surface"])
             self.root.title(APP_NAME)
