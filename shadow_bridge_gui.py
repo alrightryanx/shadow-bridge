@@ -7755,7 +7755,7 @@ Or run in PowerShell (Admin):
                 w = self.window_width
                 h = min(self.window_height, max_h)
                 x = screen_w - w - padding
-                y = screen_h - taskbar_h - h - padding
+                y = screen_h - taskbar_h - h - padding - 16
                 self.root.geometry(f"{w}x{h}+{x}+{y}")
                 return True
         except Exception as e:
