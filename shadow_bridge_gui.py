@@ -313,7 +313,7 @@ DISCOVERY_MAGIC = b"SHADOWAI_DISCOVER"
 NOTE_CONTENT_PORT = 19285
 
 APP_NAME = f"ShadowBridge{ENVIRONMENT}" if ENVIRONMENT != "RELEASE" else "ShadowBridge"
-APP_VERSION = "1.237"
+APP_VERSION = "1.239"
 SYNC_SCHEMA_VERSION = 2
 SYNC_SCHEMA_MIN_VERSION = 1
 # Windows Registry path for autostart
@@ -5281,17 +5281,11 @@ class ShadowBridgeApp:
                 log.debug(f"Could not load app icon: {e}")
 
         # Window sizing - compact size, ALLOW MOVABLE AND RESIZABLE
-        self.root.update_idletasks()
-        try:
-            dpi = self.root.winfo_fpixels("1i")
-            scale = dpi / 96.0  # 96 is standard DPI
-            # Skip verbose logging to reduce startup log spam
-        except Exception:
-            scale = 1.0
-
-        # Fixed compact size for quick connect utility
-        self.window_width = int(480 * scale)
-        self.window_height = int(780 * scale)
+        # Note: SetProcessDpiAwareness(2) already tells Windows we handle DPI.
+        # Tkinter scales widgets internally, so do NOT multiply window size by
+        # DPI scale — that causes double-scaling on 125%/150% displays.
+        self.window_width = 480
+        self.window_height = 780
 
         # Set minimum size and enable resizing
         self.root.minsize(320, 600)
@@ -9773,7 +9767,9 @@ def main():
         return
 
     if WEB_SERVER_MODE:
-        open_browser = "--no-browser" not in sys.argv
+        # Default to no browser in --web-server mode (headless/CLI usage)
+        # Use --open-browser to explicitly open browser
+        open_browser = "--open-browser" in sys.argv
         run_web_dashboard_server(open_browser=open_browser)
         return
 

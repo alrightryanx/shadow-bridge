@@ -84,6 +84,12 @@ build_exe_options = {
         "matplotlib",
         "pandas",
         "numpy.distutils",
+        # Playwright (~100MB) — lazy-imported by webmcp_consumer at runtime
+        "playwright",
+        "playwright.async_api",
+        "playwright.sync_api",
+        "greenlet",
+        "pyee",
         # Heavy ML services that have torch imports at module level
         "web.services.image_service",
         "web.services.audio_service",
