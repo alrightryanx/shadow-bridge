@@ -5248,8 +5248,7 @@ class ShadowBridgeApp:
         try:
             set_app_user_model_id("ShadowBridge")
             self.root = tk.Tk()
-            # Force tk scaling to 1.0 so widgets/fonts aren't inflated by DPI
-            self.root.tk.call('tk', 'scaling', 1.0)
+            # Let tkinter use system-default scaling — don't override
             # Set background IMMEDIATELY to prevent white flash
             self.root.configure(bg=COLORS["bg_surface"])
             self.root.title(APP_NAME)
@@ -5282,15 +5281,14 @@ class ShadowBridgeApp:
             except Exception as e:
                 log.debug(f"Could not load app icon: {e}")
 
-        # Window sizing - compact size, ALLOW MOVABLE AND RESIZABLE
-        # Note: SetProcessDpiAwareness(2) already tells Windows we handle DPI.
-        # Tkinter scales widgets internally, so do NOT multiply window size by
-        # DPI scale — that causes double-scaling on 125%/150% displays.
-        self.window_width = 480
-        self.window_height = 780
+        # Window sizing — narrow, just tall enough for all content.
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        taskbar_h = 48
+        self.window_width = 320
+        self.window_height = min(820, screen_h - taskbar_h - 20)
 
-        # Set minimum size and enable resizing
-        self.root.minsize(320, 600)
+        self.root.minsize(280, 400)
         self.root.resizable(True, True)
 
         # State - auto-detect SSH port (now non-blocking)
@@ -5418,6 +5416,14 @@ class ShadowBridgeApp:
         if not self._load_window_state():
             # Fallback if loading fails
             self.root.geometry(f"{self.window_width}x{self.window_height}")
+
+        # After widgets render, enforce the geometry so tkinter doesn't expand it
+        def _clamp_to_screen():
+            self.root.update_idletasks()
+            geo = self.root.geometry()  # current "WxH+X+Y"
+            # Re-apply to lock it
+            self.root.geometry(geo)
+        self.root.after(100, _clamp_to_screen)
 
         # Apply theme once after a short delay to ensure window handle is ready
         self.root.after(200, lambda: apply_windows_11_theme(self.root))
@@ -5630,8 +5636,8 @@ class ShadowBridgeApp:
             left_inner = tk.Frame(
                 self.canvas,
                 bg=COLORS["bg_surface"],
-                padx=20,
-                pady=16,
+                padx=12,
+                pady=8,
                 relief="flat",
                 borderwidth=0,
                 highlightthickness=0,
@@ -5671,14 +5677,14 @@ class ShadowBridgeApp:
             borderwidth=0,
             highlightthickness=0,
         )
-        header.pack(fill=tk.X, pady=(0, 12))
+        header.pack(fill=tk.X, pady=(0, 4))
 
         title_label = tk.Label(
             header,
             text="ShadowBridge",
             bg=COLORS["bg_surface"],
             fg=COLORS["text"],
-            font=("Segoe UI", 20, "bold"),
+            font=("Segoe UI", 14, "bold"),
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
@@ -5708,7 +5714,7 @@ class ShadowBridgeApp:
             borderwidth=0,
             highlightthickness=0,
         )
-        device_row.pack(fill=tk.X, pady=(0, 15))
+        device_row.pack(fill=tk.X, pady=(0, 4))
 
         # Host stack
         host_stack = tk.Frame(
@@ -5782,13 +5788,13 @@ class ShadowBridgeApp:
         qr_card = tk.Frame(
             left_inner,
             bg=COLORS["bg_card"],
-            padx=20,
-            pady=15,
+            padx=10,
+            pady=8,
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
         )
-        qr_card.pack(fill=tk.X, pady=(0, 12))
+        qr_card.pack(fill=tk.X, pady=(0, 6))
 
         tk.Label(
             qr_card,
@@ -5799,7 +5805,7 @@ class ShadowBridgeApp:
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, 4))
 
         self.qr_label = tk.Label(
             qr_card,
@@ -5810,15 +5816,15 @@ class ShadowBridgeApp:
             borderwidth=0,
             highlightthickness=0,
         )
-        self.qr_label.pack(pady=(0, 15))
+        self.qr_label.pack(pady=(0, 4))
         self._last_qr_data = None
 
         # Connection info
         info_row = tk.Frame(
             qr_card,
             bg=COLORS["bg_elevated"],
-            padx=15,
-            pady=10,
+            padx=8,
+            pady=6,
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
@@ -5830,13 +5836,13 @@ class ShadowBridgeApp:
             text=f"{get_local_ip()}",
             bg=COLORS["bg_elevated"],
             fg=COLORS["accent_light"],
-            font=("Consolas", 12, "bold"),
+            font=("Consolas", 9, "bold"),
             justify=tk.CENTER,
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
         )
-        self.ip_label.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        self.ip_label.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
 
         self.ssh_label = tk.Label(
             info_row,
@@ -5855,13 +5861,13 @@ class ShadowBridgeApp:
         tools_card = tk.Frame(
             left_inner,
             bg=COLORS["bg_card"],
-            padx=20,
-            pady=15,
+            padx=10,
+            pady=6,
             relief="flat",
             borderwidth=0,
             highlightthickness=0,
         )
-        tools_card.pack(fill=tk.X, pady=(0, 10))
+        tools_card.pack(fill=tk.X, pady=(0, 4))
 
         tools_label = tk.Label(
             tools_card,
@@ -5873,7 +5879,7 @@ class ShadowBridgeApp:
             borderwidth=0,
             highlightthickness=0,
         )
-        tools_label.pack(anchor="w", pady=(0, 12))
+        tools_label.pack(anchor="w", pady=(0, 4))
 
         # Tool buttons grid
         self.tool_buttons = {}
@@ -6026,7 +6032,7 @@ class ShadowBridgeApp:
                 borderwidth=0,
                 highlightthickness=0,
             )
-            row.pack(fill=tk.X, pady=4)
+            row.pack(fill=tk.X, pady=2)
 
             status_frame = tk.Frame(
                 row,
@@ -6119,7 +6125,7 @@ class ShadowBridgeApp:
             borderwidth=0,
             highlightthickness=0,
         )
-        bottom.pack(fill=tk.X, pady=(20, 0))
+        bottom.pack(fill=tk.X, pady=(6, 0))
 
         self.web_dashboard_btn = create_modern_button(
             bottom,
@@ -6127,15 +6133,15 @@ class ShadowBridgeApp:
             self.launch_web_dashboard,
             width=30,
             primary=True,
-            pady=12,
-            font_size=11,
+            pady=6,
+            font_size=9,
         )
-        self.web_dashboard_btn.pack(fill=tk.X, pady=(0, 8))
+        self.web_dashboard_btn.pack(fill=tk.X, pady=(0, 4))
 
         exit_btn = create_modern_button(
-            bottom, "Exit", self.force_exit, width=30, pady=12, font_size=11
+            bottom, "Exit", self.force_exit, width=30, pady=6, font_size=9
         )
-        exit_btn.pack(fill=tk.X, pady=(0, 15))
+        exit_btn.pack(fill=tk.X, pady=(0, 6))
 
         # Options row
         opts = tk.Frame(
@@ -6789,9 +6795,12 @@ class ShadowBridgeApp:
 
             # Create PIL image with WHITE modules on dark card background
             img = qr.make_image(fill_color="white", back_color=COLORS["bg_card"])
-            # Resize to be much larger
+            # Scale QR to ~55% of window width so it fits without pushing
+            # tools/buttons off screen.
+            # QR fills width with padding on sides
+            qr_size = self.window_width - 68
             img = img.resize(
-                (380, 380),
+                (qr_size, qr_size),
                 Image.Resampling.LANCZOS
                 if hasattr(Image, "Resampling")
                 else Image.LANCZOS,
@@ -7719,40 +7728,35 @@ Or run in PowerShell (Admin):
             log.debug(f"Failed to save window state: {e}")
 
     def _load_window_state(self):
-        """Load and apply saved window position and size."""
+        """Load and apply saved window position and size, always clamped to screen."""
         try:
             screen_w = self.root.winfo_screenwidth()
             screen_h = self.root.winfo_screenheight()
-
-            # Get DPI scale factor for padding calculation
-            try:
-                dpi = self.root.winfo_fpixels("1i")
-                scale = dpi / 96.0  # 96 is standard DPI
-            except Exception:
-                scale = 1.0
-
-            # Calculate 12dp padding in pixels (accounting for DPI scaling)
-            padding = int(12 * scale)
+            taskbar_h = 48  # Reasonable default for Windows taskbar
+            padding = 12
+            max_h = screen_h - taskbar_h - padding
 
             if os.path.exists(WINDOW_STATE_FILE):
                 with open(WINDOW_STATE_FILE, "r", encoding="utf-8") as f:
                     state = json.load(f)
-                w = state.get("width", self.window_width)
-                h = state.get("height", self.window_height)
+                w = min(state.get("width", self.window_width), screen_w - padding * 2)
+                h = min(state.get("height", self.window_height), max_h)
                 x = state.get("x", 100)
                 y = state.get("y", 100)
-                # Validate position is on screen
-                if x < 0 or x > screen_w - 100:
+                # Ensure window is fully on screen
+                if x < 0 or x + w > screen_w:
                     x = screen_w - w - padding
-                if y < 0 or y > screen_h - 100:
-                    y = screen_h - h - padding
+                if y < 0 or y + h > screen_h - taskbar_h:
+                    y = screen_h - taskbar_h - h - padding
                 self.root.geometry(f"{w}x{h}+{x}+{y}")
                 return True
             else:
-                # First run: position at bottom right with 12dp padding
-                x = screen_w - self.window_width - padding
-                y = screen_h - self.window_height - padding
-                self.root.geometry(f"{self.window_width}x{self.window_height}+{x}+{y}")
+                # First run: bottom-right, above taskbar
+                w = self.window_width
+                h = min(self.window_height, max_h)
+                x = screen_w - w - padding
+                y = screen_h - taskbar_h - h - padding
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
                 return True
         except Exception as e:
             log.debug(f"Failed to load window state: {e}")
