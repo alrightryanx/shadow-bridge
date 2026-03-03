@@ -16,6 +16,8 @@ Secure bridge between your Android device and PC for ShadowAI Android app - enab
 
 ShadowBridge includes a web dashboard at `http://localhost:6767` for managing projects, notes, and team collaboration.
 
+> **Preview** — Shadow Web is in active development with many experimental features. Expect rough edges and frequent changes.
+
 ---
 
 ## Features
