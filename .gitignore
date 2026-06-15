@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Config with secrets
+.shadowbridge-config.json
+email_config.json
+*_config.json
+*.credentials
+*.secret
+.env
+.env.*
+
+# Build artifacts
+build/
+dist/
+*.spec
+!ShadowBridge.spec
+
+# Temp files (created by tempfile module)
+tmp*
+nul
+
+# Old GUI backups
+shadow_bridge_gui_v*.py
+
+# Stale MSIs at root
+/*.msi
+
+# Build locked archives
+build_locked*/
+
+# Test artifacts
+test_*.png
+*_result.json
+
+# Backup/fixed copies
+*.backup
+*.fixed
+
+# Relocated to private shadow-android repo
+web/
+ouroboros/
+build2/
